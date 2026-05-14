@@ -1124,10 +1124,15 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
       {showAdd && (
         <Card gold style={{ marginBottom:14, animation:"fadeUp .3s ease both" }}>
           <Lbl color={T.gold} style={{ marginBottom:10 }}>Neuer Termin</Lbl>
-          <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr 1fr", gap:8, marginBottom:10 }}>
-            <input value={newTitle} onChange={e=>setNewTitle(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addEvent()}
-              placeholder="Was?" autoFocus
-              style={{ background:T.bg2,border:`1px solid ${T.borderS}`,borderRadius:8,padding:"9px 12px",color:T.text,fontFamily:T.serif,fontSize:13,fontStyle:"italic",outline:"none" }}/>
+          <input value={newTitle} onChange={e=>setNewTitle(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addEvent()}
+            placeholder="Was?" autoFocus
+            style={{ width:"100%", background:T.bg2,border:`1px solid ${T.borderS}`,borderRadius:8,padding:"9px 12px",color:T.text,fontFamily:T.serif,fontSize:13,fontStyle:"italic",outline:"none", boxSizing:"border-box", marginBottom:8 }}/>
+          <div style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr 1fr", gap:8, marginBottom:10 }}>
+            <input value={selectedKey} onChange={e=>{
+              const d = new Date(e.target.value + "T00:00:00");
+              if (!isNaN(d)) setSelectedDate(d);
+            }} type="date"
+              style={{ background:T.bg2,border:`1px solid ${T.borderS}`,borderRadius:8,padding:"9px 10px",color:T.text,fontFamily:T.mono,fontSize:12,outline:"none" }}/>
             <input value={newTime} onChange={e=>setNewTime(e.target.value)} type="time"
               style={{ background:T.bg2,border:`1px solid ${T.borderS}`,borderRadius:8,padding:"9px 10px",color:T.text,fontFamily:T.mono,fontSize:12,outline:"none" }}/>
             <input value={newDur} onChange={e=>setNewDur(e.target.value)} placeholder="z.B. 1h"
