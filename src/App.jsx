@@ -3305,6 +3305,9 @@ export default function App() {
         setCloudPulling(true);
         await pullCloudIntoLocal().catch(()=>{});
         setCloudPulling(false);
+        // Falls Cloud leer war aber local Daten hat: push hoch.
+        // Falls Cloud Daten hatte: push lokales (was identisch sein sollte) ebenfalls hoch.
+        scheduleSyncUp();
       }
       setAccessGranted(!!granted);
       setAccessChecked(true);
@@ -3322,6 +3325,9 @@ export default function App() {
     setCloudPulling(true);
     await pullCloudIntoLocal().catch(()=>{});
     setCloudPulling(false);
+    // Falls auf diesem Gerät schon Daten lokal sind aber Cloud leer war,
+    // push hoch damit andere Geräte sie sehen.
+    scheduleSyncUp();
     setAccessGranted(true);
   }
 
@@ -3484,10 +3490,14 @@ function AppContent() {
       <div style={{ position:"fixed",inset:0,pointerEvents:"none",transition:"background .4s",
         background:`radial-gradient(ellipse at 50% 0%, ${sectionColor}0A 0%, transparent 50%)` }}/>
 
-      {/* Top bar – feiner Akzent von Section-Color am unteren Rand */}
+      {/* Top bar – feiner Akzent von Section-Color am unteren Rand. Safe-Area für iPhone-Notch. */}
       <div style={{ position:"sticky",top:0,zIndex:40,background:T.bg+"F0",
         backdropFilter:"blur(20px)",borderBottom:`1px solid ${sectionColor}33`,
-        padding:"12px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",
+        paddingTop:"calc(12px + env(safe-area-inset-top, 0px))",
+        paddingBottom:"12px",
+        paddingLeft:"calc(20px + env(safe-area-inset-left, 0px))",
+        paddingRight:"calc(20px + env(safe-area-inset-right, 0px))",
+        display:"flex",alignItems:"center",justifyContent:"space-between",
         transition:"border-color .4s" }}>
         <div style={{ display:"flex",alignItems:"center",gap:12 }}>
           <EylaOrb size={38} thinking={eventsLoading}/>
@@ -3530,7 +3540,13 @@ function AppContent() {
       </div>
 
       {/* Content */}
-      <div style={{ maxWidth:760,margin:"0 auto",padding:"22px 18px 96px",position:"relative",zIndex:2 }}>
+      <div style={{
+        maxWidth:760, margin:"0 auto", position:"relative", zIndex:2,
+        paddingTop: 22,
+        paddingLeft: "calc(18px + env(safe-area-inset-left, 0px))",
+        paddingRight: "calc(18px + env(safe-area-inset-right, 0px))",
+        paddingBottom: "calc(96px + env(safe-area-inset-bottom, 0px))"
+      }}>
         {screen==="tag" && (
           <>
             <SubTabRow current={tagSub} onChange={setTagSub} options={[
@@ -3556,10 +3572,11 @@ function AppContent() {
         {screen==="profil" && <ProfilScreen profile={profile} onReset={reset} onUpdate={updateProfile}/>}
       </div>
 
-      {/* Bottom nav */}
+      {/* Bottom nav – Safe-Area unten für iPhone-Home-Indicator */}
       <div style={{ position:"fixed",bottom:0,left:0,right:0,zIndex:40,
         background:T.bg+"F0",backdropFilter:"blur(20px)",borderTop:`1px solid ${T.border}`,
-        padding:"8px 0 14px" }}>
+        paddingTop:"8px",
+        paddingBottom:"calc(14px + env(safe-area-inset-bottom, 0px))" }}>
         <div style={{ display:"flex",justifyContent:"space-around",maxWidth:620,margin:"0 auto",padding:"0 2px" }}>
           {nav.map(n=>(
             <button key={n.id} onClick={()=>setScreen(n.id)} style={{
