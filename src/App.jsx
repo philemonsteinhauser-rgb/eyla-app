@@ -48,7 +48,39 @@ const DEFAULT_PROFILE = {
   preferences: ["Wenig Fleisch", "Proteinreich", "Mediterran"],
   intolerances: [],
   apps: [],
+  // Diät-Logik
+  goalType: "halten",     // "halten" | "abnehmen" | "aufbauen"
+  targetWeight: "",       // kg (nur bei abnehmen/aufbauen relevant)
+  targetWeeks: "",        // Wochen bis Zielgewicht
 };
+
+// Kalorienziel + TDEE berechnen aus Profil. Mifflin-St-Jeor-Vereinfachung +
+// pauschaler Aktivitätsoffset. Sicherheitslimit: Defizit max. 1000, Min. 1200.
+function calorieTarget(profile) {
+  const w = parseFloat(profile.weight) || 79;
+  const h = parseFloat(profile.height) || 180;
+  const a = parseFloat(profile.age) || 30;
+  const tdee = Math.round(10*w + 6.25*h - 5*a + 5 + 400);
+
+  const type = profile.goalType || "halten";
+  if (type === "halten") return { tdee, target: tdee, dailyDelta: 0, type };
+
+  const tw = parseFloat(profile.targetWeight) || w;
+  const wk = parseFloat(profile.targetWeeks) || 12;
+  if (!wk || wk <= 0) return { tdee, target: tdee, dailyDelta: 0, type };
+
+  if (type === "abnehmen") {
+    const deltaKg = Math.max(0, w - tw);
+    const dailyDef = Math.min(1000, Math.round((deltaKg * 7700) / (wk * 7)));
+    return { tdee, target: Math.max(1200, tdee - dailyDef), dailyDelta: -dailyDef, type, deltaKg, weeks: wk };
+  }
+  if (type === "aufbauen") {
+    const deltaKg = Math.max(0, tw - w);
+    const dailySur = Math.min(500, Math.round((deltaKg * 7700) / (wk * 7)));
+    return { tdee, target: tdee + dailySur, dailyDelta: dailySur, type, deltaKg, weeks: wk };
+  }
+  return { tdee, target: tdee, dailyDelta: 0, type };
+}
 
 const TODAY = new Date().toDateString();
 const EMPTY_LOG = () => ({ meals:[], water:0, energy:"", sleep:"", date:TODAY });
@@ -189,7 +221,24 @@ function buildPrompt(profile, log, events, weekHistory = []) {
       }).join("\n")
     : "  Noch keine Historie.";
 
-  return `Du bist EYLA – synthetische KI-Begleiterin von ${profile.name}. Zweites Gehirn. Körper und Tag in einer Intelligenz.
+  // Diät-Kontext
+  const ct = calorieTarget(profile);
+  let zielStr;
+  if (ct.type === "halten") {
+    zielStr = `Halten · Tagesziel ~${ct.target} kcal (TDEE)`;
+  } else if (ct.type === "abnehmen") {
+    zielStr = `Abnehmen ${ct.deltaKg||"?"}kg in ${ct.weeks||"?"} Wochen · Tagesziel ${ct.target} kcal (Defizit ${Math.abs(ct.dailyDelta)} kcal/Tag, TDEE ${ct.tdee})`;
+  } else if (ct.type === "aufbauen") {
+    zielStr = `Aufbauen ${ct.deltaKg||"?"}kg in ${ct.weeks||"?"} Wochen · Tagesziel ${ct.target} kcal (Überschuss ${ct.dailyDelta} kcal/Tag, TDEE ${ct.tdee})`;
+  } else {
+    zielStr = `Tagesziel ~${ct.target} kcal`;
+  }
+  const restKcal = Math.max(0, ct.target - eaten);
+  const restStr = eaten > ct.target
+    ? `${eaten - ct.target} kcal über Ziel`
+    : `noch ${restKcal} kcal bis Ziel`;
+
+  return `Du bist EYLA – synthetische Begleiterin von ${profile.name}. Du kennst Körper, Tag und Küche.
 
 CHARAKTER: Präzise, direkt, warm aber nicht weich. Du weißt was heute ansteht und was der Körper braucht. Du sagst was Sache ist – mit Lösung. Kein Motivationsposter. Trocken-humorvoll wenn passend.
 
@@ -197,8 +246,10 @@ PROFIL: ${profile.name}, ${profile.age}J, ${profile.weight}kg, ${profile.height}
 Aktivität: ${profile.activity||"k.A."} | Ziel: ${profile.goal||"Wohlbefinden"}
 Vorlieben: ${profile.preferences?.join(", ")||"k.A."} | Intoleranzen: ${profile.intolerances?.join(", ")||"keine"}
 
+ERNÄHRUNGSZIEL: ${zielStr}
+
 HEUTE:
-- Gegessen: ${eaten} kcal (${log.meals.map(m=>m.name).join(", ")||"noch nichts"})
+- Gegessen: ${eaten} kcal (${restStr}) – ${log.meals.map(m=>m.name).join(", ")||"noch nichts"}
 - Wasser: ${log.water} Gläser (${(log.water*.25).toFixed(1)}L)
 - Energie: ${log.energy||"k.A."} | Schlaf: ${log.sleep||"k.A."}h
 
@@ -208,7 +259,7 @@ ${historyStr}
 WAS HEUTE ANSTEHT:
 ${eventStr}
 
-REGELN: Immer Deutsch. 2–4 Sätze. Konkret mit Mengen/Zeiten. Termine einbeziehen wenn sinnvoll. Letzte 7 Tage nur einbeziehen wenn relevant (z.B. Schlaf-Muster, Wasser-Trend). Nie "Als KI". Nie "ich sehe/kenne deinen Kalender" – einfach natürlich damit umgehen.`;
+REGELN: Immer Deutsch. 2–4 Sätze. Konkret mit Mengen/Zeiten. Bei Ernährungsfragen Tagesziel + Rest-kcal einbeziehen. Wenn jemand übers Ziel ist: kein Drama, am nächsten Tag flexibel ausgleichen. Termine einbeziehen wenn sinnvoll. Letzte 7 Tage nur wenn Trend relevant. Nie "Als KI". Nie "ich sehe/kenne deinen Kalender".`;
 }
 
 // ─── VOICE HOOK ───────────────────────────────────────────────────────────────
@@ -297,6 +348,33 @@ function Card({ children, style={}, accent=false, gold=false }) {
   );
 }
 
+// Sub-Toggle Row für innerhalb eines Tabs (z.B. Heute/Kalender, Plan/Liste)
+function SubTabRow({ current, onChange, options }) {
+  return (
+    <div style={{
+      display:"flex", gap:6, marginBottom:18, padding:4,
+      background:T.bg2, borderRadius:12, border:`1px solid ${T.border}`
+    }}>
+      {options.map(o => {
+        const active = current === o.id;
+        const col = o.color || T.acc;
+        return (
+          <button key={o.id} onClick={()=>onChange(o.id)} style={{
+            flex:1, background: active ? `linear-gradient(135deg,${col}22,${col}11)` : "transparent",
+            border: active ? `1px solid ${col}55` : `1px solid transparent`,
+            borderRadius:9, padding:"8px 6px",
+            color: active ? col : T.muted,
+            fontFamily:T.serif, fontSize:13, fontStyle: active ? "normal" : "italic",
+            cursor:"pointer", transition:"all .2s"
+          }}>
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function Lbl({ children, color=T.muted, style={} }) {
   return <div style={{ fontFamily:T.mono, fontSize:9, letterSpacing:3, color, textTransform:"uppercase", ...style }}>{children}</div>;
 }
@@ -317,7 +395,7 @@ function VoiceBtn({ toggle, listening, supported }) {
 // ─── ONBOARDING ───────────────────────────────────────────────────────────────
 function Onboarding({ onDone }) {
   const [step, setStep] = useState(0);
-  const [p, setP] = useState({ name:"", age:"", weight:"", height:"", goal:"", activity:"", preferences:"", intolerances:"", apps:[] });
+  const [p, setP] = useState({ name:"", age:"", weight:"", height:"", goal:"", activity:"", preferences:"", intolerances:"", apps:[], goalType:"halten", targetWeight:"", targetWeeks:"" });
   const set = (k,v) => setP(prev=>({...prev,[k]:v}));
   const iStyle = { width:"100%", background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:10,
     padding:"12px 16px", color:T.text, fontSize:14, fontFamily:T.serif, outline:"none",
@@ -327,11 +405,11 @@ function Onboarding({ onDone }) {
   const apps  = ["Apple Health","Google Fit","Garmin","Polar","MyFitnessPal","Whoop","Oura Ring"];
 
   const steps = [
-    { title:"Ich bin EYLA.", sub:"Dein zweites Gehirn. Körper und Kalender in einer Intelligenz.", content:(
+    { title:"Ich bin EYLA.", sub:"Synthetische Begleiterin. Körper, Tag, Küche.", content:(
       <div style={{ textAlign:"center" }}>
         <div style={{ display:"flex", justifyContent:"center", marginBottom:32 }}><EylaOrb size={90}/></div>
         <p style={{ color:T.mid, lineHeight:1.9, fontStyle:"italic", fontSize:15, fontFamily:T.serif }}>
-          Ich kenne deinen Körper. Ich kenne deinen Kalender.<br/>
+          Ich kenne deinen Körper, deinen Tag, deine Küche.<br/>
           Ich lüge nicht. Ich optimiere nicht um des Optimierens willen.<br/>
           Ich helfe dir, besser zu leben.
         </p>
@@ -367,6 +445,53 @@ function Onboarding({ onDone }) {
         <Lbl style={{ marginBottom:8 }}>Wie aktiv bist du?</Lbl>
         <input value={p.activity} onChange={e=>set("activity",e.target.value)}
           placeholder="z.B. 4x pro Woche Laufen, täglich Yoga …" style={iStyle}/>
+      </div>
+    )},
+    { title:"Gewicht.", sub:"Halten, abnehmen oder aufbauen?", content:(
+      <div>
+        <Lbl style={{ marginBottom:12 }}>Richtung</Lbl>
+        <div style={{ display:"flex", gap:8, marginBottom:20 }}>
+          {[
+            {id:"halten",   label:"🟰 Halten",   col:T.acc},
+            {id:"abnehmen", label:"↓ Abnehmen",  col:T.green},
+            {id:"aufbauen", label:"↑ Aufbauen",  col:T.gold},
+          ].map(o=>{
+            const sel = p.goalType===o.id;
+            return (
+              <button key={o.id} onClick={()=>set("goalType",o.id)} style={{
+                flex:1, background:sel?o.col+"22":"transparent",
+                border:`1px solid ${sel?o.col:T.borderS}`, borderRadius:12,
+                padding:"12px 8px", color:sel?T.text:T.muted,
+                fontFamily:T.serif, fontSize:13, cursor:"pointer",
+                fontStyle:sel?"normal":"italic", transition:"all .2s"
+              }}>{o.label}</button>
+            );
+          })}
+        </div>
+        {p.goalType !== "halten" && (
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, animation:"fadeUp .3s ease both" }}>
+            <div>
+              <Lbl style={{ marginBottom:8 }}>Zielgewicht</Lbl>
+              <input value={p.targetWeight} onChange={e=>set("targetWeight",e.target.value)}
+                placeholder="kg" type="number" style={{...iStyle,fontFamily:T.mono,fontStyle:"normal"}}/>
+            </div>
+            <div>
+              <Lbl style={{ marginBottom:8 }}>In wie vielen Wochen?</Lbl>
+              <input value={p.targetWeeks} onChange={e=>set("targetWeeks",e.target.value)}
+                placeholder="Wochen" type="number" style={{...iStyle,fontFamily:T.mono,fontStyle:"normal"}}/>
+            </div>
+          </div>
+        )}
+        {p.goalType !== "halten" && p.targetWeight && p.targetWeeks && p.weight && (
+          <p style={{ color:T.mid, fontSize:12, fontStyle:"italic", fontFamily:T.serif, marginTop:14, padding:"8px 12px", background:T.bg2, borderRadius:8 }}>
+            ✦ {(() => {
+              const ct = calorieTarget({weight:p.weight,height:p.height||180,age:p.age||30,goalType:p.goalType,targetWeight:p.targetWeight,targetWeeks:p.targetWeeks});
+              return p.goalType==="abnehmen"
+                ? `Tagesziel ~${ct.target} kcal (${Math.abs(ct.dailyDelta)} kcal Defizit)`
+                : `Tagesziel ~${ct.target} kcal (${ct.dailyDelta} kcal Überschuss)`;
+            })()}
+          </p>
+        )}
       </div>
     )},
     { title:"Deine Küche.", sub:"Was liebst du? Was verträgst du nicht?", content:(
@@ -444,7 +569,9 @@ function TodayScreen({ profile, log, setLog }) {
   const [mealName, setMealName] = useState("");
   const [mealCal, setMealCal] = useState("");
   const eaten = log.meals.reduce((s,m)=>s+(m.calories||0),0);
-  const tdee = Math.round(10*profile.weight + 6.25*profile.height - 5*profile.age + 5 + 400);
+  const ct = calorieTarget(profile);
+  const tdee = ct.tdee;
+  const targetKcal = ct.target;
 
   const onMealVoice = useCallback((text) => {
     const calMatch = text.match(/(\d+)\s*(kal|kalorien|kcal)?/i);
@@ -527,16 +654,20 @@ function TodayScreen({ profile, log, setLog }) {
           <div>
             <Lbl style={{ marginBottom:5 }}>Mahlzeiten heute</Lbl>
             <div style={{ fontSize:22, fontWeight:300, color:T.text }}>{eaten}
-              <span style={{ fontSize:12, color:T.muted, marginLeft:6 }}>von ~{tdee} kcal</span>
+              <span style={{ fontSize:12, color:T.muted, marginLeft:6 }}>
+                von {targetKcal} kcal
+                {ct.dailyDelta < 0 && <span style={{ color:T.green, marginLeft:4 }}>↓</span>}
+                {ct.dailyDelta > 0 && <span style={{ color:T.gold,  marginLeft:4 }}>↑</span>}
+              </span>
             </div>
           </div>
           <div style={{ width:48,height:48,borderRadius:"50%",
-            background:`conic-gradient(${T.acc} ${Math.min(100,Math.round(eaten/tdee*100))}%,${T.bg2} 0)`,
+            background:`conic-gradient(${T.acc} ${Math.min(100,Math.round(eaten/targetKcal*100))}%,${T.bg2} 0)`,
             display:"flex",alignItems:"center",justifyContent:"center" }}>
             <div style={{ width:36,height:36,borderRadius:"50%",background:T.card,
               display:"flex",alignItems:"center",justifyContent:"center",
               fontSize:10,color:T.muted,fontFamily:T.mono }}>
-              {Math.min(100,Math.round(eaten/tdee*100))}%
+              {Math.min(100,Math.round(eaten/targetKcal*100))}%
             </div>
           </div>
         </div>
@@ -1008,10 +1139,20 @@ function PlanScreen({ profile }) {
     setDays([]);
     setIntro("");
     try {
+      const ct = calorieTarget(profile);
+      let zielSatz = "";
+      if (ct.type === "halten") zielSatz = `Tagesziel: ~${ct.target} kcal (halten). `;
+      else if (ct.type === "abnehmen") zielSatz = `Tagesziel: ~${ct.target} kcal – Ziel abnehmen ${ct.deltaKg||"?"}kg in ${ct.weeks||"?"} Wochen (Defizit ${Math.abs(ct.dailyDelta)} kcal/Tag). `;
+      else if (ct.type === "aufbauen") zielSatz = `Tagesziel: ~${ct.target} kcal – Ziel aufbauen ${ct.deltaKg||"?"}kg in ${ct.weeks||"?"} Wochen (Überschuss ${ct.dailyDelta} kcal/Tag). `;
+      const intolSatz = profile.intolerances?.length>0 ? "Intoleranzen: " + profile.intolerances.join(", ") + ". " : "";
+
       const msg = "Erstelle einen 7-Tage-Ernährungsplan für " + (profile.name||"Phil") + ", " +
         (profile.age||35) + " Jahre, " + (profile.weight||79) + "kg. " +
         "Aktivität: " + (profile.activity||"5x Woche Beweglichkeitstraining") + ". " +
         "Vorlieben: " + (profile.preferences?.join(", ")||"wenig Fleisch, proteinreich") + ". " +
+        intolSatz +
+        zielSatz +
+        "Plan soll dieses Tagesziel ungefähr treffen. Bei jeder Mahlzeit eine grobe kcal-Angabe in Klammern. " +
         "Antworte in genau diesem Format:\n\n" +
         "INTRO: [ein Satz]\n\n" +
         "TAG: Montag\nFRUEHSTUECK: [Mahlzeit]\nMITTAG: [Mahlzeit]\nABEND: [Mahlzeit]\nSNACK: [Snack]\nTIPP: [Tipp]\n\n" +
@@ -1503,6 +1644,49 @@ function ProfilScreen({ profile, onReset, onUpdate }) {
         </Card>
 
         <Card style={{ marginBottom:12 }}>
+          <Lbl style={{ marginBottom:10 }}>GEWICHTS-ZIEL</Lbl>
+          <div style={{ display:"flex", gap:6, marginBottom:12 }}>
+            {[
+              {id:"halten",   label:"🟰 Halten",   col:T.acc},
+              {id:"abnehmen", label:"↓ Abnehmen",  col:T.green},
+              {id:"aufbauen", label:"↑ Aufbauen",  col:T.gold},
+            ].map(o=>{
+              const sel = (draft.goalType||"halten")===o.id;
+              return (
+                <button key={o.id} onClick={()=>set("goalType",o.id)} style={{
+                  flex:1, background:sel?o.col+"22":"transparent",
+                  border:`1px solid ${sel?o.col:T.borderS}`, borderRadius:10,
+                  padding:"9px 4px", color:sel?T.text:T.muted,
+                  fontFamily:T.serif, fontSize:12, cursor:"pointer", transition:"all .2s"
+                }}>{o.label}</button>
+              );
+            })}
+          </div>
+          {(draft.goalType && draft.goalType !== "halten") && (
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+              <div>
+                <Lbl style={{ marginBottom:6, fontSize:8 }}>ZIELGEWICHT (KG)</Lbl>
+                <input value={draft.targetWeight||""} onChange={e=>set("targetWeight",e.target.value)} type="number" placeholder="kg" style={numStyle}/>
+              </div>
+              <div>
+                <Lbl style={{ marginBottom:6, fontSize:8 }}>IN WOCHEN</Lbl>
+                <input value={draft.targetWeeks||""} onChange={e=>set("targetWeeks",e.target.value)} type="number" placeholder="z.B. 12" style={numStyle}/>
+              </div>
+            </div>
+          )}
+          {(draft.goalType && draft.goalType !== "halten" && draft.targetWeight && draft.targetWeeks && draft.weight) && (
+            <p style={{ color:T.mid, fontSize:11, fontStyle:"italic", fontFamily:T.serif, marginTop:10, padding:"6px 10px", background:T.bg2, borderRadius:6 }}>
+              ✦ {(() => {
+                const ct = calorieTarget(draft);
+                return draft.goalType==="abnehmen"
+                  ? `Tagesziel ~${ct.target} kcal (${Math.abs(ct.dailyDelta)} kcal Defizit)`
+                  : `Tagesziel ~${ct.target} kcal (${ct.dailyDelta} kcal Überschuss)`;
+              })()}
+            </p>
+          )}
+        </Card>
+
+        <Card style={{ marginBottom:12 }}>
           <Lbl style={{ marginBottom:10 }}>KÜCHE</Lbl>
           <div style={{ marginBottom:12 }}>
             <Lbl style={{ marginBottom:6, fontSize:8 }}>VORLIEBEN (KOMMAGETRENNT)</Lbl>
@@ -1557,6 +1741,45 @@ function ProfilScreen({ profile, onReset, onUpdate }) {
           ))}
         </div>
       </Card>
+      {/* Gewichts-Ziel + Kalorien-Target */}
+      {(() => {
+        const ct = calorieTarget(profile);
+        const typeLabel = ct.type === "halten" ? "🟰 Halten" : ct.type === "abnehmen" ? "↓ Abnehmen" : "↑ Aufbauen";
+        const typeCol = ct.type === "halten" ? T.acc : ct.type === "abnehmen" ? T.green : T.gold;
+        return (
+          <Card style={{ marginBottom:12 }}>
+            <Lbl style={{ marginBottom:12 }}>GEWICHTS-ZIEL</Lbl>
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
+              <span style={{
+                background:typeCol+"18", border:`1px solid ${typeCol}44`, borderRadius:20,
+                padding:"4px 12px", fontSize:12, color:typeCol, fontFamily:T.serif
+              }}>{typeLabel}</span>
+              {ct.type !== "halten" && profile.targetWeight && profile.targetWeeks && (
+                <span style={{ fontFamily:T.mono, fontSize:11, color:T.muted }}>
+                  → {profile.targetWeight}kg in {profile.targetWeeks} Wochen
+                </span>
+              )}
+            </div>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
+              <div>
+                <Lbl style={{ marginBottom:3, fontSize:8 }}>TDEE</Lbl>
+                <div style={{ color:T.muted, fontSize:14, fontFamily:T.mono }}>{ct.tdee} kcal</div>
+              </div>
+              <div>
+                <Lbl style={{ marginBottom:3, fontSize:8 }}>TAGESZIEL</Lbl>
+                <div style={{ color:typeCol, fontSize:14, fontFamily:T.mono }}>
+                  {ct.target} kcal
+                  {ct.dailyDelta !== 0 && (
+                    <span style={{ fontSize:11, color:T.muted, marginLeft:6 }}>
+                      ({ct.dailyDelta>0?"+":""}{ct.dailyDelta})
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </Card>
+        );
+      })()}
       {profile.preferences?.length>0&&<Card style={{ marginBottom:12 }}><Lbl style={{ marginBottom:10 }}>VORLIEBEN</Lbl><div style={{ display:"flex",flexWrap:"wrap",gap:7 }}>{profile.preferences.map((p,i)=><span key={i} style={{ background:T.acc+"18",border:`1px solid ${T.acc}33`,borderRadius:20,padding:"3px 12px",fontSize:11,color:T.acc,fontFamily:T.mono }}>{p}</span>)}</div></Card>}
       {profile.intolerances?.length>0&&<Card style={{ marginBottom:12 }}><Lbl style={{ marginBottom:10 }}>INTOLERANZEN</Lbl><div style={{ display:"flex",flexWrap:"wrap",gap:7 }}>{profile.intolerances.map((p,i)=><span key={i} style={{ background:T.gold+"18",border:`1px solid ${T.gold}33`,borderRadius:20,padding:"3px 12px",fontSize:11,color:T.gold,fontFamily:T.mono }}>{p}</span>)}</div></Card>}
       {profile.apps?.length>0&&<Card style={{ marginBottom:20 }}><Lbl style={{ marginBottom:10 }}>VERBUNDENE APPS</Lbl><div style={{ display:"flex",flexWrap:"wrap",gap:7 }}>{profile.apps.map((a,i)=><div key={i} style={{ display:"flex",alignItems:"center",gap:6,background:T.bg2,border:`1px solid ${T.borderS}`,borderRadius:8,padding:"5px 12px" }}><div style={{ width:5,height:5,borderRadius:"50%",background:T.green,boxShadow:`0 0 5px ${T.green}` }}/><span style={{ color:T.mid,fontFamily:T.mono,fontSize:10 }}>{a}</span></div>)}</div></Card>}
@@ -1569,7 +1792,9 @@ function ProfilScreen({ profile, onReset, onUpdate }) {
 export default function App() {
   const [profile, setProfile] = useState(null);
   const [logsByDate, setLogsByDate] = useState({});
-  const [screen, setScreen] = useState("heute");
+  const [screen, setScreen] = useState("tag");
+  const [tagSub, setTagSub] = useState("heute");      // heute | kalender
+  const [essenSub, setEssenSub] = useState("plan");   // plan | liste
   const [events, setEvents] = useState([]);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [ready, setReady] = useState(false);
@@ -1661,22 +1886,18 @@ export default function App() {
   if (!profile) return <Onboarding onDone={finishOnboarding}/>;
 
   const nav = [
-    {id:"heute",    icon:"◎", label:"Heute"},
-    {id:"woche",    icon:"≡", label:"Woche"},
-    {id:"kalender", icon:"▦", label:"Kalender"},
-    {id:"chat",     icon:"✦", label:"EYLA"},
-    {id:"plan",     icon:"◈", label:"Plan"},
-    {id:"liste",    icon:"▤", label:"Liste"},
-    {id:"profil",   icon:"◉", label:"Profil"},
+    {id:"tag",    icon:"◎", label:"Tag"},
+    {id:"woche",  icon:"≡", label:"Woche"},
+    {id:"chat",   icon:"✦", label:"EYLA"},
+    {id:"essen",  icon:"◈", label:"Essen"},
+    {id:"profil", icon:"◉", label:"Profil"},
   ];
 
   const sectionColor =
-    screen==="heute" ? T.acc :
+    screen==="tag" ? (tagSub==="kalender" ? T.gold : T.acc) :
     screen==="woche" ? T.acc :
-    screen==="kalender" ? T.gold :
     screen==="chat" ? T.acc :
-    screen==="plan" ? T.gold :
-    screen==="liste" ? T.green :
+    screen==="essen" ? (essenSub==="liste" ? T.green : T.gold) :
     T.muted;
 
   return (
@@ -1702,9 +1923,11 @@ export default function App() {
         <div style={{ display:"flex",alignItems:"center",gap:12 }}>
           <EylaOrb size={38} thinking={eventsLoading}/>
           <div>
-            <Lbl style={{ marginBottom:2 }}>EYLA · ZWEITES GEHIRN</Lbl>
-            <div style={{ fontSize:14,color:T.text }}>
-              {profile.name.split(" ")[0]}<span style={{ color:T.acc }}>.</span>
+            <div style={{ fontSize:18, fontWeight:300, color:T.text, letterSpacing:1.5, lineHeight:1 }}>
+              EYLA<span style={{ color:T.acc, marginLeft:2 }}>.</span>
+            </div>
+            <div style={{ fontSize:11, color:T.muted, fontStyle:"italic", marginTop:3, fontFamily:T.serif }}>
+              {profile.name.split(" ")[0]}
             </div>
           </div>
         </div>
@@ -1716,13 +1939,29 @@ export default function App() {
 
       {/* Content */}
       <div style={{ maxWidth:760,margin:"0 auto",padding:"22px 18px 96px",position:"relative",zIndex:2 }}>
-        {screen==="heute"    && <TodayScreen profile={profile} log={log} setLog={setLog}/>}
-        {screen==="woche"    && <WeekScreen logsByDate={logsByDate}/>}
-        {screen==="kalender" && <KalenderScreen events={events} eventsLoading={eventsLoading} onRefresh={loadCalendar} profile={profile} log={log}/>}
-        {screen==="chat"     && <ChatScreen profile={profile} log={log} events={events} logsByDate={logsByDate}/>}
-        {screen==="plan"     && <PlanScreen profile={profile}/>}
-        {screen==="liste"    && <ShoppingScreen/>}
-        {screen==="profil"   && <ProfilScreen profile={profile} onReset={reset} onUpdate={updateProfile}/>}
+        {screen==="tag" && (
+          <>
+            <SubTabRow current={tagSub} onChange={setTagSub} options={[
+              {id:"heute",    label:"Heute",    color:T.acc},
+              {id:"kalender", label:"Kalender", color:T.gold},
+            ]}/>
+            {tagSub==="heute"    && <TodayScreen profile={profile} log={log} setLog={setLog}/>}
+            {tagSub==="kalender" && <KalenderScreen events={events} eventsLoading={eventsLoading} onRefresh={loadCalendar} profile={profile} log={log}/>}
+          </>
+        )}
+        {screen==="woche" && <WeekScreen logsByDate={logsByDate}/>}
+        {screen==="chat"  && <ChatScreen profile={profile} log={log} events={events} logsByDate={logsByDate}/>}
+        {screen==="essen" && (
+          <>
+            <SubTabRow current={essenSub} onChange={setEssenSub} options={[
+              {id:"plan",  label:"Plan",          color:T.gold},
+              {id:"liste", label:"Einkaufsliste", color:T.green},
+            ]}/>
+            {essenSub==="plan"  && <PlanScreen profile={profile}/>}
+            {essenSub==="liste" && <ShoppingScreen/>}
+          </>
+        )}
+        {screen==="profil" && <ProfilScreen profile={profile} onReset={reset} onUpdate={updateProfile}/>}
       </div>
 
       {/* Bottom nav */}

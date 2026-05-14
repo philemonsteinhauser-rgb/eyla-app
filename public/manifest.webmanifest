@@ -1,7 +1,7 @@
 {
-  "name": "EYLA · Zweites Gehirn",
+  "name": "EYLA",
   "short_name": "EYLA",
-  "description": "Dein zweites Gehirn. Körper und Kalender in einer Intelligenz.",
+  "description": "Synthetische Begleiterin. Körper, Tag, Küche.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
