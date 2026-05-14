@@ -1429,7 +1429,7 @@ STRUKTUR (Standard: 3 Hauptmahlzeiten – FRUEHSTUECK, MITTAG, ABEND IMMER ausf�
 - An Trainings-Tagen Kohlenhydrate näher am Training, an Ruhetagen weniger.
 - Variabilität über die Woche – nicht jeden Tag dasselbe Schema.
 
-FORMAT (genau so antworten, nichts zusätzlich):
+FORMAT (genau so antworten – KEIN Markdown, KEINE **, KEINE ##, kein Listen-Bullet):
 INTRO: [2-3 Sätze die Logik des Plans erklären – warum diese Struktur für DIESES Profil]
 
 TAG: Montag
@@ -1461,16 +1461,41 @@ TIPP: [Konkreter Hinweis für diesen Tag – Timing, Zubereitung, Variation. Nic
       const introMatch = text.match(/INTRO:\s*(.+)/);
       if (introMatch) setIntro(introMatch[1].trim());
 
-      // Nur auf TAG: am Zeilenanfang splitten – sonst matcht es das TAG in MITTAG.
-      const blocks = text.split(/^\s*TAG:\s*/gm).slice(1);
+      // Robustes Splitten:
+      // 1) Markdown-Prefix-Zeichen vor TAG: erlauben (*, #, -, >, _, space)
+      // 2) Falls TAG: gar nicht vorkommt, fallback auf Wochentag-Namen am Zeilenanfang
+      let blocks = text.split(/^[\s*#_>\-]*TAG:\s*/gmi).slice(1);
+      if (blocks.length === 0) {
+        const dayWords = "(Montag|Dienstag|Mittwoch|Donnerstag|Freitag|Samstag|Sonntag)";
+        const fallback = new RegExp(`^[\\s*#_>\\-]*${dayWords}[\\s*:_-]*`, "gmi");
+        const parts = text.split(fallback);
+        // parts wechseln zwischen [vor erstem Tag, day1, content1, day2, content2, ...]
+        const out = [];
+        for (let i = 1; i < parts.length; i += 2) {
+          out.push((parts[i] || "") + "\n" + (parts[i+1] || ""));
+        }
+        blocks = out;
+      }
+
       const parsed = blocks.map(block => {
-        const lines = block.split("\n").map(l => l.trim()).filter(Boolean);
-        const day = lines[0]?.replace(/[*_#]/g, "").trim() || "";
+        // Markdown-Müll wegputzen pro Zeile, dann erste echte Zeile = Tagesname
+        const lines = block.split("\n")
+          .map(l => l.replace(/^[\s*#_>\-]+|[\s*]+$/g, "").trim())
+          .filter(Boolean);
+        const day = lines[0]?.replace(/[*_#:]/g, "").trim() || "";
+
+        // Sucht in Zeilen nach Schlüssel-Prefix, mit Markdown-Toleranz
         const get = (keys) => {
           for (const key of keys) {
-            const line = lines.find(l => l.toUpperCase().replace(/Ü/g,"UE").replace(/Ä/g,"AE").replace(/Ö/g,"OE")
-              .startsWith(key.toUpperCase().replace(/Ü/g,"UE").replace(/Ä/g,"AE").replace(/Ö/g,"OE") + ":"));
-            if (line) return line.slice(line.indexOf(":") + 1).trim();
+            const keyNorm = key.toUpperCase().replace(/Ü/g,"UE").replace(/Ä/g,"AE").replace(/Ö/g,"OE");
+            const line = lines.find(l => {
+              const clean = l.replace(/[*_#]/g,"").toUpperCase().replace(/Ü/g,"UE").replace(/Ä/g,"AE").replace(/Ö/g,"OE").trim();
+              return clean.startsWith(keyNorm + ":") || clean.startsWith(keyNorm + " :");
+            });
+            if (line) {
+              const cleaned = line.replace(/[*_#]/g,"");
+              return cleaned.slice(cleaned.indexOf(":") + 1).trim();
+            }
           }
           return "–";
         };
@@ -1482,9 +1507,12 @@ TIPP: [Konkreter Hinweis für diesen Tag – Timing, Zubereitung, Variation. Nic
           snack:     get(["SNACK","ZWISCHENMAHLZEIT","IMBISS"]),
           tip:       get(["TIPP","TIP","HINWEIS","EYLA"]),
         };
-      }).filter(d => d.day && d.day.length > 1);
+      }).filter(d => d.day && d.day.length > 1 && d.day.length < 40);
 
-      if (parsed.length === 0) throw new Error("Konnte Plan nicht lesen");
+      if (parsed.length === 0) {
+        console.warn("[PlanScreen] Konnte Plan nicht parsen. Antwort war:", text.slice(0, 500));
+        throw new Error("Konnte Plan nicht lesen");
+      }
       setDays(parsed);
     } catch(e) {
       setError("Fehler: " + e.message);
