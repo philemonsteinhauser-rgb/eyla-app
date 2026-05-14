@@ -1048,16 +1048,129 @@ function PlanScreen({ profile }) {
 
 
 // ─── PROFIL SCREEN ────────────────────────────────────────────────────────────
-function ProfilScreen({ profile, onReset }) {
+function ProfilScreen({ profile, onReset, onUpdate }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(profile);
+
+  function startEdit() {
+    setDraft({
+      ...profile,
+      // Arrays als Comma-Strings darstellen für Inputs
+      preferences: Array.isArray(profile.preferences) ? profile.preferences.join(", ") : (profile.preferences||""),
+      intolerances: Array.isArray(profile.intolerances) ? profile.intolerances.join(", ") : (profile.intolerances||""),
+    });
+    setEditing(true);
+  }
+
+  function save() {
+    const cleaned = {
+      ...draft,
+      preferences: String(draft.preferences||"").split(",").map(s=>s.trim()).filter(Boolean),
+      intolerances: String(draft.intolerances||"").split(",").map(s=>s.trim()).filter(Boolean),
+    };
+    onUpdate?.(cleaned);
+    setEditing(false);
+  }
+
+  function cancel() {
+    setDraft(profile);
+    setEditing(false);
+  }
+
+  const set = (k, v) => setDraft(prev => ({ ...prev, [k]: v }));
+
+  const inputStyle = {
+    width:"100%", background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:8,
+    padding:"9px 12px", color:T.text, fontSize:13, fontFamily:T.serif, fontStyle:"italic",
+    outline:"none", boxSizing:"border-box"
+  };
+  const numStyle = {...inputStyle, fontFamily:T.mono, fontStyle:"normal"};
+
+  if (editing) {
+    return (
+      <div>
+        <div style={{ display:"flex", alignItems:"center", gap:18, marginBottom:24 }}>
+          <EylaOrb size={60}/>
+          <div style={{ flex:1 }}>
+            <Lbl style={{ marginBottom:5 }}>PROFIL BEARBEITEN</Lbl>
+            <h2 style={{ fontSize:22, fontWeight:300, color:T.text, margin:0 }}>Anpassen.</h2>
+          </div>
+        </div>
+
+        <Card style={{ marginBottom:12 }}>
+          <Lbl style={{ marginBottom:10 }}>NAME & ZIEL</Lbl>
+          <div style={{ marginBottom:12 }}>
+            <Lbl style={{ marginBottom:6, fontSize:8 }}>NAME</Lbl>
+            <input value={draft.name||""} onChange={e=>set("name",e.target.value)} style={inputStyle}/>
+          </div>
+          <div>
+            <Lbl style={{ marginBottom:6, fontSize:8 }}>ZIEL</Lbl>
+            <input value={draft.goal||""} onChange={e=>set("goal",e.target.value)} style={inputStyle} placeholder="z.B. fit bleiben"/>
+          </div>
+        </Card>
+
+        <Card style={{ marginBottom:12 }}>
+          <Lbl style={{ marginBottom:10 }}>KÖRPERDATEN</Lbl>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10, marginBottom:12 }}>
+            {[["ALTER","age","Jahre"],["GEWICHT","weight","kg"],["GRÖSSE","height","cm"]].map(([l,k,ph])=>(
+              <div key={k}>
+                <Lbl style={{ marginBottom:6, fontSize:8 }}>{l}</Lbl>
+                <input value={draft[k]||""} onChange={e=>set(k,e.target.value)} type="number" placeholder={ph} style={numStyle}/>
+              </div>
+            ))}
+          </div>
+          <div>
+            <Lbl style={{ marginBottom:6, fontSize:8 }}>AKTIVITÄT</Lbl>
+            <input value={draft.activity||""} onChange={e=>set("activity",e.target.value)} placeholder="z.B. 5x Woche Beweglichkeit" style={inputStyle}/>
+          </div>
+        </Card>
+
+        <Card style={{ marginBottom:12 }}>
+          <Lbl style={{ marginBottom:10 }}>KÜCHE</Lbl>
+          <div style={{ marginBottom:12 }}>
+            <Lbl style={{ marginBottom:6, fontSize:8 }}>VORLIEBEN (KOMMAGETRENNT)</Lbl>
+            <input value={draft.preferences||""} onChange={e=>set("preferences",e.target.value)} placeholder="z.B. Mediterran, Proteinreich" style={inputStyle}/>
+          </div>
+          <div>
+            <Lbl style={{ marginBottom:6, fontSize:8 }}>INTOLERANZEN (KOMMAGETRENNT)</Lbl>
+            <input value={draft.intolerances||""} onChange={e=>set("intolerances",e.target.value)} placeholder="z.B. Laktose, Gluten" style={inputStyle}/>
+          </div>
+        </Card>
+
+        <div style={{ display:"flex", gap:10, marginTop:18 }}>
+          <button onClick={save} disabled={!String(draft.name||"").trim()} style={{
+            background: String(draft.name||"").trim() ? `linear-gradient(135deg,${T.dim},${T.acc})` : "transparent",
+            border: String(draft.name||"").trim() ? "none" : `1px solid ${T.borderS}`,
+            borderRadius:12, padding:"11px 24px",
+            color: String(draft.name||"").trim() ? T.bg : T.muted,
+            fontFamily:T.serif, fontSize:14, fontWeight:700,
+            cursor: String(draft.name||"").trim() ? "pointer" : "default"
+          }}>Speichern ✦</button>
+          <button onClick={cancel} style={{
+            background:"transparent", border:`1px solid ${T.borderS}`, borderRadius:12,
+            padding:"11px 22px", color:T.muted, fontFamily:T.serif, fontSize:14,
+            cursor:"pointer", fontStyle:"italic"
+          }}>Abbrechen</button>
+        </div>
+      </div>
+    );
+  }
+
+  // View mode
   return (
     <div>
       <div style={{ display:"flex",alignItems:"center",gap:18,marginBottom:28 }}>
         <EylaOrb size={60}/>
-        <div>
+        <div style={{ flex:1, minWidth:0 }}>
           <Lbl style={{ marginBottom:5 }}>DEIN PROFIL</Lbl>
           <h2 style={{ fontSize:22,fontWeight:300,color:T.text,margin:0 }}>{profile.name}</h2>
           <p style={{ color:T.muted,fontStyle:"italic",fontSize:12,margin:"4px 0 0",fontFamily:T.serif }}>{profile.goal||"Wohlbefinden"}</p>
         </div>
+        <button onClick={startEdit} style={{
+          background:T.acc+"18", border:`1px solid ${T.acc}44`, borderRadius:10,
+          padding:"8px 14px", color:T.acc, fontFamily:T.mono, fontSize:10,
+          cursor:"pointer", letterSpacing:1, flexShrink:0
+        }}>✎ BEARBEITEN</button>
       </div>
       <Card style={{ marginBottom:12 }}>
         <Lbl style={{ marginBottom:14 }}>KÖRPERDATEN</Lbl>
@@ -1146,6 +1259,11 @@ export default function App() {
     setProfile(p);
   }
 
+  function updateProfile(p) {
+    persist("eyla_profile_v3", p);
+    setProfile(p);
+  }
+
   function reset() {
     persist("eyla_profile_v3", null);
     persist("eyla_log_v3", null);
@@ -1217,7 +1335,7 @@ export default function App() {
         {screen==="kalender" && <KalenderScreen events={events} eventsLoading={eventsLoading} onRefresh={loadCalendar} profile={profile} log={log}/>}
         {screen==="chat"     && <ChatScreen profile={profile} log={log} events={events} logsByDate={logsByDate}/>}
         {screen==="plan"     && <PlanScreen profile={profile}/>}
-        {screen==="profil"   && <ProfilScreen profile={profile} onReset={reset}/>}
+        {screen==="profil"   && <ProfilScreen profile={profile} onReset={reset} onUpdate={updateProfile}/>}
       </div>
 
       {/* Bottom nav */}
