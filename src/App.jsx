@@ -568,6 +568,12 @@ function Onboarding({ onDone }) {
 function TodayScreen({ profile, log, setLog }) {
   const [mealName, setMealName] = useState("");
   const [mealCal, setMealCal] = useState("");
+  // Foto-Analyse-State
+  const [photoData, setPhotoData] = useState(null);      // {mime, base64, dataUrl}
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState(null);
+  const fileInputRef = useRef(null);
+
   const eaten = log.meals.reduce((s,m)=>s+(m.calories||0),0);
   const ct = calorieTarget(profile);
   const tdee = ct.tdee;
@@ -586,6 +592,80 @@ function TodayScreen({ profile, log, setLog }) {
     if (!mealName.trim()) return;
     setLog(l=>({...l, meals:[...l.meals, {id:Date.now(),name:mealName.trim(),calories:parseInt(mealCal)||0,time:new Date().toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})}]}));
     setMealName(""); setMealCal("");
+  }
+
+  // Foto auswählen und an Claude Vision schicken
+  async function handleFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setAnalysisError(null);
+
+    // Bild auf ~max 1024px herunterskalieren, damit Payload klein bleibt
+    const img = new Image();
+    const reader = new FileReader();
+    reader.onload = async () => {
+      img.src = reader.result;
+      await new Promise(r=>{ img.onload = r; });
+      const max = 1024;
+      const scale = Math.min(1, max/Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width*scale);
+      canvas.height = Math.round(img.height*scale);
+      const ctx2 = canvas.getContext("2d");
+      ctx2.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+      const base64 = dataUrl.split(",")[1];
+      setPhotoData({ dataUrl, base64, mime: "image/jpeg" });
+      analyzePhoto(base64);
+    };
+    reader.readAsDataURL(file);
+    // Input resetten damit gleiches File nochmal gewählt werden kann
+    e.target.value = "";
+  }
+
+  async function analyzePhoto(base64) {
+    setAnalyzing(true);
+    try {
+      const res = await fetch("/api/chat", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({
+          model: "claude-sonnet-4-5",
+          max_tokens: 400,
+          system: "Du analysierst Essens-Fotos. Antworte IMMER in genau zwei Zeilen, ohne weitere Erklärungen:\nNAME: kurze Beschreibung der Mahlzeit (max 6 Wörter)\nKCAL: geschätzte Gesamtkalorien (nur Zahl, z.B. 620)",
+          messages: [{
+            role:"user",
+            content: [
+              { type:"image", source:{ type:"base64", media_type:"image/jpeg", data: base64 } },
+              { type:"text", text:"Was ist auf dem Bild? Schätze die Gesamtkalorien." }
+            ]
+          }]
+        })
+      });
+      const data = await res.json();
+      const text = data.content?.find(b=>b.type==="text")?.text || "";
+      const nameMatch = text.match(/NAME:\s*(.+)/i);
+      const kcalMatch = text.match(/KCAL:\s*(\d+)/i);
+      const name = nameMatch ? nameMatch[1].trim() : "Mahlzeit";
+      const cal = kcalMatch ? parseInt(kcalMatch[1]) : 0;
+      setMealName(name);
+      setMealCal(String(cal));
+    } catch(e) {
+      setAnalysisError("Konnte das Bild nicht analysieren – versuch's nochmal oder tipp ein.");
+    }
+    setAnalyzing(false);
+  }
+
+  function clearPhoto() {
+    setPhotoData(null);
+    setAnalysisError(null);
+    setMealName("");
+    setMealCal("");
+  }
+
+  function acceptPhotoMeal() {
+    if (!mealName.trim()) return;
+    addMeal();
+    setPhotoData(null);
   }
 
   const energyOpts = ["💤 Erschöpft","😴 Müde","😐 Ok","😊 Gut","⚡ Energiegeladen"];
@@ -674,6 +754,48 @@ function TodayScreen({ profile, log, setLog }) {
 
         {/* Input */}
         <div style={{ background:T.bg2, borderRadius:10, padding:12, marginBottom:12 }}>
+          {/* Hidden file input für Foto */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            onChange={handleFile}
+            style={{ display:"none" }}
+          />
+
+          {/* Foto-Vorschau wenn vorhanden */}
+          {photoData && (
+            <div style={{
+              display:"flex", gap:10, marginBottom:10, padding:8,
+              background:T.bg, borderRadius:8, border:`1px solid ${T.acc}33`,
+              animation:"fadeUp .3s ease both"
+            }}>
+              <img src={photoData.dataUrl} alt="Mahlzeit" style={{
+                width:60, height:60, objectFit:"cover", borderRadius:6,
+                border:`1px solid ${T.borderS}`, flexShrink:0
+              }}/>
+              <div style={{ flex:1, minWidth:0 }}>
+                {analyzing ? (
+                  <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                    <Waveform/>
+                    <span style={{ color:T.acc, fontFamily:T.mono, fontSize:10, letterSpacing:1 }}>EYLA SCHAUT …</span>
+                  </div>
+                ) : analysisError ? (
+                  <div style={{ color:T.red, fontSize:12, fontFamily:T.serif, fontStyle:"italic" }}>{analysisError}</div>
+                ) : (
+                  <div style={{ color:T.mid, fontSize:11, fontFamily:T.serif, fontStyle:"italic" }}>
+                    EYLA hat geschätzt – kannst du noch anpassen unten.
+                  </div>
+                )}
+              </div>
+              <button onClick={clearPhoto} style={{
+                background:"none", border:"none", color:T.muted, cursor:"pointer",
+                fontSize:18, padding:"0 4px", alignSelf:"flex-start"
+              }} title="Foto verwerfen">×</button>
+            </div>
+          )}
+
           {listening && (
             <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10,
               padding:"6px 12px", background:T.green+"11", border:`1px solid ${T.green}33`, borderRadius:8 }}>
@@ -683,14 +805,34 @@ function TodayScreen({ profile, log, setLog }) {
           )}
           <div style={{ display:"flex", gap:8, marginBottom:8 }}>
             <input value={mealName} onChange={e=>setMealName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addMeal()}
-              placeholder="Was hast du gegessen?" style={{ flex:1,background:"transparent",border:`1px solid ${T.borderS}`,borderRadius:8,padding:"9px 12px",color:T.text,fontFamily:T.serif,fontSize:13,fontStyle:"italic",outline:"none" }}/>
+              placeholder={photoData ? "EYLA hat geschätzt – ändern?" : "Was hast du gegessen?"}
+              style={{ flex:1,background:"transparent",border:`1px solid ${T.borderS}`,borderRadius:8,padding:"9px 12px",color:T.text,fontFamily:T.serif,fontSize:13,fontStyle:"italic",outline:"none" }}/>
             <input value={mealCal} onChange={e=>setMealCal(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addMeal()}
               placeholder="kcal" type="number" style={{ width:70,background:"transparent",border:`1px solid ${T.borderS}`,borderRadius:8,padding:"9px 10px",color:T.text,fontFamily:T.mono,fontSize:13,outline:"none" }}/>
           </div>
-          <div style={{ display:"flex", gap:8 }}>
+          <div style={{ display:"flex", gap:8, alignItems:"center" }}>
             <VoiceBtn toggle={toggle} listening={listening} supported={supported}/>
-            {supported && <span style={{ color:T.muted,fontSize:11,fontStyle:"italic",fontFamily:T.serif,alignSelf:"center" }}>oder sprich: "Haferflocken 380 Kalorien"</span>}
-            <button onClick={addMeal} style={{ marginLeft:"auto",background:`linear-gradient(135deg,${T.dim},${T.acc})`,border:"none",borderRadius:8,padding:"0 18px",color:T.bg,fontSize:18,cursor:"pointer",fontWeight:700 }}>+</button>
+            <button onClick={()=>fileInputRef.current?.click()} disabled={analyzing} style={{
+              width:40, height:40, borderRadius:10, flexShrink:0,
+              border:`1px solid ${photoData?T.acc:T.borderS}`,
+              background: photoData ? T.acc+"22" : T.bg2,
+              color: photoData ? T.acc : T.muted,
+              fontSize:17, cursor:analyzing?"default":"pointer", transition:"all .2s",
+              display:"flex", alignItems:"center", justifyContent:"center",
+              opacity: analyzing ? 0.5 : 1
+            }} title="Foto aufnehmen / hochladen">📷</button>
+            {!photoData && !listening && supported && (
+              <span style={{ color:T.muted,fontSize:10,fontStyle:"italic",fontFamily:T.serif,alignSelf:"center" }}>
+                tippen, sprechen oder fotografieren
+              </span>
+            )}
+            <button onClick={addMeal} disabled={!mealName.trim()} style={{
+              marginLeft:"auto",
+              background: mealName.trim() ? `linear-gradient(135deg,${T.dim},${T.acc})` : T.bg2,
+              border:"none", borderRadius:8, padding:"0 18px",
+              color: mealName.trim() ? T.bg : T.muted,
+              fontSize:18, cursor: mealName.trim() ? "pointer" : "default", fontWeight:700
+            }}>+</button>
           </div>
         </div>
 
