@@ -6,12 +6,129 @@ async function persist(key, value) {
     if (value === null) localStorage.removeItem(key);
     else localStorage.setItem(key, JSON.stringify(value));
   } catch(e) { console.warn("persist failed", e); }
+  // Eyla-User-Daten auch in die Cloud syncen (debounced)
+  if (key.startsWith("eyla_") &&
+      key !== "eyla_access_code_v1" &&
+      key !== "eyla_access_granted_v1" &&
+      key !== "eyla_cloud_sync_disabled_v1") {
+    scheduleSyncUp();
+  }
 }
 async function retrieve(key, fallback = null) {
   try {
     const raw = localStorage.getItem(key);
     return raw ? JSON.parse(raw) : fallback;
   } catch { return fallback; }
+}
+
+// ─── CLOUD-SYNC ───────────────────────────────────────────────────────────────
+// Sync ist soft: ohne Vercel KV (oder bei Fehlern) bleibt alles trotzdem in
+// localStorage. Pull beim Unlock, Push debounced bei jeder Änderung.
+const SYNC_KEYS = [
+  "eyla_profile_v3",
+  "eyla_logs_v1",
+  "eyla_local_events_v2",
+  "eyla_shopping_v1",
+  "eyla_plan_v1",
+  "eyla_chat_v1",
+  "eyla_chat_voice_v1",
+];
+const SYNC_STATE = { status: "idle", lastSyncedAt: null }; // status: idle|syncing|ok|error|off
+const syncListeners = new Set();
+function notifySyncListeners() { syncListeners.forEach(l => l(SYNC_STATE)); }
+
+let syncTimer = null;
+function scheduleSyncUp() {
+  // Nicht syncen wenn Cloud-Sync deaktiviert
+  try {
+    if (localStorage.getItem("eyla_cloud_sync_disabled_v1") === "true") return;
+  } catch {}
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(syncUp, 1500);
+}
+
+async function syncUp() {
+  let code = null;
+  try { code = JSON.parse(localStorage.getItem("eyla_access_code_v1") || "null"); } catch {}
+  if (!code) return;
+
+  const payload = {};
+  for (const k of SYNC_KEYS) {
+    try {
+      const raw = localStorage.getItem(k);
+      if (raw) payload[k] = JSON.parse(raw);
+    } catch {}
+  }
+  SYNC_STATE.status = "syncing"; notifySyncListeners();
+  try {
+    const res = await fetch("/api/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-eyla-code": code },
+      body: JSON.stringify(payload)
+    });
+    if (res.ok) {
+      SYNC_STATE.status = "ok";
+      SYNC_STATE.lastSyncedAt = new Date();
+    } else if (res.status === 503) {
+      SYNC_STATE.status = "off";
+    } else {
+      SYNC_STATE.status = "error";
+    }
+  } catch {
+    SYNC_STATE.status = "error";
+  }
+  notifySyncListeners();
+}
+
+async function syncDown() {
+  let code = null;
+  try { code = JSON.parse(localStorage.getItem("eyla_access_code_v1") || "null"); } catch {}
+  if (!code) return null;
+
+  SYNC_STATE.status = "syncing"; notifySyncListeners();
+  try {
+    const res = await fetch("/api/sync", { headers: { "x-eyla-code": code } });
+    if (res.status === 503) {
+      SYNC_STATE.status = "off"; notifySyncListeners();
+      return null;
+    }
+    if (!res.ok) {
+      SYNC_STATE.status = "error"; notifySyncListeners();
+      return null;
+    }
+    const j = await res.json();
+    SYNC_STATE.status = "ok";
+    SYNC_STATE.lastSyncedAt = new Date();
+    notifySyncListeners();
+    return j?.data || null;
+  } catch {
+    SYNC_STATE.status = "error"; notifySyncListeners();
+    return null;
+  }
+}
+
+// Pulls cloud data and writes into localStorage if cloud has data.
+// Cloud wins über lokal (last-write-wins, server-Side hat aktuellste).
+async function pullCloudIntoLocal() {
+  const cloud = await syncDown();
+  if (!cloud) return false;
+  for (const k of SYNC_KEYS) {
+    if (cloud[k] !== undefined && cloud[k] !== null) {
+      try { localStorage.setItem(k, JSON.stringify(cloud[k])); } catch {}
+    }
+  }
+  return true;
+}
+
+// Hook: aktuellen Sync-Status abonnieren
+function useSyncStatus() {
+  const [state, setState] = useState({ ...SYNC_STATE });
+  useEffect(() => {
+    const l = (s) => setState({ ...s });
+    syncListeners.add(l);
+    return () => { syncListeners.delete(l); };
+  }, []);
+  return state;
 }
 
 // ─── EYLA THEME ───────────────────────────────────────────────────────────────
@@ -3098,6 +3215,8 @@ function PasscodeGate({ onUnlock }) {
   function submit() {
     if (input.trim().toLowerCase() === correctCode) {
       persist("eyla_access_granted_v1", true);
+      // Code auch direkt persistieren – wird als User-Identifier für Cloud-Sync genutzt
+      persist("eyla_access_code_v1", input.trim().toLowerCase());
       onUnlock();
     } else {
       setError(true);
@@ -3176,13 +3295,35 @@ function PasscodeGate({ onUnlock }) {
 export default function App() {
   const [accessGranted, setAccessGranted] = useState(false);
   const [accessChecked, setAccessChecked] = useState(false);
+  const [cloudPulling, setCloudPulling] = useState(false);
 
   useEffect(() => {
-    retrieve("eyla_access_granted_v1", false).then(v => {
-      setAccessGranted(!!v);
+    (async () => {
+      const granted = await retrieve("eyla_access_granted_v1", false);
+      if (granted) {
+        // Cloud-Pull beim Boot wenn schon entsperrt
+        setCloudPulling(true);
+        await pullCloudIntoLocal().catch(()=>{});
+        setCloudPulling(false);
+      }
+      setAccessGranted(!!granted);
       setAccessChecked(true);
-    });
+
+      // Persistent-Storage-API: iOS evictet sonst nach 7 Tagen
+      try {
+        if (navigator.storage && navigator.storage.persist) {
+          await navigator.storage.persist();
+        }
+      } catch {}
+    })();
   }, []);
+
+  async function handleUnlock() {
+    setCloudPulling(true);
+    await pullCloudIntoLocal().catch(()=>{});
+    setCloudPulling(false);
+    setAccessGranted(true);
+  }
 
   // Warten bis Storage-Check fertig (vermeidet kurzes Flackern der Gate)
   if (!accessChecked) {
@@ -3190,7 +3331,16 @@ export default function App() {
   }
 
   if (!accessGranted) {
-    return <PasscodeGate onUnlock={()=>setAccessGranted(true)}/>;
+    return <PasscodeGate onUnlock={handleUnlock}/>;
+  }
+
+  if (cloudPulling) {
+    return (
+      <div style={{ minHeight:"100vh", background:T.bg, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:14 }}>
+        <EylaOrb size={56} thinking/>
+        <Lbl>SYNCHRONISIERE …</Lbl>
+      </div>
+    );
   }
 
   return <AppContent/>;
@@ -3205,6 +3355,7 @@ function AppContent() {
   const [events, setEvents] = useState([]);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [ready, setReady] = useState(false);
+  const syncState = useSyncStatus();
 
   // Abgeleiteter Log für heute
   const log = logsByDate[TODAY] || EMPTY_LOG();
@@ -3288,6 +3439,7 @@ function AppContent() {
     persist("eyla_shopping_v1", null);
     persist("eyla_plan_v1", null);
     persist("eyla_chat_v1", null);
+    // Auch leeren Stand in die Cloud syncen damit andere Geräte nicht alte Daten zurückbringen
     setProfile(null);
     setLogsByDate({});
     setEvents([]);
@@ -3351,6 +3503,29 @@ function AppContent() {
         <div style={{ display:"flex",gap:6,alignItems:"center" }}>
           {events.length>0&&<span style={{ background:T.gold+"18",border:`1px solid ${T.gold}33`,borderRadius:20,padding:"3px 10px",fontSize:10,color:T.gold,fontFamily:T.mono }}>▦ {events.length}</span>}
           {log.water>0&&<span style={{ background:T.acc+"18",border:`1px solid ${T.acc}33`,borderRadius:20,padding:"3px 10px",fontSize:10,color:T.acc,fontFamily:T.mono }}>💧 {log.water}</span>}
+          {/* Sync-Indikator (nur wenn was zu zeigen ist) */}
+          {syncState.status !== "idle" && (
+            <span title={
+              syncState.status === "ok" ? `Synchronisiert ${syncState.lastSyncedAt?.toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})||""}` :
+              syncState.status === "syncing" ? "Synchronisiere …" :
+              syncState.status === "off" ? "Cloud-Sync nicht eingerichtet" :
+              "Sync-Fehler – Daten bleiben lokal"
+            } style={{
+              fontSize:10, fontFamily:T.mono,
+              color: syncState.status === "ok" ? T.green
+                   : syncState.status === "syncing" ? T.mid
+                   : syncState.status === "off" ? T.muted
+                   : T.gold,
+              padding:"3px 8px", borderRadius:20,
+              background: (syncState.status === "ok" ? T.green : syncState.status === "syncing" ? T.mid : syncState.status === "off" ? T.muted : T.gold) + "18",
+              border:`1px solid ${(syncState.status === "ok" ? T.green : syncState.status === "syncing" ? T.mid : syncState.status === "off" ? T.muted : T.gold) + "33"}`,
+              cursor:"default"
+            }}>
+              {syncState.status === "ok" ? "↑ sync" :
+               syncState.status === "syncing" ? "↻ sync" :
+               syncState.status === "off" ? "× sync" : "! sync"}
+            </span>
+          )}
         </div>
       </div>
 
