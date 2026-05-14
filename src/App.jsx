@@ -977,19 +977,73 @@ function TodayScreen({ profile, log, setLog }) {
         </div>
 
         {log.meals.length===0
-          ? <p style={{ color:T.muted,fontStyle:"italic",fontSize:12,textAlign:"center",padding:"8px 0",margin:0 }}>Noch nichts – tippen oder sprechen.</p>
-          : log.meals.map(m=>(
-            <div key={m.id} style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${T.border}` }}>
-              <div style={{ color:T.text,fontSize:13 }}>{m.name}</div>
-              <div style={{ display:"flex",alignItems:"center",gap:10 }}>
-                {m.calories>0&&<div style={{ color:T.acc,fontFamily:T.mono,fontSize:12 }}>{m.calories}</div>}
-                <div style={{ color:T.muted,fontFamily:T.mono,fontSize:10 }}>{m.time}</div>
-                <button onClick={()=>setLog(l=>({...l,meals:l.meals.filter(x=>x.id!==m.id)}))} style={{ background:"none",border:"none",color:T.muted,cursor:"pointer",fontSize:15,padding:2 }}>×</button>
-              </div>
+          ? <div style={{ textAlign:"center", padding:"14px 6px" }}>
+              <p style={{ color:T.mid, fontStyle:"italic", fontSize:13, fontFamily:T.serif, margin:"0 0 4px" }}>
+                Noch nichts gegessen heute.
+              </p>
+              <p style={{ color:T.muted, fontSize:11, fontStyle:"italic", fontFamily:T.serif, margin:0 }}>
+                Tippen, sprechen oder Foto vom Teller.
+              </p>
             </div>
+          : log.meals.map(m=>(
+            <MealRow key={m.id} meal={m}
+              onEdit={(updated)=>setLog(l=>({...l, meals: l.meals.map(x=>x.id===m.id?{...x,...updated}:x)}))}
+              onDelete={()=>setLog(l=>({...l,meals:l.meals.filter(x=>x.id!==m.id)}))}
+            />
           ))
         }
       </Card>
+    </div>
+  );
+}
+
+// Einzelne Mahlzeit-Zeile mit Tap-to-Edit
+function MealRow({ meal, onEdit, onDelete }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(meal.name);
+  const [cal, setCal] = useState(String(meal.calories || ""));
+
+  function save() {
+    if (!name.trim()) return;
+    onEdit({ name: name.trim(), calories: parseInt(cal) || 0 });
+    setEditing(false);
+  }
+  function cancel() {
+    setName(meal.name); setCal(String(meal.calories || ""));
+    setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <div style={{ padding:"8px 0", borderBottom:`1px solid ${T.border}`, animation:"fadeUp .2s ease both" }}>
+        <div style={{ display:"flex", gap:6, marginBottom:6 }}>
+          <input value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&save()}
+            autoFocus style={{ flex:1, background:T.bg, border:`1px solid ${T.acc}55`, borderRadius:6, padding:"6px 10px", color:T.text, fontFamily:T.serif, fontSize:13, fontStyle:"italic", outline:"none" }}/>
+          <input value={cal} onChange={e=>setCal(e.target.value)} onKeyDown={e=>e.key==="Enter"&&save()}
+            type="number" placeholder="kcal" style={{ width:70, background:T.bg, border:`1px solid ${T.acc}55`, borderRadius:6, padding:"6px 8px", color:T.text, fontFamily:T.mono, fontSize:12, outline:"none" }}/>
+        </div>
+        <div style={{ display:"flex", gap:6 }}>
+          <button onClick={save} style={{ background:`linear-gradient(135deg,${T.dim},${T.acc})`, border:"none", borderRadius:6, padding:"4px 14px", color:T.bg, fontFamily:T.serif, fontSize:11, fontWeight:700, cursor:"pointer" }}>Speichern</button>
+          <button onClick={cancel} style={{ background:"transparent", border:`1px solid ${T.borderS}`, borderRadius:6, padding:"4px 12px", color:T.muted, fontFamily:T.serif, fontSize:11, cursor:"pointer", fontStyle:"italic" }}>Abbrechen</button>
+          <button onClick={onDelete} style={{ marginLeft:"auto", background:"transparent", border:`1px solid ${T.red}33`, borderRadius:6, padding:"4px 12px", color:T.red, fontFamily:T.mono, fontSize:10, cursor:"pointer", letterSpacing:1 }}>LÖSCHEN</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div onClick={()=>setEditing(true)} style={{
+      display:"flex", justifyContent:"space-between", alignItems:"center",
+      padding:"8px 0", borderBottom:`1px solid ${T.border}`, cursor:"pointer",
+      transition:"background .15s"
+    }}
+    onMouseEnter={e=>e.currentTarget.style.background=T.acc+"06"}
+    onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+      <div style={{ color:T.text, fontSize:13 }}>{meal.name}</div>
+      <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+        {meal.calories>0 && <div style={{ color:T.acc, fontFamily:T.mono, fontSize:12 }}>{meal.calories}</div>}
+        <div style={{ color:T.muted, fontFamily:T.mono, fontSize:10 }}>{meal.time}</div>
+      </div>
     </div>
   );
 }
@@ -1732,8 +1786,14 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
               <div style={{ width:30,height:30,borderRadius:"50%",flexShrink:0,marginTop:4,
                 background:isE?`radial-gradient(circle at 35% 35%,${T.goldL},${T.acc},${T.dim})`:"linear-gradient(135deg,#1e293b,#0f172a)",
                 border:`1px solid ${isE?T.acc+"55":"#334155"}`,
-                display:"flex",alignItems:"center",justifyContent:"center",fontSize:11 }}>
-                {isE?"✦":"◉"}
+                display:"flex",alignItems:"center",justifyContent:"center",
+                fontSize: isE ? 11 : 12,
+                fontFamily: isE ? "inherit" : T.serif,
+                fontWeight: isE ? 400 : 500,
+                color: isE ? T.bg : T.mid,
+                letterSpacing: isE ? 0 : 0.5
+              }}>
+                {isE ? "✦" : (profile.name?.charAt(0) || "·").toUpperCase()}
               </div>
               <div style={{ maxWidth:"80%" }}>
                 <Lbl style={{ marginBottom:5 }}>{isE?"EYLA":profile.name.split(" ")[0].toUpperCase()}</Lbl>
