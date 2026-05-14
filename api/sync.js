@@ -4,19 +4,19 @@
 // Passcode-Gate eingibt. Pro Code wird ein JSON-Blob mit profile, logs,
 // shopping, plan, events, chat etc. gespeichert.
 //
-// Setup-Voraussetzung in Vercel:
-//   Storage → Create Database → KV → Mit Projekt verbinden
-//   Vercel injiziert automatisch KV_URL, KV_REST_API_URL,
-//   KV_REST_API_TOKEN, KV_REST_API_READ_ONLY_TOKEN als ENV.
-//
-// Wenn KV nicht eingerichtet ist, antwortet der Endpoint mit 503 und das
-// Frontend fällt automatisch auf reines localStorage zurück.
+// ENV-Setup: Upstash Integration in Vercel → Project → Storage. Liefert
+// entweder KV_REST_API_URL/TOKEN (alte Vercel-KV-Variante) oder
+// UPSTASH_REDIS_REST_URL/TOKEN (neue Marketplace-Variante). Wir nehmen beide.
 
-let kv = null;
-try {
-  // dynamic import damit der Build nicht killt wenn das package fehlt
-  ({ kv } = await import("@vercel/kv"));
-} catch {}
+import { Redis } from "@upstash/redis";
+
+function getRedis() {
+  // Versuche Vercel-KV-ENV zuerst, sonst Upstash-Direkt-ENV
+  const url   = process.env.KV_REST_API_URL   || process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) return null;
+  return new Redis({ url, token });
+}
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -24,33 +24,41 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-eyla-code");
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  if (!kv || !process.env.KV_REST_API_URL) {
-    return res.status(503).json({ error: "Cloud-Sync nicht konfiguriert (Vercel KV fehlt)." });
+  const redis = getRedis();
+  if (!redis) {
+    return res.status(503).json({
+      error: "Cloud-Sync nicht konfiguriert",
+      hint: "Vercel → Storage → Upstash Redis verbinden",
+      seenEnv: {
+        KV_REST_API_URL: !!process.env.KV_REST_API_URL,
+        UPSTASH_REDIS_REST_URL: !!process.env.UPSTASH_REDIS_REST_URL,
+      }
+    });
   }
 
   const code = String(req.headers["x-eyla-code"] || "").toLowerCase().trim();
   if (!code || code.length < 3 || code.length > 64) {
-    return res.status(401).json({ error: "Code fehlt oder ungültig." });
+    return res.status(401).json({ error: "Code fehlt oder ungültig" });
   }
   const key = `eyla:${code}`;
 
   try {
     if (req.method === "GET") {
-      const data = await kv.get(key);
-      return res.json({ data: data || null });
+      const data = await redis.get(key);
+      return res.status(200).json({ data: data || null });
     }
     if (req.method === "POST") {
       const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
       if (!body || typeof body !== "object") {
-        return res.status(400).json({ error: "Body muss ein Objekt sein." });
+        return res.status(400).json({ error: "Body muss ein Objekt sein" });
       }
-      // 1MB Soft-Limit pro User
-      const payloadSize = JSON.stringify(body).length;
+      const payload = { ...body, updatedAt: new Date().toISOString() };
+      const payloadSize = JSON.stringify(payload).length;
       if (payloadSize > 1024 * 1024) {
-        return res.status(413).json({ error: "Datenmenge zu groß (>1MB)." });
+        return res.status(413).json({ error: "Datenmenge zu groß (>1MB)" });
       }
-      await kv.set(key, { ...body, updatedAt: new Date().toISOString() });
-      return res.json({ ok: true, size: payloadSize });
+      await redis.set(key, payload);
+      return res.status(200).json({ ok: true, size: payloadSize });
     }
     return res.status(405).json({ error: "Method not allowed" });
   } catch (e) {
