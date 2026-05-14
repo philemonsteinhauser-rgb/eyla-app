@@ -53,6 +53,95 @@ const DEFAULT_PROFILE = {
 const TODAY = new Date().toDateString();
 const EMPTY_LOG = () => ({ meals:[], water:0, energy:"", sleep:"", date:TODAY });
 
+// ─── EINKAUFSLISTE DEFAULTS ───────────────────────────────────────────────────
+// Lidl-Rundweg-Layout (Eingang → Kasse). Items mit Quelle: "plan" (aus Ernährungsplan),
+// "manuell" (eigene), "beide" (in beiden). User kann eigene Items hinzufügen + Store anpassen.
+const DEFAULT_SHOPPING = {
+  store: "Lidl",
+  aisles: [
+    {
+      name: "Obst & Gemüse", icon: "🥦", color: "green",
+      hint: "Direkt am Eingang",
+      items: [
+        { name: "Zucchini (groß)", menge: "5 Stk", quelle: "plan" },
+        { name: "Paprika (bunt, groß)", menge: "8 Stk", quelle: "plan" },
+        { name: "Blumenkohl", menge: "2 Köpfe", quelle: "plan" },
+        { name: "Champignons", menge: "500g", quelle: "plan" },
+        { name: "Kirschtomaten", menge: "500g", quelle: "plan" },
+        { name: "Gurke", menge: "2 Stk", quelle: "beide" },
+        { name: "Tomaten", menge: "6 Stk", quelle: "plan" },
+        { name: "Rote Zwiebeln", menge: "3 Stk", quelle: "plan" },
+        { name: "Zwiebeln (gelb)", menge: "4 Stk", quelle: "plan" },
+        { name: "Knoblauch", menge: "2 Knollen", quelle: "plan" },
+        { name: "Ingwer (frisch)", menge: "1 Stück", quelle: "plan" },
+        { name: "Frühlingszwiebeln", menge: "1 Bund", quelle: "plan" },
+        { name: "Zitrone", menge: "2 Stk", quelle: "plan" },
+        { name: "Petersilie (frisch)", menge: "1 Bund", quelle: "plan" },
+        { name: "Basilikum (Topf)", menge: "1 Topf", quelle: "plan" },
+        { name: "Sellerie", menge: "1 Knolle", quelle: "manuell" },
+      ]
+    },
+    {
+      name: "Brot & Backwaren", icon: "🍞", color: "gold",
+      hint: "Meist neben Gemüse",
+      items: [
+        { name: "Sauerteigbrot", menge: "1 Laib", quelle: "manuell" },
+      ]
+    },
+    {
+      name: "Molkerei & Kühlwaren", icon: "🧀", color: "mid",
+      hint: "Linke oder hintere Wand",
+      items: [
+        { name: "Eier (10er Pack)", menge: "2 Pkg", quelle: "beide" },
+        { name: "Milch frisch", menge: "1–2 Fl.", quelle: "manuell" },
+        { name: "Magerquark 0%", menge: "1 Becher (500g)", quelle: "manuell" },
+        { name: "Feta light", menge: "200g + 1 extra Pkg", quelle: "beide" },
+        { name: "Hüttenkäse / körniger Frischkäse", menge: "1 Becher", quelle: "manuell" },
+        { name: "Reibekäse", menge: "150g", quelle: "plan" },
+        { name: "Parmesan (gerieben)", menge: "80g", quelle: "plan" },
+        { name: "Butter", menge: "1 Pkg", quelle: "plan" },
+        { name: "Basilikum-Pesto (Glas)", menge: "1 Glas", quelle: "plan", tipp: "Oft im Kühlregal" },
+        { name: "Chilitaler (rot/grün)", menge: "1 Pkg", quelle: "manuell", tipp: "Meist bei Aufschnitt/Käse" },
+      ]
+    },
+    {
+      name: "Fisch & Fleisch", icon: "🐟", color: "rose",
+      hint: "Meist hinten im Laden",
+      items: [
+        { name: "Hackfleisch (gemischt)", menge: "600g", quelle: "plan" },
+        { name: "Lachs / Graved Lachs", menge: "1 Pkg", quelle: "manuell" },
+        { name: "Thunfisch (Dose in Wasser)", menge: "2 Dosen", quelle: "manuell", tipp: "Oder frisch, falls verfügbar" },
+      ]
+    },
+    {
+      name: "Trockenwaren & Regal-Mitte", icon: "🫙", color: "coral",
+      hint: "Mittelgänge",
+      items: [
+        { name: "Rote Linsen (500g)", menge: "1 Pkg", quelle: "plan" },
+        { name: "Gekochte braune Linsen", menge: "2x (Dose/Pkg)", quelle: "manuell" },
+        { name: "Kichererbsen (Dose)", menge: "3 Dosen", quelle: "plan" },
+        { name: "Kokosmilch (400ml)", menge: "2 Dosen", quelle: "plan" },
+        { name: "Gehackte Tomaten", menge: "3 Dosen", quelle: "plan" },
+        { name: "Tomatenmark", menge: "1 Tube", quelle: "plan" },
+        { name: "Gemüsebrühe (Würfel)", menge: "1 Pkg", quelle: "plan" },
+        { name: "Basmati-Reis (500g)", menge: "1 Pkg", quelle: "plan" },
+        { name: "Quinoa", menge: "1 Pkg (400–500g)", quelle: "manuell" },
+        { name: "Olivenöl (500ml)", menge: "1 Fl.", quelle: "plan" },
+        { name: "Sesam (Körner)", menge: "1 Pkg", quelle: "plan" },
+        { name: "Pinienkerne", menge: "50g", quelle: "plan" },
+      ]
+    },
+    {
+      name: "Haushalt", icon: "🧹", color: "muted",
+      hint: "Meist am Ende vor der Kasse",
+      items: [
+        { name: "Spülmaschinen-Tabs", menge: "1 Pkg", quelle: "manuell" },
+      ]
+    },
+  ],
+  checked: {},
+};
+
 // ─── DATUMS-HELFER ────────────────────────────────────────────────────────────
 // Liefert ein Array der letzten n Tage als toDateString()-Keys (heute zuerst).
 function lastNDays(n) {
@@ -1047,6 +1136,294 @@ function PlanScreen({ profile }) {
 }
 
 
+// ─── EINKAUFSLISTE ────────────────────────────────────────────────────────────
+function ShoppingScreen() {
+  const [data, setData] = useState(DEFAULT_SHOPPING);
+  const [loaded, setLoaded] = useState(false);
+  const [filter, setFilter] = useState("alle"); // alle | offen | manuell
+  const [addingTo, setAddingTo] = useState(null); // aisle-index oder null
+  const [newName, setNewName] = useState("");
+  const [newMenge, setNewMenge] = useState("");
+  const [editingStore, setEditingStore] = useState(false);
+
+  useEffect(() => {
+    retrieve("eyla_shopping_v1", null).then(s => {
+      if (s && s.aisles) setData(s);
+      setLoaded(true);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (loaded) persist("eyla_shopping_v1", data);
+  }, [data, loaded]);
+
+  // Quelle-Styles in EYLA-Farben
+  const quelleStyle = {
+    plan:    { bg: T.acc+"18",  color: T.acc,  label: "📋 Plan" },
+    manuell: { bg: T.gold+"18", color: T.gold, label: "✎ Eigen" },
+    beide:   { bg: T.rose+"22", color: T.rose, label: "◆ Beide" },
+  };
+
+  // Farben für Gänge auf EYLA-Palette mappen
+  const colorMap = {
+    green: T.green, gold: T.gold, mid: T.mid, rose: T.rose,
+    coral: "#F0997B", muted: T.muted, acc: T.acc,
+  };
+
+  function toggle(aisleName, itemName) {
+    const key = aisleName + "::" + itemName;
+    setData(d => ({ ...d, checked: { ...d.checked, [key]: !d.checked[key] }}));
+  }
+
+  function resetChecks() {
+    setData(d => ({ ...d, checked: {} }));
+  }
+
+  function addItem(aisleIdx) {
+    if (!newName.trim()) return;
+    setData(d => {
+      const aisles = d.aisles.map((a, i) => i === aisleIdx ? {
+        ...a, items: [...a.items, { name: newName.trim(), menge: newMenge.trim()||"1", quelle: "manuell" }]
+      } : a);
+      return { ...d, aisles };
+    });
+    setNewName(""); setNewMenge(""); setAddingTo(null);
+  }
+
+  function removeItem(aisleIdx, itemName) {
+    setData(d => {
+      const aisles = d.aisles.map((a, i) => i === aisleIdx ? {
+        ...a, items: a.items.filter(it => it.name !== itemName)
+      } : a);
+      const checkedCopy = { ...d.checked };
+      delete checkedCopy[d.aisles[aisleIdx].name + "::" + itemName];
+      return { ...d, aisles, checked: checkedCopy };
+    });
+  }
+
+  function updateStore(name) {
+    setData(d => ({ ...d, store: name }));
+  }
+
+  // Filter anwenden
+  const filteredAisles = data.aisles.map(a => ({
+    ...a,
+    items: a.items.filter(it => {
+      if (filter === "alle") return true;
+      if (filter === "offen") return !data.checked[a.name + "::" + it.name];
+      if (filter === "manuell") return it.quelle === "manuell";
+      return true;
+    })
+  })).filter(a => a.items.length > 0 || addingTo === data.aisles.indexOf(data.aisles.find(x=>x.name===a.name)));
+
+  const totalItems = data.aisles.flatMap(a => a.items).length;
+  const checkedCount = Object.values(data.checked).filter(Boolean).length;
+  const progress = totalItems > 0 ? Math.round((checkedCount/totalItems)*100) : 0;
+
+  return (
+    <div>
+      <div style={{ marginBottom:18 }}>
+        <Lbl style={{ marginBottom:6 }}>EINKAUFSLISTE</Lbl>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-end", gap:10 }}>
+          <h2 style={{ fontSize:20, fontWeight:300, color:T.text, margin:0, display:"flex", alignItems:"center", gap:8 }}>
+            <span style={{ fontSize:20 }}>🛒</span>
+            {editingStore ? (
+              <input
+                value={data.store}
+                onChange={e=>updateStore(e.target.value)}
+                onBlur={()=>setEditingStore(false)}
+                onKeyDown={e=>{if(e.key==="Enter")setEditingStore(false);}}
+                autoFocus
+                style={{
+                  background:T.bg2, border:`1px solid ${T.acc}55`, borderRadius:6,
+                  padding:"3px 10px", color:T.acc, fontFamily:T.serif, fontSize:18,
+                  fontStyle:"italic", outline:"none", width:140
+                }}
+              />
+            ) : (
+              <span onClick={()=>setEditingStore(true)} style={{ color:T.acc, cursor:"pointer", borderBottom:`1px dashed ${T.acc}55`, paddingBottom:1 }}>
+                {data.store}
+              </span>
+            )}
+          </h2>
+          <div style={{ fontFamily:T.mono, fontSize:11, color:T.muted }}>
+            <span style={{ color:T.acc }}>{checkedCount}</span>/{totalItems}
+          </div>
+        </div>
+
+        {/* Progress */}
+        <div style={{ height:3, background:T.faint, borderRadius:2, marginTop:10 }}>
+          <div style={{ height:3, background:`linear-gradient(90deg,${T.dim},${T.acc})`, borderRadius:2, width:`${progress}%`, transition:"width .3s" }}/>
+        </div>
+
+        {/* Filter Pills */}
+        <div style={{ display:"flex", gap:6, marginTop:12, alignItems:"center", flexWrap:"wrap" }}>
+          {[["alle","Alle"],["offen","Offen"],["manuell","✎ Eigene"]].map(([v,l])=>(
+            <button key={v} onClick={()=>setFilter(v)} style={{
+              padding:"5px 12px", borderRadius:20,
+              border:`1px solid ${filter===v?T.acc:T.borderS}`,
+              background:filter===v?T.acc+"18":"transparent",
+              color:filter===v?T.acc:T.muted, fontFamily:T.serif, fontSize:11,
+              cursor:"pointer", fontStyle:"italic", transition:"all .2s"
+            }}>{l}</button>
+          ))}
+          <button onClick={resetChecks} style={{
+            marginLeft:"auto", padding:"5px 12px", borderRadius:20,
+            border:`1px solid ${T.borderS}`, background:"transparent",
+            color:T.muted, fontFamily:T.mono, fontSize:10, cursor:"pointer", letterSpacing:1
+          }}>↺ RESET</button>
+        </div>
+      </div>
+
+      {/* Legende */}
+      <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:14 }}>
+        {Object.entries(quelleStyle).map(([k,v])=>(
+          <span key={k} style={{
+            background:v.bg, color:v.color, fontSize:10, padding:"3px 9px",
+            borderRadius:20, fontFamily:T.mono, letterSpacing:.5
+          }}>{v.label}</span>
+        ))}
+      </div>
+
+      {/* Gänge */}
+      {filteredAisles.map((aisle, ai) => {
+        const originalIdx = data.aisles.findIndex(a => a.name === aisle.name);
+        const aisleColor = colorMap[aisle.color] || T.acc;
+        const totalInAisle = data.aisles[originalIdx].items.length;
+        const doneInAisle = data.aisles[originalIdx].items.filter(it => data.checked[aisle.name+"::"+it.name]).length;
+        return (
+          <div key={aisle.name} style={{ marginBottom:18 }}>
+            {/* Header */}
+            <div style={{
+              display:"flex", alignItems:"center", gap:10, paddingBottom:6,
+              borderBottom:`1px solid ${aisleColor}44`, marginBottom:8
+            }}>
+              <div style={{
+                background:aisleColor+"22", color:aisleColor, borderRadius:6,
+                padding:"2px 8px", fontSize:10, fontFamily:T.mono, fontWeight:700,
+                border:`1px solid ${aisleColor}55`
+              }}>{originalIdx+1}</div>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:13, fontWeight:500, color:aisleColor, display:"flex", alignItems:"center", gap:6 }}>
+                  <span>{aisle.icon}</span>
+                  <span>{aisle.name}</span>
+                </div>
+                <div style={{ fontSize:10, color:T.muted, fontStyle:"italic", fontFamily:T.serif }}>{aisle.hint}</div>
+              </div>
+              <div style={{ fontFamily:T.mono, fontSize:10, color:T.muted }}>
+                {doneInAisle}/{totalInAisle}
+              </div>
+            </div>
+
+            {/* Items */}
+            {aisle.items.map(item => {
+              const key = aisle.name + "::" + item.name;
+              const done = !!data.checked[key];
+              const st = quelleStyle[item.quelle] || quelleStyle.manuell;
+              return (
+                <div key={item.name} style={{
+                  display:"flex", alignItems:"flex-start", gap:10,
+                  padding:"9px 0", borderBottom:`1px solid ${T.border}`,
+                  opacity: done ? 0.4 : 1, transition:"opacity .2s"
+                }}>
+                  <div onClick={()=>toggle(aisle.name, item.name)} style={{
+                    width:22, height:22, borderRadius:6, flexShrink:0, marginTop:1,
+                    border:`1.5px solid ${done?aisleColor:T.borderS}`,
+                    background:done?aisleColor:"transparent",
+                    display:"flex", alignItems:"center", justifyContent:"center",
+                    cursor:"pointer"
+                  }}>
+                    {done && <span style={{ color:T.bg, fontSize:13, fontWeight:700 }}>✓</span>}
+                  </div>
+                  <div onClick={()=>toggle(aisle.name, item.name)} style={{ flex:1, cursor:"pointer", minWidth:0 }}>
+                    <div style={{ display:"flex", gap:6, alignItems:"center", flexWrap:"wrap" }}>
+                      <span style={{
+                        fontSize:14, color:T.text,
+                        textDecoration:done?"line-through":"none"
+                      }}>{item.name}</span>
+                      <span style={{
+                        fontSize:9, padding:"1px 7px", borderRadius:20,
+                        background:st.bg, color:st.color, fontFamily:T.mono, letterSpacing:.5
+                      }}>{st.label}</span>
+                    </div>
+                    <div style={{ fontSize:11, color:T.muted, marginTop:2 }}>
+                      <span style={{ color:T.mid, fontFamily:T.mono }}>{item.menge}</span>
+                      {item.tipp && <span style={{ color:T.gold, marginLeft:8, fontStyle:"italic", fontFamily:T.serif }}>💡 {item.tipp}</span>}
+                    </div>
+                  </div>
+                  {item.quelle === "manuell" && (
+                    <button onClick={()=>removeItem(originalIdx, item.name)} style={{
+                      background:"none", border:"none", color:T.muted,
+                      cursor:"pointer", fontSize:14, padding:"2px 4px",
+                      alignSelf:"flex-start"
+                    }} title="Eigenes Item entfernen">×</button>
+                  )}
+                </div>
+              );
+            })}
+
+            {/* + Hinzufügen */}
+            {addingTo === originalIdx ? (
+              <div style={{ marginTop:8, padding:10, background:T.bg2, borderRadius:8 }}>
+                <div style={{ display:"flex", gap:6, marginBottom:8 }}>
+                  <input
+                    value={newName} onChange={e=>setNewName(e.target.value)}
+                    onKeyDown={e=>e.key==="Enter"&&addItem(originalIdx)}
+                    placeholder="Was hinzufügen?" autoFocus
+                    style={{
+                      flex:1, background:"transparent", border:`1px solid ${T.borderS}`,
+                      borderRadius:6, padding:"7px 10px", color:T.text,
+                      fontFamily:T.serif, fontSize:13, fontStyle:"italic", outline:"none"
+                    }}/>
+                  <input
+                    value={newMenge} onChange={e=>setNewMenge(e.target.value)}
+                    onKeyDown={e=>e.key==="Enter"&&addItem(originalIdx)}
+                    placeholder="Menge"
+                    style={{
+                      width:80, background:"transparent", border:`1px solid ${T.borderS}`,
+                      borderRadius:6, padding:"7px 10px", color:T.text,
+                      fontFamily:T.mono, fontSize:12, outline:"none"
+                    }}/>
+                </div>
+                <div style={{ display:"flex", gap:6 }}>
+                  <button onClick={()=>addItem(originalIdx)} disabled={!newName.trim()} style={{
+                    background:newName.trim()?`linear-gradient(135deg,${T.dim},${T.acc})`:"transparent",
+                    border:newName.trim()?"none":`1px solid ${T.borderS}`,
+                    borderRadius:6, padding:"6px 16px",
+                    color:newName.trim()?T.bg:T.muted,
+                    fontFamily:T.serif, fontSize:12, fontWeight:700,
+                    cursor:newName.trim()?"pointer":"default"
+                  }}>Hinzufügen</button>
+                  <button onClick={()=>{setAddingTo(null);setNewName("");setNewMenge("");}} style={{
+                    background:"transparent", border:`1px solid ${T.borderS}`,
+                    borderRadius:6, padding:"6px 12px", color:T.muted,
+                    fontFamily:T.serif, fontSize:12, cursor:"pointer", fontStyle:"italic"
+                  }}>Abbrechen</button>
+                </div>
+              </div>
+            ) : (
+              <button onClick={()=>setAddingTo(originalIdx)} style={{
+                marginTop:8, width:"100%", background:"transparent",
+                border:`1px dashed ${T.borderS}`, borderRadius:8,
+                padding:"7px 10px", color:T.muted, fontFamily:T.serif,
+                fontSize:12, cursor:"pointer", fontStyle:"italic"
+              }}>+ Hinzufügen</button>
+            )}
+          </div>
+        );
+      })}
+
+      {/* Footer-Tipp */}
+      <Card accent style={{ marginTop:18, padding:"12px 16px" }}>
+        <div style={{ fontFamily:T.serif, fontSize:12, color:T.mid, lineHeight:1.7 }}>
+          <span style={{ color:T.acc, fontWeight:700 }}>✦ Tipp: </span>
+          Mengen sind für 2 Personen / 5 Tage kalkuliert. Eigene Items wandern automatisch in den Rundweg.
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 // ─── PROFIL SCREEN ────────────────────────────────────────────────────────────
 function ProfilScreen({ profile, onReset, onUpdate }) {
   const [editing, setEditing] = useState(false);
@@ -1269,6 +1646,7 @@ export default function App() {
     persist("eyla_log_v3", null);
     persist("eyla_logs_v1", null);
     persist("eyla_local_events_v2", null);
+    persist("eyla_shopping_v1", null);
     setProfile(null);
     setLogsByDate({});
     setEvents([]);
@@ -1288,10 +1666,18 @@ export default function App() {
     {id:"kalender", icon:"▦", label:"Kalender"},
     {id:"chat",     icon:"✦", label:"EYLA"},
     {id:"plan",     icon:"◈", label:"Plan"},
+    {id:"liste",    icon:"▤", label:"Liste"},
     {id:"profil",   icon:"◉", label:"Profil"},
   ];
 
-  const sectionColor = screen==="heute" ? T.acc : screen==="woche" ? T.acc : screen==="kalender" ? T.gold : screen==="chat" ? T.acc : screen==="plan" ? T.gold : T.muted;
+  const sectionColor =
+    screen==="heute" ? T.acc :
+    screen==="woche" ? T.acc :
+    screen==="kalender" ? T.gold :
+    screen==="chat" ? T.acc :
+    screen==="plan" ? T.gold :
+    screen==="liste" ? T.green :
+    T.muted;
 
   return (
     <div style={{ minHeight:"100vh", background:T.bg, fontFamily:T.serif, color:T.text }}>
@@ -1335,6 +1721,7 @@ export default function App() {
         {screen==="kalender" && <KalenderScreen events={events} eventsLoading={eventsLoading} onRefresh={loadCalendar} profile={profile} log={log}/>}
         {screen==="chat"     && <ChatScreen profile={profile} log={log} events={events} logsByDate={logsByDate}/>}
         {screen==="plan"     && <PlanScreen profile={profile}/>}
+        {screen==="liste"    && <ShoppingScreen/>}
         {screen==="profil"   && <ProfilScreen profile={profile} onReset={reset} onUpdate={updateProfile}/>}
       </div>
 
@@ -1342,7 +1729,7 @@ export default function App() {
       <div style={{ position:"fixed",bottom:0,left:0,right:0,zIndex:40,
         background:T.bg+"F0",backdropFilter:"blur(20px)",borderTop:`1px solid ${T.border}`,
         padding:"8px 0 14px" }}>
-        <div style={{ display:"flex",justifyContent:"space-around",maxWidth:560,margin:"0 auto",padding:"0 4px" }}>
+        <div style={{ display:"flex",justifyContent:"space-around",maxWidth:620,margin:"0 auto",padding:"0 2px" }}>
           {nav.map(n=>(
             <button key={n.id} onClick={()=>setScreen(n.id)} style={{
               background:"none",border:"none",cursor:"pointer",
