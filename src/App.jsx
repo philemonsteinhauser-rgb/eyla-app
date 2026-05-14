@@ -29,7 +29,7 @@ const T = {
   rose:   "#818CF8",
   text:   "#F0F9FF",
   mid:    "#7DD3FC",
-  muted:  "#64748B",
+  muted:  "#94A3B8",   // lifted für bessere Lesbarkeit (war #64748B)
   faint:  "#1E293B",
   green:  "#34D399",
   red:    "#F87171",
@@ -40,6 +40,7 @@ const T = {
 
 const DEFAULT_PROFILE = {
   name: "Phil",
+  sex: "m",               // "m" | "f" | "d"
   age: "35",
   weight: "79",
   height: "183",
@@ -54,13 +55,17 @@ const DEFAULT_PROFILE = {
   targetWeeks: "",        // Wochen bis Zielgewicht
 };
 
-// Kalorienziel + TDEE berechnen aus Profil. Mifflin-St-Jeor-Vereinfachung +
-// pauschaler Aktivitätsoffset. Sicherheitslimit: Defizit max. 1000, Min. 1200.
+// Kalorienziel + TDEE berechnen aus Profil. Mifflin-St-Jeor +
+// pauschaler Aktivitätsoffset (+400). Geschlecht beeinflusst BMR-Konstante.
+// Sicherheitslimit: Defizit max. 1000, Min. 1200.
 function calorieTarget(profile) {
   const w = parseFloat(profile.weight) || 79;
   const h = parseFloat(profile.height) || 180;
   const a = parseFloat(profile.age) || 30;
-  const tdee = Math.round(10*w + 6.25*h - 5*a + 5 + 400);
+  const sex = profile.sex || "m";
+  // Mifflin-St Jeor Konstante: Männer +5, Frauen -161, Divers Mittelwert -78
+  const sexK = sex === "f" ? -161 : sex === "d" ? -78 : 5;
+  const tdee = Math.round(10*w + 6.25*h - 5*a + sexK + 400);
 
   const type = profile.goalType || "halten";
   if (type === "halten") return { tdee, target: tdee, dailyDelta: 0, type };
@@ -395,7 +400,7 @@ function VoiceBtn({ toggle, listening, supported }) {
 // ─── ONBOARDING ───────────────────────────────────────────────────────────────
 function Onboarding({ onDone }) {
   const [step, setStep] = useState(0);
-  const [p, setP] = useState({ name:"", age:"", weight:"", height:"", goal:"", activity:"", preferences:"", intolerances:"", apps:[], goalType:"halten", targetWeight:"", targetWeeks:"" });
+  const [p, setP] = useState({ name:"", sex:"", age:"", weight:"", height:"", goal:"", activity:"", preferences:"", intolerances:"", apps:[], goalType:"halten", targetWeight:"", targetWeeks:"" });
   const set = (k,v) => setP(prev=>({...prev,[k]:v}));
   const iStyle = { width:"100%", background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:10,
     padding:"12px 16px", color:T.text, fontSize:14, fontFamily:T.serif, outline:"none",
@@ -420,6 +425,27 @@ function Onboarding({ onDone }) {
         <div style={{ marginBottom:14 }}>
           <Lbl style={{ marginBottom:8 }}>Dein Name</Lbl>
           <input value={p.name} onChange={e=>set("name",e.target.value)} placeholder="Wie soll ich dich nennen?" style={iStyle}/>
+        </div>
+        <div style={{ marginBottom:14 }}>
+          <Lbl style={{ marginBottom:8 }}>Geschlecht</Lbl>
+          <div style={{ display:"flex", gap:8 }}>
+            {[
+              {id:"m", label:"♂ Mann"},
+              {id:"f", label:"♀ Frau"},
+              {id:"d", label:"⚧ Divers"},
+            ].map(o=>{
+              const sel = (p.sex||"")===o.id;
+              return (
+                <button key={o.id} onClick={()=>set("sex",o.id)} style={{
+                  flex:1, background:sel?T.acc+"22":"transparent",
+                  border:`1px solid ${sel?T.acc:T.borderS}`, borderRadius:10,
+                  padding:"9px 6px", color:sel?T.text:T.muted,
+                  fontFamily:T.serif, fontSize:13, cursor:"pointer",
+                  fontStyle:sel?"normal":"italic", transition:"all .2s"
+                }}>{o.label}</button>
+              );
+            })}
+          </div>
         </div>
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12 }}>
           {[["Alter","age","Jahre","number"],["Gewicht","weight","kg","number"],["Größe","height","cm","number"]].map(([l,k,ph,t])=>(
@@ -530,7 +556,7 @@ function Onboarding({ onDone }) {
   }
 
   const cur = steps[step];
-  const canNext = step!==1 || p.name.trim().length > 0;
+  const canNext = step!==1 || (p.name.trim().length > 0 && !!p.sex);
 
   return (
     <div style={{ minHeight:"100vh", background:T.bg, display:"flex", alignItems:"center",
@@ -1274,6 +1300,25 @@ function PlanScreen({ profile }) {
   const [intro, setIntro] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [loaded, setLoaded] = useState(false);
+
+  // Plan beim Mount aus localStorage laden – sonst geht er bei Tab-Wechsel verloren
+  useEffect(() => {
+    retrieve("eyla_plan_v1", null).then(saved => {
+      if (saved && Array.isArray(saved.days) && saved.days.length > 0) {
+        setDays(saved.days);
+        setIntro(saved.intro || "");
+      }
+      setLoaded(true);
+    });
+  }, []);
+
+  // Plan persistieren wenn er sich ändert
+  useEffect(() => {
+    if (loaded && days.length > 0) {
+      persist("eyla_plan_v1", { days, intro, savedAt: new Date().toISOString() });
+    }
+  }, [days, intro, loaded]);
 
   async function generate() {
     setLoading(true);
@@ -1428,6 +1473,79 @@ function ShoppingScreen() {
   const [newName, setNewName] = useState("");
   const [newMenge, setNewMenge] = useState("");
   const [editingStore, setEditingStore] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [genError, setGenError] = useState(null);
+
+  // Generiert Einkaufsliste aus dem gespeicherten 7-Tage-Plan.
+  // Manuelle Items bleiben erhalten, Plan-Items werden ersetzt.
+  async function generateFromPlan() {
+    setGenError(null);
+    const savedPlan = await retrieve("eyla_plan_v1", null);
+    if (!savedPlan || !Array.isArray(savedPlan.days) || savedPlan.days.length === 0) {
+      setGenError("Kein Plan vorhanden. Erst im Tab Essen → Plan generieren.");
+      return;
+    }
+
+    setGenerating(true);
+    try {
+      const planText = savedPlan.days.map(d =>
+        `${d.day}: Frühstück: ${d.breakfast}; Mittag: ${d.lunch}; Abend: ${d.dinner}; Snack: ${d.snack||"–"}`
+      ).join("\n");
+
+      const aisleList = data.aisles.map(a => a.name).join(" / ");
+
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-5",
+          max_tokens: 1500,
+          system: `Du erstellst Einkaufslisten aus 7-Tage-Plänen. Antworte STRENG in diesem Format, kein Markdown, keine Erklärungen:\n\nGANG: <Name>\n- <Item> | <Menge>\n- <Item> | <Menge>\n\nGANG: <Name>\n...\n\nGruppiere in genau diese Gänge in dieser Reihenfolge: ${aisleList}. Gang weglassen wenn leer. Mengen für 1 Person × 7 Tage. Konsolidiere doppelte Items.`,
+          messages: [{ role: "user", content: `Plan:\n\n${planText}\n\nErstelle die Einkaufsliste.` }]
+        })
+      });
+      const dataRes = await res.json();
+      const text = dataRes.content?.find(b=>b.type==="text")?.text || "";
+      if (!text) throw new Error("Leere Antwort");
+
+      // Parse: blocks getrennt durch "GANG:"
+      const blocks = text.split(/GANG:\s*/gi).slice(1);
+      const generatedAisles = blocks.map(block => {
+        const lines = block.split("\n").map(l => l.trim()).filter(Boolean);
+        const name = lines[0]?.replace(/[*_#]/g, "").trim() || "";
+        const items = lines.slice(1)
+          .filter(l => l.startsWith("-"))
+          .map(l => {
+            const cleaned = l.replace(/^-\s*/, "");
+            const parts = cleaned.split("|").map(s => s.trim());
+            return { name: parts[0]||"", menge: parts[1]||"1", quelle: "plan" };
+          })
+          .filter(it => it.name.length > 0);
+        return { name, items };
+      }).filter(g => g.name && g.items.length > 0);
+
+      if (generatedAisles.length === 0) throw new Error("Konnte Liste nicht lesen");
+
+      // Merge: Plan-Items ersetzen, manuelle bleiben
+      setData(prev => {
+        const newAisles = prev.aisles.map(aisle => {
+          // Suche generated-aisle mit ähnlichem Namen (erstes Wort match)
+          const aisleFirst = aisle.name.split(/[\s&]/)[0].toLowerCase();
+          const gen = generatedAisles.find(g => {
+            const genFirst = g.name.split(/[\s&]/)[0].toLowerCase();
+            return aisleFirst === genFirst || aisleFirst.startsWith(genFirst) || genFirst.startsWith(aisleFirst);
+          });
+          const manual = aisle.items.filter(it => it.quelle === "manuell");
+          const plan = gen ? gen.items : [];
+          return { ...aisle, items: [...plan, ...manual] };
+        });
+        return { ...prev, aisles: newAisles, checked: {} };
+      });
+    } catch(e) {
+      setGenError("Fehler: " + (e.message || e));
+    }
+    setGenerating(false);
+  }
 
   useEffect(() => {
     retrieve("eyla_shopping_v1", null).then(s => {
@@ -1555,6 +1673,33 @@ function ShoppingScreen() {
             border:`1px solid ${T.borderS}`, background:"transparent",
             color:T.muted, fontFamily:T.mono, fontSize:10, cursor:"pointer", letterSpacing:1
           }}>↺ RESET</button>
+        </div>
+
+        {/* Aus Plan generieren */}
+        <div style={{ marginTop:10 }}>
+          <button onClick={generateFromPlan} disabled={generating} style={{
+            width:"100%", padding:"9px 14px", borderRadius:10,
+            border:`1px solid ${T.acc}44`,
+            background: generating ? T.bg2 : T.acc+"12",
+            color: T.acc, fontFamily:T.serif, fontSize:12,
+            cursor: generating ? "default" : "pointer",
+            fontStyle:"italic", transition:"all .2s",
+            display:"flex", alignItems:"center", justifyContent:"center", gap:8
+          }}>
+            {generating ? (
+              <>
+                <Waveform/>
+                <span style={{ fontFamily:T.mono, fontSize:10, letterSpacing:1 }}>EYLA SCHREIBT LISTE …</span>
+              </>
+            ) : (
+              <>📋 Aus aktuellem Plan füllen</>
+            )}
+          </button>
+          {genError && (
+            <p style={{ color:T.red, fontSize:11, fontStyle:"italic", margin:"6px 0 0", fontFamily:T.serif }}>
+              {genError}
+            </p>
+          )}
         </div>
       </div>
 
@@ -1771,6 +1916,26 @@ function ProfilScreen({ profile, onReset, onUpdate }) {
 
         <Card style={{ marginBottom:12 }}>
           <Lbl style={{ marginBottom:10 }}>KÖRPERDATEN</Lbl>
+          <div style={{ marginBottom:12 }}>
+            <Lbl style={{ marginBottom:6, fontSize:8 }}>GESCHLECHT</Lbl>
+            <div style={{ display:"flex", gap:6 }}>
+              {[
+                {id:"m", label:"♂ Mann"},
+                {id:"f", label:"♀ Frau"},
+                {id:"d", label:"⚧ Divers"},
+              ].map(o=>{
+                const sel = (draft.sex||"")===o.id;
+                return (
+                  <button key={o.id} onClick={()=>set("sex",o.id)} style={{
+                    flex:1, background:sel?T.acc+"22":"transparent",
+                    border:`1px solid ${sel?T.acc:T.borderS}`, borderRadius:8,
+                    padding:"8px 4px", color:sel?T.text:T.muted,
+                    fontFamily:T.serif, fontSize:12, cursor:"pointer", transition:"all .2s"
+                  }}>{o.label}</button>
+                );
+              })}
+            </div>
+          </div>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10, marginBottom:12 }}>
             {[["ALTER","age","Jahre"],["GEWICHT","weight","kg"],["GRÖSSE","height","cm"]].map(([l,k,ph])=>(
               <div key={k}>
@@ -1930,8 +2095,118 @@ function ProfilScreen({ profile, onReset, onUpdate }) {
   );
 }
 
+// ─── PASSCODE GATE ────────────────────────────────────────────────────────────
+// Verhindert Zugriff ohne Code. Code aus VITE_ACCESS_CODE (Vercel ENV) oder
+// fallback. Einmal entsperrt: in localStorage gemerkt. Soft-Gate, kein Krypto:
+// JS-Bundle könnte mit DevTools inspiziert werden – reicht aber als
+// Casual-Zugriffsschutz solange die App nicht öffentlich sein soll.
+function PasscodeGate({ onUnlock }) {
+  const correctCode = (import.meta.env.VITE_ACCESS_CODE || "eyla-2026").toLowerCase();
+  const [input, setInput] = useState("");
+  const [error, setError] = useState(false);
+
+  function submit() {
+    if (input.trim().toLowerCase() === correctCode) {
+      persist("eyla_access_granted_v1", true);
+      onUnlock();
+    } else {
+      setError(true);
+      setTimeout(() => setError(false), 1500);
+      setInput("");
+    }
+  }
+
+  return (
+    <div style={{
+      minHeight:"100vh", background:T.bg, display:"flex",
+      alignItems:"center", justifyContent:"center", padding:24,
+      fontFamily:T.serif
+    }}>
+      <div style={{ width:"100%", maxWidth:360, textAlign:"center" }}>
+        <div style={{ display:"flex", justifyContent:"center", marginBottom:28 }}>
+          <EylaOrb size={70}/>
+        </div>
+        <Lbl style={{ marginBottom:14 }}>EYLA · ZUGANG</Lbl>
+        <h2 style={{ fontSize:22, fontWeight:300, color:T.text, margin:"0 0 10px", letterSpacing:.5 }}>
+          Geschlossener Vorabbereich.
+        </h2>
+        <p style={{ color:T.mid, fontSize:13, fontStyle:"italic", marginBottom:30, fontFamily:T.serif, lineHeight:1.6 }}>
+          Aktuell nur über Code erreichbar.<br/>
+          Wenn du keinen hast, frag Phil.
+        </p>
+        <input
+          value={input}
+          onChange={e=>setInput(e.target.value)}
+          onKeyDown={e=>e.key==="Enter"&&submit()}
+          placeholder="Code"
+          autoFocus
+          autoCapitalize="off"
+          autoCorrect="off"
+          style={{
+            width:"100%",
+            background:T.bg2,
+            border:`1px solid ${error?T.red:T.borderS}`,
+            borderRadius:10,
+            padding:"13px 16px",
+            color:T.text,
+            fontSize:15,
+            textAlign:"center",
+            letterSpacing:3,
+            fontFamily:T.mono,
+            outline:"none",
+            boxSizing:"border-box",
+            marginBottom:12,
+            transition:"border-color .2s"
+          }}
+        />
+        {error && (
+          <p style={{ color:T.red, fontSize:12, fontStyle:"italic", margin:"0 0 12px", fontFamily:T.serif }}>
+            Falscher Code.
+          </p>
+        )}
+        <button onClick={submit} disabled={!input.trim()} style={{
+          marginTop:6,
+          width:"100%",
+          background: input.trim() ? `linear-gradient(135deg,${T.dim},${T.acc})` : "transparent",
+          border: input.trim() ? "none" : `1px solid ${T.borderS}`,
+          borderRadius:12,
+          padding:"12px 28px",
+          color: input.trim() ? T.bg : T.muted,
+          fontFamily:T.serif,
+          fontSize:14,
+          fontWeight:700,
+          cursor: input.trim() ? "pointer" : "default"
+        }}>Eintreten ✦</button>
+      </div>
+    </div>
+  );
+}
+
 // ─── MAIN ─────────────────────────────────────────────────────────────────────
 export default function App() {
+  const [accessGranted, setAccessGranted] = useState(false);
+  const [accessChecked, setAccessChecked] = useState(false);
+
+  useEffect(() => {
+    retrieve("eyla_access_granted_v1", false).then(v => {
+      setAccessGranted(!!v);
+      setAccessChecked(true);
+    });
+  }, []);
+
+  // Warten bis Storage-Check fertig (vermeidet kurzes Flackern der Gate)
+  if (!accessChecked) {
+    return <div style={{ minHeight:"100vh", background:T.bg }}/>;
+  }
+
+  if (!accessGranted) {
+    return <PasscodeGate onUnlock={()=>setAccessGranted(true)}/>;
+  }
+
+  return <AppContent/>;
+}
+
+function AppContent() {
   const [profile, setProfile] = useState(null);
   const [logsByDate, setLogsByDate] = useState({});
   const [screen, setScreen] = useState("tag");
@@ -1952,10 +2227,17 @@ export default function App() {
       let p = null;
       for (const k of profileKeys) { p = await retrieve(k); if (p) break; }
 
-      // Profil: gespeichertes prüfen – wenn Name noch "Marcus" war, Default nehmen
-      const finalProfile = (p && p.name !== "Marcus") ? p : DEFAULT_PROFILE;
-      setProfile(finalProfile);
-      persist("eyla_profile_v3", finalProfile);
+      // Nur echte User-Profile akzeptieren. Sonst Onboarding zeigen.
+      // "Marcus" und "Phil" waren alte Demo-Defaults → werden ignoriert.
+      const isRealProfile = p && p.name && p.name.trim().length > 0
+        && p.name !== "Marcus" && p.name !== "Phil";
+      if (isRealProfile) {
+        setProfile(p);
+        persist("eyla_profile_v3", p);
+      } else {
+        // Onboarding wird gezeigt (setProfile bleibt null)
+        setProfile(null);
+      }
 
       // Neue Date-Map laden
       let map = await retrieve("eyla_logs_v1", null) || {};
@@ -2014,6 +2296,7 @@ export default function App() {
     persist("eyla_logs_v1", null);
     persist("eyla_local_events_v2", null);
     persist("eyla_shopping_v1", null);
+    persist("eyla_plan_v1", null);
     setProfile(null);
     setLogsByDate({});
     setEvents([]);
