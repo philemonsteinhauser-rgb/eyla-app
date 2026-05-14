@@ -414,13 +414,14 @@ function Onboarding({ onDone }) {
   const apps  = ["Apple Health","Google Fit","Garmin","Polar","MyFitnessPal","Whoop","Oura Ring"];
 
   const steps = [
-    { title:"Ich bin EYLA.", sub:"Synthetische Begleiterin. Körper, Tag, Küche.", content:(
+    { title:"Ich bin EYLA.", sub:"Synthetische Begleiterin. Ruhig. Genau.", content:(
       <div style={{ textAlign:"center" }}>
         <div style={{ display:"flex", justifyContent:"center", marginBottom:32 }}><EylaOrb size={90}/></div>
         <p style={{ color:T.mid, lineHeight:1.9, fontStyle:"italic", fontSize:15, fontFamily:T.serif }}>
-          Ich kenne deinen Körper, deinen Tag, deine Küche.<br/>
-          Ich lüge nicht. Ich optimiere nicht um des Optimierens willen.<br/>
-          Ich helfe dir, besser zu leben.
+          Ich sehe was du isst, wie du schläfst, was ansteht.<br/>
+          Keine Trends. Keine Vorhaltungen.<br/>
+          Was dein Körper braucht, ist meist schon da –<br/>
+          ich helfe dir, hinzuhören.
         </p>
       </div>
     )},
