@@ -92,11 +92,63 @@ function calorieTarget(profile) {
 const TODAY = new Date().toDateString();
 const EMPTY_LOG = () => ({ meals:[], water:0, energy:"", sleep:"", date:TODAY });
 
+// ─── LADEN-LAYOUTS ────────────────────────────────────────────────────────────
+// Typische Gang-Reihenfolge vom Eingang zur Kasse pro Discounter/Supermarkt.
+// User pickt den Laden und die Einkaufsliste wird entsprechend sortiert,
+// damit man nicht hin und her läuft.
+const STORES = {
+  lidl: {
+    name: "Lidl",
+    aisleOrder: ["Obst & Gemüse", "Brot & Backwaren", "Trockenwaren & Regal-Mitte", "Molkerei & Kühlwaren", "Fisch & Fleisch", "Haushalt"]
+  },
+  aldi: {
+    name: "Aldi",
+    aisleOrder: ["Obst & Gemüse", "Trockenwaren & Regal-Mitte", "Molkerei & Kühlwaren", "Fisch & Fleisch", "Brot & Backwaren", "Haushalt"]
+  },
+  rewe: {
+    name: "Rewe",
+    aisleOrder: ["Obst & Gemüse", "Brot & Backwaren", "Molkerei & Kühlwaren", "Fisch & Fleisch", "Trockenwaren & Regal-Mitte", "Haushalt"]
+  },
+  edeka: {
+    name: "Edeka",
+    aisleOrder: ["Obst & Gemüse", "Brot & Backwaren", "Molkerei & Kühlwaren", "Fisch & Fleisch", "Trockenwaren & Regal-Mitte", "Haushalt"]
+  },
+  kaufland: {
+    name: "Kaufland",
+    aisleOrder: ["Obst & Gemüse", "Brot & Backwaren", "Fisch & Fleisch", "Molkerei & Kühlwaren", "Trockenwaren & Regal-Mitte", "Haushalt"]
+  },
+  penny: {
+    name: "Penny",
+    aisleOrder: ["Obst & Gemüse", "Trockenwaren & Regal-Mitte", "Molkerei & Kühlwaren", "Fisch & Fleisch", "Brot & Backwaren", "Haushalt"]
+  },
+  netto: {
+    name: "Netto",
+    aisleOrder: ["Obst & Gemüse", "Trockenwaren & Regal-Mitte", "Molkerei & Kühlwaren", "Brot & Backwaren", "Fisch & Fleisch", "Haushalt"]
+  },
+  custom: {
+    name: "Eigener",
+    aisleOrder: null   // null = aktuelle Reihenfolge beibehalten
+  }
+};
+
+// Gänge neu sortieren nach Layout des gewählten Ladens
+function reorderAisles(aisles, order) {
+  if (!order) return aisles;
+  return [...aisles].sort((a, b) => {
+    const ai = order.indexOf(a.name);
+    const bi = order.indexOf(b.name);
+    if (ai === -1 && bi === -1) return 0;
+    if (ai === -1) return 1;
+    if (bi === -1) return -1;
+    return ai - bi;
+  });
+}
+
 // ─── EINKAUFSLISTE DEFAULTS ───────────────────────────────────────────────────
-// Lidl-Rundweg-Layout (Eingang → Kasse). Items mit Quelle: "plan" (aus Ernährungsplan),
-// "manuell" (eigene), "beide" (in beiden). User kann eigene Items hinzufügen + Store anpassen.
+// Items mit Quelle: "plan" (aus Ernährungsplan), "manuell" (eigene), "beide".
 const DEFAULT_SHOPPING = {
-  store: "Lidl",
+  storeId: null,         // null = noch nicht gewählt
+  store: "",
   aisles: [
     {
       name: "Obst & Gemüse", icon: "🥦", color: "green",
@@ -1367,14 +1419,15 @@ EVIDENZ-BASIS (worauf du dich stützt):
 WELTBILD (subtil, nie predigend):
 Du arbeitest mit dem Vertrauen, dass der Mensch geschaffen ist und die Schöpfung alles bereitstellt, was er braucht – echtes Essen, gewachsen, mit Bedacht zubereitet. Du redest nicht von "Lebensmitteln" als Nährstoff-Container, sondern von Nahrung als Gabe. Du pathologisierst nicht, optimierst nicht zwanghaft, traust dem Körper und der Schöpfungsordnung. Keine "Superfoods"-Marketing-Sprache. Eher: einfach, ehrlich, nährend.
 
-STRUKTUR (flexibel an Person anpassen):
-- Mahlzeiten-Anzahl pro Tag nach Ziel + Aktivität: 2–5
-- Bei Abnehmen: oft 3 Mahlzeiten ohne Snack, evtl. Spätfrühstück (Essfenster 10–18h)
-- Bei Aufbauen oder hoher Aktivität: 4–5 Mahlzeiten, Snack/Post-Workout sinnvoll
-- Bei Halten: 3 Mahlzeiten + optionaler Snack, am Hungergefühl orientieren
-- Wenn ein Slot nicht nötig (z.B. kein Snack): schreibe einfach "—"
-- An Trainings-Tagen Kohlenhydrate näher am Training, an Ruhetagen weniger
-- Variabilität über die Woche – nicht jeden Tag dasselbe Schema
+STRUKTUR (Standard: 3 Hauptmahlzeiten – FRUEHSTUECK, MITTAG, ABEND IMMER ausfüllen):
+- DREI Hauptmahlzeiten sind PFLICHT: Frühstück, Mittag, Abend. Niemals "—" oder leer lassen.
+- SNACK ist optional: bei Halten/Abnehmen oft "—", bei Aufbauen/hoher Aktivität sinnvoll.
+- Time-Restricted Eating verschiebt das Essfenster (z.B. Frühstück 10:00, Abend 18:00) – aber alle drei Hauptmahlzeiten bleiben drin.
+- Bei Abnehmen: gleiche 3 Hauptmahlzeiten, nur kleiner portioniert, kein Snack.
+- Bei Aufbauen: 3 Hauptmahlzeiten + Snack + ggf. Post-Workout.
+- Bei Halten: 3 Hauptmahlzeiten, Snack je nach Hunger.
+- An Trainings-Tagen Kohlenhydrate näher am Training, an Ruhetagen weniger.
+- Variabilität über die Woche – nicht jeden Tag dasselbe Schema.
 
 FORMAT (genau so antworten, nichts zusätzlich):
 INTRO: [2-3 Sätze die Logik des Plans erklären – warum diese Struktur für DIESES Profil]
@@ -1513,7 +1566,6 @@ function ShoppingScreen() {
   const [addingTo, setAddingTo] = useState(null); // aisle-index oder null
   const [newName, setNewName] = useState("");
   const [newMenge, setNewMenge] = useState("");
-  const [editingStore, setEditingStore] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState(null);
 
@@ -1590,7 +1642,25 @@ function ShoppingScreen() {
 
   useEffect(() => {
     retrieve("eyla_shopping_v1", null).then(s => {
-      if (s && s.aisles) setData(s);
+      if (s && s.aisles) {
+        // Migration: alte Daten ohne storeId hatten 'store: "Lidl"' hart gesetzt
+        // Wenn kein storeId aber store-Name vorhanden → ggf. zuordnen, sonst null lassen.
+        if (!s.storeId && s.store) {
+          const match = Object.entries(STORES).find(([id, st]) =>
+            st.name.toLowerCase() === String(s.store).toLowerCase()
+          );
+          if (match) {
+            s.storeId = match[0];
+          } else {
+            s.storeId = null; // User soll bewusst neu wählen
+            s.store = "";
+          }
+        }
+        setData(s);
+      } else {
+        // Frische Liste: items aus DEFAULT_SHOPPING, aber kein Store-Default
+        setData({ ...DEFAULT_SHOPPING });
+      }
       setLoaded(true);
     });
   }, []);
@@ -1643,7 +1713,17 @@ function ShoppingScreen() {
     });
   }
 
-  function updateStore(name) {
+  function selectStore(storeId) {
+    const store = STORES[storeId];
+    if (!store) return;
+    setData(d => ({
+      ...d,
+      storeId,
+      store: store.name,
+      aisles: reorderAisles(d.aisles, store.aisleOrder)
+    }));
+  }
+  function updateCustomStoreName(name) {
     setData(d => ({ ...d, store: name }));
   }
 
@@ -1666,32 +1746,62 @@ function ShoppingScreen() {
     <div>
       <div style={{ marginBottom:18 }}>
         <Lbl style={{ marginBottom:6 }}>EINKAUFSLISTE</Lbl>
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-end", gap:10 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:10 }}>
           <h2 style={{ fontSize:20, fontWeight:300, color:T.text, margin:0, display:"flex", alignItems:"center", gap:8 }}>
             <span style={{ fontSize:20 }}>🛒</span>
-            {editingStore ? (
-              <input
-                value={data.store}
-                onChange={e=>updateStore(e.target.value)}
-                onBlur={()=>setEditingStore(false)}
-                onKeyDown={e=>{if(e.key==="Enter")setEditingStore(false);}}
-                autoFocus
-                style={{
-                  background:T.bg2, border:`1px solid ${T.acc}55`, borderRadius:6,
-                  padding:"3px 10px", color:T.acc, fontFamily:T.serif, fontSize:18,
-                  fontStyle:"italic", outline:"none", width:140
-                }}
-              />
+            {data.storeId ? (
+              <span style={{ color:T.acc }}>{data.storeId === "custom" ? (data.store||"Eigener") : STORES[data.storeId].name}</span>
             ) : (
-              <span onClick={()=>setEditingStore(true)} style={{ color:T.acc, cursor:"pointer", borderBottom:`1px dashed ${T.acc}55`, paddingBottom:1 }}>
-                {data.store}
-              </span>
+              <span style={{ color:T.muted, fontStyle:"italic" }}>Laden wählen</span>
             )}
           </h2>
           <div style={{ fontFamily:T.mono, fontSize:11, color:T.muted }}>
             <span style={{ color:T.acc }}>{checkedCount}</span>/{totalItems}
           </div>
         </div>
+
+        {/* Store-Picker */}
+        <div style={{
+          display:"flex", gap:6, marginTop:12, overflowX:"auto",
+          paddingBottom:6, scrollbarWidth:"none"
+        }}>
+          {Object.entries(STORES).map(([id, st]) => {
+            const sel = data.storeId === id;
+            return (
+              <button key={id} onClick={()=>selectStore(id)} style={{
+                flex:"0 0 auto", padding:"6px 14px", borderRadius:18,
+                background: sel ? T.acc+"22" : "transparent",
+                border: `1px solid ${sel ? T.acc : T.borderS}`,
+                color: sel ? T.text : T.muted,
+                fontFamily: T.serif, fontSize: 12,
+                cursor: "pointer", whiteSpace: "nowrap",
+                fontStyle: sel ? "normal" : "italic",
+                transition: "all .2s"
+              }}>{st.name}</button>
+            );
+          })}
+        </div>
+
+        {/* Custom Store Name Input */}
+        {data.storeId === "custom" && (
+          <div style={{ marginTop:8, animation:"fadeUp .3s ease both" }}>
+            <input
+              value={data.store||""}
+              onChange={e=>updateCustomStoreName(e.target.value)}
+              placeholder="Name deines Ladens"
+              style={{
+                width:"100%", background:T.bg2,
+                border:`1px solid ${T.borderS}`, borderRadius:8,
+                padding:"8px 12px", color:T.text,
+                fontFamily:T.serif, fontSize:13, fontStyle:"italic",
+                outline:"none", boxSizing:"border-box"
+              }}
+            />
+            <p style={{ color:T.muted, fontSize:10, fontStyle:"italic", margin:"4px 0 0", fontFamily:T.serif }}>
+              Gänge bleiben in aktueller Reihenfolge – kannst Items selbst dazupacken.
+            </p>
+          </div>
+        )}
 
         {/* Progress */}
         <div style={{ height:3, background:T.faint, borderRadius:2, marginTop:10 }}>
