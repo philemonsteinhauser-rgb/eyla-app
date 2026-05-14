@@ -29,7 +29,7 @@ const T = {
   rose:   "#818CF8",
   text:   "#F0F9FF",
   mid:    "#7DD3FC",
-  muted:  "#94A3B8",   // lifted für bessere Lesbarkeit (war #64748B)
+  muted:  "#B0BEC5",   // nochmal heller für Lesbarkeit (war #94A3B8, davor #64748B)
   faint:  "#1E293B",
   green:  "#34D399",
   red:    "#F87171",
@@ -385,7 +385,7 @@ function SubTabRow({ current, onChange, options }) {
 }
 
 function Lbl({ children, color=T.muted, style={} }) {
-  return <div style={{ fontFamily:T.mono, fontSize:9, letterSpacing:3, color, textTransform:"uppercase", ...style }}>{children}</div>;
+  return <div style={{ fontFamily:T.mono, fontSize:10, letterSpacing:2.5, color, textTransform:"uppercase", ...style }}>{children}</div>;
 }
 
 function VoiceBtn({ toggle, listening, supported }) {
@@ -418,7 +418,8 @@ function Onboarding({ onDone }) {
       <div style={{ textAlign:"center" }}>
         <div style={{ display:"flex", justifyContent:"center", marginBottom:32 }}><EylaOrb size={90}/></div>
         <p style={{ color:T.mid, lineHeight:1.9, fontStyle:"italic", fontSize:15, fontFamily:T.serif }}>
-          Ich sehe was du isst, wie du schläfst, was ansteht.<br/>
+          Du erzählst, was du isst, wie du schläfst, was ansteht.<br/>
+          Ich denke mit. Ich erinnere für dich.<br/>
           Keine Trends. Keine Vorhaltungen.<br/>
           Was dein Körper braucht, ist meist schon da –<br/>
           ich helfe dir, hinzuhören.
@@ -1025,7 +1026,7 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
                       </div>
                     </div>
                     <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-                      {e.local && <span style={{ fontFamily:T.mono,fontSize:8,color:T.gold,background:T.gold+"18",border:`1px solid ${T.gold}33`,borderRadius:3,padding:"1px 6px",letterSpacing:1 }}>LOKAL</span>}
+                      {e.local && <span style={{ fontFamily:T.mono,fontSize:10,color:T.gold,background:T.gold+"18",border:`1px solid ${T.gold}33`,borderRadius:3,padding:"1px 6px",letterSpacing:1 }}>LOKAL</span>}
                       {e.local && <button onClick={()=>saveLocal(localEvents.filter(x=>x.id!==e.id))} style={{ background:"none",border:"none",color:T.muted,cursor:"pointer",fontSize:14,padding:2 }}>×</button>}
                     </div>
                   </div>
@@ -1141,7 +1142,7 @@ function WeekScreen({ logsByDate }) {
                     {labelFor(dateKey, idx)}
                   </div>
                   {!isToday && idx !== 1 && (
-                    <div style={{ fontSize:9, color:T.muted, fontFamily:T.mono, letterSpacing:1, marginTop:2 }}>
+                    <div style={{ fontSize:10, color:T.muted, fontFamily:T.mono, letterSpacing:1, marginTop:2 }}>
                       {new Date(dateKey).toLocaleDateString("de-DE",{day:"2-digit",month:"2-digit"})}
                     </div>
                   )}
@@ -2435,7 +2436,7 @@ function AppContent() {
               <span style={{ fontSize:17,
                 filter:screen===n.id?`drop-shadow(0 0 6px ${sectionColor})`:"none",
                 transition:"filter .2s" }}>{n.icon}</span>
-              <span style={{ fontFamily:T.mono,fontSize:8,letterSpacing:1.5 }}>{n.label.toUpperCase()}</span>
+              <span style={{ fontFamily:T.mono,fontSize:10,letterSpacing:1.5 }}>{n.label.toUpperCase()}</span>
             </button>
           ))}
         </div>
