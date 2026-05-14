@@ -247,6 +247,10 @@ function buildPrompt(profile, log, events, weekHistory = []) {
 
 CHARAKTER: Präzise, direkt, warm aber nicht weich. Du weißt was heute ansteht und was der Körper braucht. Du sagst was Sache ist – mit Lösung. Kein Motivationsposter. Trocken-humorvoll wenn passend.
 
+HALTUNG: Du arbeitest mit dem Vertrauen, dass der Mensch geschaffen ist und in der Schöpfung schon alles steht was der Körper braucht – echtes Essen, Bewegung, Schlaf, Sonne, Stille. Du jagst keine Optimierungs-Trends, predigst aber nicht. Pülverchen und Superfood-Marketing interessieren dich nicht. Du sprichst nicht von Schöpfung wenn niemand fragt – es ist deine Grundannahme, nicht dein Thema.
+
+WISSENSCHAFTS-BASIS: Mediterrane Ernährung, Whole Foods (NOVA 1+2), adäquates Protein, Ballaststoffe, pflanzliche Vielfalt, Time-Restricted Eating bei Abnehmen erlaubt. Du kennst die Evidenz, gibst sie aber nicht als Vortrag aus.
+
 PROFIL: ${profile.name}, ${profile.age}J, ${profile.weight}kg, ${profile.height}cm
 Aktivität: ${profile.activity||"k.A."} | Ziel: ${profile.goal||"Wohlbefinden"}
 Vorlieben: ${profile.preferences?.join(", ")||"k.A."} | Intoleranzen: ${profile.intolerances?.join(", ")||"keine"}
@@ -1327,36 +1331,62 @@ function PlanScreen({ profile }) {
     setIntro("");
     try {
       const ct = calorieTarget(profile);
-      let zielSatz = "";
-      if (ct.type === "halten") zielSatz = `Tagesziel: ~${ct.target} kcal (halten). `;
-      else if (ct.type === "abnehmen") zielSatz = `Tagesziel: ~${ct.target} kcal – Ziel abnehmen ${ct.deltaKg||"?"}kg in ${ct.weeks||"?"} Wochen (Defizit ${Math.abs(ct.dailyDelta)} kcal/Tag). `;
-      else if (ct.type === "aufbauen") zielSatz = `Tagesziel: ~${ct.target} kcal – Ziel aufbauen ${ct.deltaKg||"?"}kg in ${ct.weeks||"?"} Wochen (Überschuss ${ct.dailyDelta} kcal/Tag). `;
-      const intolSatz = profile.intolerances?.length>0 ? "Intoleranzen: " + profile.intolerances.join(", ") + ". " : "";
+      const proteinPerKg = ct.type === "aufbauen" ? 2.0 : ct.type === "abnehmen" ? 1.8 : 1.4;
+      const proteinG = Math.round((parseFloat(profile.weight)||79) * proteinPerKg);
 
-      const msg = "Erstelle einen 7-Tage-Ernährungsplan für " + (profile.name||"Phil") + ", " +
-        (profile.age||35) + " Jahre, " + (profile.weight||79) + "kg. " +
-        "Aktivität: " + (profile.activity||"5x Woche Beweglichkeitstraining") + ". " +
-        "Vorlieben: " + (profile.preferences?.join(", ")||"wenig Fleisch, proteinreich") + ". " +
-        intolSatz +
-        zielSatz +
-        "Plan soll dieses Tagesziel ungefähr treffen. Bei jeder Mahlzeit eine grobe kcal-Angabe in Klammern. " +
-        "Antworte in genau diesem Format:\n\n" +
-        "INTRO: [ein Satz]\n\n" +
-        "TAG: Montag\nFRUEHSTUECK: [Mahlzeit]\nMITTAG: [Mahlzeit]\nABEND: [Mahlzeit]\nSNACK: [Snack]\nTIPP: [Tipp]\n\n" +
-        "TAG: Dienstag\nFRUEHSTUECK: [Mahlzeit]\nMITTAG: [Mahlzeit]\nABEND: [Mahlzeit]\nSNACK: [Snack]\nTIPP: [Tipp]\n\n" +
-        "TAG: Mittwoch\nFRUEHSTUECK: [Mahlzeit]\nMITTAG: [Mahlzeit]\nABEND: [Mahlzeit]\nSNACK: [Snack]\nTIPP: [Tipp]\n\n" +
-        "TAG: Donnerstag\nFRUEHSTUECK: [Mahlzeit]\nMITTAG: [Mahlzeit]\nABEND: [Mahlzeit]\nSNACK: [Snack]\nTIPP: [Tipp]\n\n" +
-        "TAG: Freitag\nFRUEHSTUECK: [Mahlzeit]\nMITTAG: [Mahlzeit]\nABEND: [Mahlzeit]\nSNACK: [Snack]\nTIPP: [Tipp]\n\n" +
-        "TAG: Samstag\nFRUEHSTUECK: [Mahlzeit]\nMITTAG: [Mahlzeit]\nABEND: [Mahlzeit]\nSNACK: [Snack]\nTIPP: [Tipp]\n\n" +
-        "TAG: Sonntag\nFRUEHSTUECK: [Mahlzeit]\nMITTAG: [Mahlzeit]\nABEND: [Mahlzeit]\nSNACK: [Snack]\nTIPP: [Tipp]";
+      let zielKontext = "";
+      if (ct.type === "halten")    zielKontext = `Ziel: HALTEN. Tagesziel ~${ct.target} kcal, Protein ~${proteinG}g.`;
+      else if (ct.type === "abnehmen") zielKontext = `Ziel: ABNEHMEN ${ct.deltaKg||"?"}kg in ${ct.weeks||"?"} Wochen. Tagesziel ${ct.target} kcal (Defizit ${Math.abs(ct.dailyDelta)} kcal). Protein hoch halten (~${proteinG}g/Tag) damit Muskeln bleiben.`;
+      else if (ct.type === "aufbauen") zielKontext = `Ziel: AUFBAUEN ${ct.deltaKg||"?"}kg in ${ct.weeks||"?"} Wochen. Tagesziel ${ct.target} kcal (Überschuss ${ct.dailyDelta}). Protein ~${proteinG}g, dichte Kohlenhydrate um's Training.`;
+
+      const intolSatz = profile.intolerances?.length>0 ? `Intoleranzen STRIKT meiden: ${profile.intolerances.join(", ")}.` : "";
+      const sexLabel = profile.sex === "f" ? "Frau" : profile.sex === "d" ? "divers" : "Mann";
+
+      const systemPrompt = `Du bist EYLA – Ernährungsberaterin mit fundiertem Wissen. Du erstellst 7-Tage-Pläne, die wissenschaftlich tragfähig UND wholistisch sind.
+
+EVIDENZ-BASIS (worauf du dich stützt):
+- Mediterrane Ernährung (am besten erforscht für Langlebigkeit + Stoffwechselgesundheit – PREDIMED, Lyon Heart Study, EAT-Lancet)
+- Whole foods, minimal verarbeitet (NOVA-Klassifikation: NOVA 1+2 dominieren, NOVA 4 vermeiden)
+- Adäquates Protein gleichmäßig über den Tag verteilt (Leucin-Schwelle ~3g/Mahlzeit, ISSN-Position)
+- Ballaststoff-Reichtum (25–40g/Tag, gut für Mikrobiom + Sättigung)
+- Pflanzliche Vielfalt (American Gut: >30 verschiedene Pflanzenarten/Woche)
+- Bei Abnehmen: Time-Restricted Eating optional (10–12h Essfenster zeigt konsistente Vorteile)
+- Hydratation, Schlaf, Bewegung gehören zum Gesamtbild – Ernährung ist EIN Hebel
+
+WELTBILD (subtil, nie predigend):
+Du arbeitest mit dem Vertrauen, dass der Mensch geschaffen ist und die Schöpfung alles bereitstellt, was er braucht – echtes Essen, gewachsen, mit Bedacht zubereitet. Du redest nicht von "Lebensmitteln" als Nährstoff-Container, sondern von Nahrung als Gabe. Du pathologisierst nicht, optimierst nicht zwanghaft, traust dem Körper und der Schöpfungsordnung. Keine "Superfoods"-Marketing-Sprache. Eher: einfach, ehrlich, nährend.
+
+STRUKTUR (flexibel an Person anpassen):
+- Mahlzeiten-Anzahl pro Tag nach Ziel + Aktivität: 2–5
+- Bei Abnehmen: oft 3 Mahlzeiten ohne Snack, evtl. Spätfrühstück (Essfenster 10–18h)
+- Bei Aufbauen oder hoher Aktivität: 4–5 Mahlzeiten, Snack/Post-Workout sinnvoll
+- Bei Halten: 3 Mahlzeiten + optionaler Snack, am Hungergefühl orientieren
+- Wenn ein Slot nicht nötig (z.B. kein Snack): schreibe einfach "—"
+- An Trainings-Tagen Kohlenhydrate näher am Training, an Ruhetagen weniger
+- Variabilität über die Woche – nicht jeden Tag dasselbe Schema
+
+FORMAT (genau so antworten, nichts zusätzlich):
+INTRO: [2-3 Sätze die Logik des Plans erklären – warum diese Struktur für DIESES Profil]
+
+TAG: Montag
+FRUEHSTUECK: [Mahlzeit mit ungefährer kcal in Klammern, oder "—" wenn weggelassen]
+MITTAG: [Mahlzeit mit kcal]
+ABEND: [Mahlzeit mit kcal]
+SNACK: [Snack mit kcal, oder "—" wenn weggelassen]
+TIPP: [Konkreter Hinweis für diesen Tag – Timing, Zubereitung, Variation. Nicht generisch.]
+
+[wiederhole für Dienstag bis Sonntag]`;
+
+      const userPrompt = `Profil: ${profile.name||"Phil"}, ${sexLabel}, ${profile.age||35}J, ${profile.weight||79}kg, ${profile.height||183}cm. Aktivität: ${profile.activity||"5x Woche Beweglichkeit"}. Vorlieben: ${profile.preferences?.join(", ")||"wenig Fleisch, proteinreich, mediterran"}. ${intolSatz} ${zielKontext} Erstelle den 7-Tage-Plan.`;
 
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "claude-sonnet-4-5",
-          max_tokens: 2000,
-          messages: [{ role: "user", content: msg }]
+          max_tokens: 3000,
+          system: systemPrompt,
+          messages: [{ role: "user", content: userPrompt }]
         })
       });
       if (!res.ok) throw new Error("Status " + res.status);
