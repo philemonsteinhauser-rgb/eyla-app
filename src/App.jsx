@@ -262,11 +262,46 @@ function weekHistoryFromLogs(logsByDate) {
 }
 
 // ─── SYSTEM PROMPT ────────────────────────────────────────────────────────────
-function buildPrompt(profile, log, events, weekHistory = []) {
+function buildPrompt(profile, log, events, weekHistory = [], plan = null, shopping = null) {
   const eaten = log.meals.reduce((s,m)=>s+(m.calories||0),0);
   const eventStr = events.length > 0
     ? events.map(e=>`  - ${e.time||"?"} ${e.title}${e.duration?" ("+e.duration+")":""}`).join("\n")
     : "  Keine Termine heute.";
+
+  // Plan-Kontext: heutige Mahlzeiten aus dem 7-Tage-Plan
+  const weekdayNames = ["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"];
+  const today = weekdayNames[new Date().getDay()];
+  let planStr = "  Kein Plan vorhanden.";
+  if (plan && Array.isArray(plan.days)) {
+    const todayPlan = plan.days.find(d => d.day && d.day.toLowerCase().includes(today.toLowerCase()));
+    if (todayPlan) {
+      const parts = [];
+      if (todayPlan.breakfast && todayPlan.breakfast !== "–" && todayPlan.breakfast !== "—") parts.push(`Frühstück: ${todayPlan.breakfast}`);
+      if (todayPlan.lunch && todayPlan.lunch !== "–" && todayPlan.lunch !== "—") parts.push(`Mittag: ${todayPlan.lunch}`);
+      if (todayPlan.dinner && todayPlan.dinner !== "–" && todayPlan.dinner !== "—") parts.push(`Abend: ${todayPlan.dinner}`);
+      if (todayPlan.snack && todayPlan.snack !== "–" && todayPlan.snack !== "—") parts.push(`Snack: ${todayPlan.snack}`);
+      planStr = "  " + parts.join("\n  ");
+    }
+  }
+
+  // Einkaufsliste-Kontext: offene Items gruppiert
+  let shoppingStr = "  Keine Einkaufsliste.";
+  if (shopping && Array.isArray(shopping.aisles)) {
+    const openByAisle = shopping.aisles
+      .map(a => ({
+        name: a.name,
+        open: a.items.filter(it => !shopping.checked[a.name + "::" + it.name])
+      }))
+      .filter(a => a.open.length > 0);
+    if (openByAisle.length > 0) {
+      const storeName = shopping.storeId === "custom" ? (shopping.store || "Eigener") : (shopping.storeId ? (STORES[shopping.storeId]?.name || shopping.store) : "?");
+      shoppingStr = `  Laden: ${storeName}\n` + openByAisle.map(a =>
+        `  ${a.name}: ${a.open.map(it => `${it.name} (${it.menge})`).join(", ")}`
+      ).join("\n");
+    } else {
+      shoppingStr = "  Einkaufsliste leer / komplett abgehakt.";
+    }
+  }
 
   const historyStr = (weekHistory && weekHistory.length > 0)
     ? weekHistory.map((d, i) => {
@@ -321,6 +356,12 @@ ${historyStr}
 
 WAS HEUTE ANSTEHT:
 ${eventStr}
+
+HEUTIGER PLAN (aus 7-Tage-Plan):
+${planStr}
+
+EINKAUFSLISTE (offen):
+${shoppingStr}
 
 REGELN: Immer Deutsch. 2–4 Sätze. Konkret mit Mengen/Zeiten. Bei Ernährungsfragen Tagesziel + Rest-kcal einbeziehen. Wenn jemand übers Ziel ist: kein Drama, am nächsten Tag flexibel ausgleichen. Termine einbeziehen wenn sinnvoll. Letzte 7 Tage nur wenn Trend relevant. Nie "Als KI". Nie "ich sehe/kenne deinen Kalender".`;
 }
@@ -948,65 +989,128 @@ function TodayScreen({ profile, log, setLog }) {
 }
 
 // ─── KALENDER SCREEN ──────────────────────────────────────────────────────────
+// ISO Date Key "YYYY-MM-DD" für Kalender-Speicherung
+function isoDateKey(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,"0");
+  const day = String(d.getDate()).padStart(2,"0");
+  return `${y}-${m}-${day}`;
+}
+
 function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
   const [newTitle, setNewTitle] = useState("");
   const [newTime, setNewTime] = useState("");
   const [newDur, setNewDur] = useState("");
   const [localEvents, setLocalEvents] = useState([]);
   const [showAdd, setShowAdd] = useState(false);
+  const [selectedDate, setSelectedDate] = useState(()=>new Date());
+
+  const todayKey = isoDateKey(new Date());
+  const selectedKey = isoDateKey(selectedDate);
+  const isToday = selectedKey === todayKey;
+  const isPast = selectedKey < todayKey;
+  const isFuture = selectedKey > todayKey;
 
   useEffect(() => {
-    retrieve("eyla_local_events_v2", []).then(e => setLocalEvents(e||[]));
+    retrieve("eyla_local_events_v2", []).then(e => {
+      // Migration: alte Events ohne date-Feld → heute
+      const arr = e || [];
+      const needsMigration = arr.some(ev => !ev.date);
+      const migrated = arr.map(ev => ev.date ? ev : { ...ev, date: isoDateKey(new Date()) });
+      setLocalEvents(migrated);
+      if (needsMigration) persist("eyla_local_events_v2", migrated);
+    });
   }, []);
 
   function saveLocal(evts) { setLocalEvents(evts); persist("eyla_local_events_v2", evts); }
 
   function addEvent() {
     if (!newTitle.trim()) return;
-    saveLocal([...localEvents, { id:Date.now(), title:newTitle.trim(), time:newTime||"", duration:newDur||"", local:true }]);
+    saveLocal([...localEvents, {
+      id:Date.now(), title:newTitle.trim(), time:newTime||"",
+      duration:newDur||"", date:selectedKey, local:true
+    }]);
     setNewTitle(""); setNewTime(""); setNewDur(""); setShowAdd(false);
   }
 
-  const allEvents = [
-    ...events.map(e=>({...e,local:false})),
-    ...localEvents
+  function prevDay() {
+    const d = new Date(selectedDate);
+    d.setDate(d.getDate() - 1);
+    setSelectedDate(d);
+  }
+  function nextDay() {
+    const d = new Date(selectedDate);
+    d.setDate(d.getDate() + 1);
+    setSelectedDate(d);
+  }
+  function goToToday() { setSelectedDate(new Date()); }
+
+  // Events nur für ausgewählten Tag (Migration: events von API werden als heute behandelt)
+  const eventsForSelected = [
+    ...(isToday ? events.map(e=>({...e,local:false,date:todayKey})) : []),
+    ...localEvents.filter(e => (e.date || todayKey) === selectedKey)
   ].sort((a,b)=>(a.time||"99:99").localeCompare(b.time||"99:99"));
 
   const nowH = new Date().getHours();
-  const nowM = new Date().getMinutes();
-  const nowStr = `${String(nowH).padStart(2,"0")}:${String(nowM).padStart(2,"0")}`;
-
-  // Hours to show: 6:00 – 22:00
   const hours = Array.from({length:17},(_,i)=>i+6);
 
   function eventAtHour(h) {
-    return allEvents.filter(e=>{
+    return eventsForSelected.filter(e=>{
       if (!e.time) return false;
       const eh = parseInt(e.time.split(":")[0]);
       return eh === h;
     });
   }
 
+  const weekdayLabel = selectedDate.toLocaleDateString("de-DE",{ weekday:"long", day:"numeric", month:"long" });
+
   return (
     <div>
-      <div style={{ marginBottom:20 }}>
-        <Lbl style={{ marginBottom:6 }}>KALENDER · {new Date().toLocaleDateString("de-DE",{weekday:"long",day:"numeric",month:"long"})}</Lbl>
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-          <h2 style={{ fontSize:20, fontWeight:300, color:T.text, margin:0 }}>
-            Dein <span style={{ color:T.gold }}>heutiger Tag</span>
-          </h2>
-          <div style={{ display:"flex", gap:8 }}>
-            <button onClick={()=>setShowAdd(s=>!s)} style={{ background:showAdd?T.gold+"22":"transparent",
-              border:`1px solid ${showAdd?T.gold:T.borderS}`, borderRadius:8, padding:"6px 14px",
-              color:showAdd?T.gold:T.muted, fontFamily:T.mono, fontSize:10, cursor:"pointer", letterSpacing:1 }}>
-              + TERMIN
-            </button>
-            <button onClick={onRefresh} style={{ background:T.acc+"18", border:`1px solid ${T.acc}44`,
-              borderRadius:8, padding:"6px 14px", color:T.acc, fontFamily:T.mono, fontSize:10,
-              cursor:"pointer", letterSpacing:1 }}>
-              {eventsLoading?"…":"↻ SYNC"}
-            </button>
+      <div style={{ marginBottom:14 }}>
+        <Lbl style={{ marginBottom:6 }}>KALENDER</Lbl>
+
+        {/* Date Navigator */}
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8, marginBottom:14 }}>
+          <button onClick={prevDay} style={{
+            background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:10,
+            padding:"8px 12px", color:T.mid, fontFamily:T.serif, fontSize:18,
+            cursor:"pointer", lineHeight:1
+          }}>‹</button>
+
+          <div style={{ textAlign:"center", flex:1, minWidth:0 }}>
+            <div style={{ fontSize:11, color:T.muted, fontFamily:T.mono, letterSpacing:1, marginBottom:2 }}>
+              {isToday ? "HEUTE" : isPast ? "VERGANGEN" : "BEVORSTEHEND"}
+            </div>
+            <h2 style={{ fontSize:17, fontWeight:300, color:isToday?T.gold:T.text, margin:0, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
+              {weekdayLabel}
+            </h2>
           </div>
+
+          <button onClick={nextDay} style={{
+            background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:10,
+            padding:"8px 12px", color:T.mid, fontFamily:T.serif, fontSize:18,
+            cursor:"pointer", lineHeight:1
+          }}>›</button>
+        </div>
+
+        {/* Heute-Button wenn nicht heute */}
+        {!isToday && (
+          <div style={{ textAlign:"center", marginBottom:14 }}>
+            <button onClick={goToToday} style={{
+              background:T.acc+"18", border:`1px solid ${T.acc}44`, borderRadius:18,
+              padding:"5px 14px", color:T.acc, fontFamily:T.mono, fontSize:10,
+              cursor:"pointer", letterSpacing:1.5
+            }}>↺ HEUTE</button>
+          </div>
+        )}
+
+        {/* Aktionen */}
+        <div style={{ display:"flex", justifyContent:"flex-end", gap:8 }}>
+          <button onClick={()=>setShowAdd(s=>!s)} style={{ background:showAdd?T.gold+"22":"transparent",
+            border:`1px solid ${showAdd?T.gold:T.borderS}`, borderRadius:8, padding:"6px 14px",
+            color:showAdd?T.gold:T.muted, fontFamily:T.mono, fontSize:10, cursor:"pointer", letterSpacing:1 }}>
+            + TERMIN
+          </button>
         </div>
       </div>
 
@@ -1039,16 +1143,17 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
 
       {/* Zeitstrahl */}
       <Card style={{ padding:"16px 0", overflow:"hidden" }}>
-        {eventsLoading && (
+        {eventsLoading && isToday && (
           <div style={{ textAlign:"center", padding:"20px 0" }}>
             <Lbl>LADE GOOGLE CALENDAR …</Lbl>
           </div>
         )}
         {hours.map(h=>{
           const hStr = `${String(h).padStart(2,"0")}:00`;
-          const isNow = h === nowH;
+          // "Jetzt"-Markierung nur am heutigen Tag
+          const isNow = isToday && h === nowH;
           const evts = eventAtHour(h);
-          const past = h < nowH;
+          const past = isToday ? h < nowH : isPast;
 
           return (
             <div key={h} style={{ display:"flex", gap:0, position:"relative",
@@ -1099,9 +1204,9 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
       </Card>
 
       {/* Keine Termine Info */}
-      {!eventsLoading && allEvents.length === 0 && (
+      {!eventsLoading && eventsForSelected.length === 0 && (
         <div style={{ textAlign:"center", padding:"20px 0", color:T.muted, fontStyle:"italic", fontSize:13, fontFamily:T.serif }}>
-          Keine Termine heute. Verbinde Google Calendar über den SYNC-Button oder füge manuell hinzu.
+          {isToday ? "Keine Termine heute." : "Keine Termine an diesem Tag."} Mit „+ TERMIN" einen anlegen.
         </div>
       )}
     </div>
@@ -1236,14 +1341,42 @@ function WeekScreen({ logsByDate }) {
 }
 
 // ─── EYLA CHAT ────────────────────────────────────────────────────────────────
-function ChatScreen({ profile, log, events, logsByDate }) {
-  const [messages, setMessages] = useState(()=>[{
-    role:"assistant",
-    content:`${profile.name.split(" ")[0]}. Ich weiß was heute ansteht${events.length>0?` – ${events.length} Termine`:""}. Was brauchst du?`
-  }]);
+function ChatScreen({ profile, log, events, logsByDate, setLog }) {
+  const [messages, setMessages] = useState([]);
+  const [loaded, setLoaded] = useState(false);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  // Kontext-Daten (Plan + Einkaufsliste) für EYLAs Wissen
+  const [plan, setPlan] = useState(null);
+  const [shopping, setShopping] = useState(null);
   const bottomRef = useRef(null);
+
+  // Initial: Chat + Kontext laden
+  useEffect(()=>{
+    (async () => {
+      const [savedMsgs, sh, pl] = await Promise.all([
+        retrieve("eyla_chat_v1", []),
+        retrieve("eyla_shopping_v1", null),
+        retrieve("eyla_plan_v1", null),
+      ]);
+      if (savedMsgs && savedMsgs.length > 0) {
+        setMessages(savedMsgs);
+      } else {
+        setMessages([{
+          role:"assistant",
+          content:`${profile.name.split(" ")[0]}. Ich weiß was heute ansteht${events.length>0?` – ${events.length} Termine`:""}. Was brauchst du?`
+        }]);
+      }
+      setShopping(sh);
+      setPlan(pl);
+      setLoaded(true);
+    })();
+  }, []);
+
+  // Persistieren bei Änderung
+  useEffect(()=>{
+    if (loaded && messages.length > 0) persist("eyla_chat_v1", messages);
+  }, [messages, loaded]);
 
   useEffect(()=>{ bottomRef.current?.scrollIntoView({behavior:"smooth"}); },[messages,loading]);
 
@@ -1259,6 +1392,15 @@ function ChatScreen({ profile, log, events, logsByDate }) {
     "Bin ich auf Kurs?",
   ];
 
+  function clearChat() {
+    if (!confirm("Chat wirklich löschen? Alle Nachrichten weg.")) return;
+    persist("eyla_chat_v1", []);
+    setMessages([{
+      role:"assistant",
+      content:`${profile.name.split(" ")[0]}. Was brauchst du?`
+    }]);
+  }
+
   async function send(text) {
     const t = text||input.trim();
     if (!t||loading) return;
@@ -1267,11 +1409,21 @@ function ChatScreen({ profile, log, events, logsByDate }) {
     setMessages(next);
     setLoading(true);
     try {
+      // Frischer Kontext bei jedem Send (falls in anderen Tabs Änderungen)
+      const [freshShopping, freshPlan] = await Promise.all([
+        retrieve("eyla_shopping_v1", null),
+        retrieve("eyla_plan_v1", null),
+      ]);
+      setShopping(freshShopping);
+      setPlan(freshPlan);
+
       const weekHistory = weekHistoryFromLogs(logsByDate || {});
+      const systemMsg = buildPrompt(profile, log, events, weekHistory, freshPlan, freshShopping);
+
       const res = await fetch("/api/chat",{
         method:"POST", headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({ model:"claude-sonnet-4-5", max_tokens:1000,
-          system:buildPrompt(profile,log,events,weekHistory), messages:next })
+        body:JSON.stringify({ model:"claude-sonnet-4-5", max_tokens:1200,
+          system: systemMsg, messages: next })
       });
       const data = await res.json();
       const reply = data.content?.find(b=>b.type==="text")?.text||"…";
@@ -1282,6 +1434,18 @@ function ChatScreen({ profile, log, events, logsByDate }) {
 
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"calc(100vh - 130px)" }}>
+      {/* Chat Header mit Clear-Button */}
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+        <Lbl>EYLA · CHAT</Lbl>
+        {messages.length > 1 && (
+          <button onClick={clearChat} style={{
+            background:"transparent", border:`1px solid ${T.borderS}`, borderRadius:8,
+            padding:"4px 10px", color:T.muted, fontFamily:T.mono, fontSize:9,
+            letterSpacing:1, cursor:"pointer", transition:"all .2s"
+          }}>↺ NEU</button>
+        )}
+      </div>
+
       {listening && (
         <div style={{ display:"flex",alignItems:"center",gap:8,padding:"8px 16px",
           background:T.green+"11",border:`1px solid ${T.green}33`,borderRadius:10,marginBottom:12 }}>
@@ -2533,6 +2697,7 @@ function AppContent() {
     persist("eyla_local_events_v2", null);
     persist("eyla_shopping_v1", null);
     persist("eyla_plan_v1", null);
+    persist("eyla_chat_v1", null);
     setProfile(null);
     setLogsByDate({});
     setEvents([]);
@@ -2611,7 +2776,7 @@ function AppContent() {
           </>
         )}
         {screen==="woche" && <WeekScreen logsByDate={logsByDate}/>}
-        {screen==="chat"  && <ChatScreen profile={profile} log={log} events={events} logsByDate={logsByDate}/>}
+        {screen==="chat"  && <ChatScreen profile={profile} log={log} events={events} logsByDate={logsByDate} setLog={setLog}/>}
         {screen==="essen" && (
           <>
             <SubTabRow current={essenSub} onChange={setEssenSub} options={[
