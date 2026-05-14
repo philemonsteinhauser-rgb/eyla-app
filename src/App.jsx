@@ -53,12 +53,53 @@ const DEFAULT_PROFILE = {
 const TODAY = new Date().toDateString();
 const EMPTY_LOG = () => ({ meals:[], water:0, energy:"", sleep:"", date:TODAY });
 
+// ─── DATUMS-HELFER ────────────────────────────────────────────────────────────
+// Liefert ein Array der letzten n Tage als toDateString()-Keys (heute zuerst).
+function lastNDays(n) {
+  const out = [];
+  const base = new Date();
+  for (let i = 0; i < n; i++) {
+    const d = new Date(base);
+    d.setDate(base.getDate() - i);
+    out.push(d.toDateString());
+  }
+  return out;
+}
+
+// Komprimiertes 7-Tage-History-Objekt für Chat-Prompt aus logsByDate ableiten.
+function weekHistoryFromLogs(logsByDate) {
+  return lastNDays(7).map(dateKey => {
+    const l = logsByDate?.[dateKey];
+    const kcal = l?.meals?.reduce((s,m)=>s+(m.calories||0),0) || 0;
+    return {
+      date: dateKey,
+      water: l?.water || 0,
+      sleep: l?.sleep || "",
+      kcal,
+      mood: l?.energy || "",
+    };
+  });
+}
+
 // ─── SYSTEM PROMPT ────────────────────────────────────────────────────────────
-function buildPrompt(profile, log, events) {
+function buildPrompt(profile, log, events, weekHistory = []) {
   const eaten = log.meals.reduce((s,m)=>s+(m.calories||0),0);
   const eventStr = events.length > 0
     ? events.map(e=>`  - ${e.time||"?"} ${e.title}${e.duration?" ("+e.duration+")":""}`).join("\n")
     : "  Keine Termine heute.";
+
+  const historyStr = (weekHistory && weekHistory.length > 0)
+    ? weekHistory.map((d, i) => {
+        const label = i === 0 ? "Heute" : i === 1 ? "Gestern" : new Date(d.date).toLocaleDateString("de-DE",{weekday:"short",day:"numeric",month:"short"});
+        const parts = [];
+        parts.push(`💧${d.water}/8`);
+        parts.push(`😴${d.sleep||"–"}h`);
+        parts.push(`🍽${d.kcal}kcal`);
+        if (d.mood) parts.push(d.mood);
+        return `  - ${label}: ${parts.join("  ")}`;
+      }).join("\n")
+    : "  Noch keine Historie.";
+
   return `Du bist EYLA – synthetische KI-Begleiterin von ${profile.name}. Zweites Gehirn. Körper und Tag in einer Intelligenz.
 
 CHARAKTER: Präzise, direkt, warm aber nicht weich. Du weißt was heute ansteht und was der Körper braucht. Du sagst was Sache ist – mit Lösung. Kein Motivationsposter. Trocken-humorvoll wenn passend.
@@ -72,10 +113,13 @@ HEUTE:
 - Wasser: ${log.water} Gläser (${(log.water*.25).toFixed(1)}L)
 - Energie: ${log.energy||"k.A."} | Schlaf: ${log.sleep||"k.A."}h
 
+LETZTE 7 TAGE:
+${historyStr}
+
 WAS HEUTE ANSTEHT:
 ${eventStr}
 
-REGELN: Immer Deutsch. 2–4 Sätze. Konkret mit Mengen/Zeiten. Termine einbeziehen wenn sinnvoll. Nie "Als KI". Nie "ich sehe/kenne deinen Kalender" – einfach natürlich damit umgehen.`;
+REGELN: Immer Deutsch. 2–4 Sätze. Konkret mit Mengen/Zeiten. Termine einbeziehen wenn sinnvoll. Letzte 7 Tage nur einbeziehen wenn relevant (z.B. Schlaf-Muster, Wasser-Trend). Nie "Als KI". Nie "ich sehe/kenne deinen Kalender" – einfach natürlich damit umgehen.`;
 }
 
 // ─── VOICE HOOK ───────────────────────────────────────────────────────────────
@@ -609,8 +653,135 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
   );
 }
 
+// ─── WOCHEN SCREEN ────────────────────────────────────────────────────────────
+function WeekScreen({ logsByDate }) {
+  const days = lastNDays(7);
+
+  // Aggregate für Summary
+  const stats = days.reduce((acc, key) => {
+    const l = logsByDate?.[key];
+    if (!l) return acc;
+    const kcal = l.meals?.reduce((s,m)=>s+(m.calories||0),0) || 0;
+    const hasAny = (l.meals?.length||0) > 0 || l.water > 0 || l.sleep || l.energy;
+    if (!hasAny) return acc;
+    acc.count++;
+    acc.water += l.water || 0;
+    acc.kcal += kcal;
+    const sleepNum = parseFloat(String(l.sleep).replace("+","")) || 0;
+    if (sleepNum > 0) { acc.sleep += sleepNum; acc.sleepN++; }
+    return acc;
+  }, { count:0, water:0, kcal:0, sleep:0, sleepN:0 });
+
+  const avgWater = stats.count>0 ? (stats.water/stats.count).toFixed(1) : "0";
+  const avgSleep = stats.sleepN>0 ? (stats.sleep/stats.sleepN).toFixed(1) : "–";
+  const avgKcal  = stats.count>0 ? Math.round(stats.kcal/stats.count) : 0;
+
+  function labelFor(dateKey, idx) {
+    if (idx === 0) return "Heute";
+    if (idx === 1) return "Gestern";
+    const d = new Date(dateKey);
+    return d.toLocaleDateString("de-DE",{weekday:"short",day:"numeric",month:"short"});
+  }
+
+  function moodEmoji(energy) {
+    if (!energy) return "·";
+    // Extrahiere erstes Emoji aus dem Energie-String
+    const m = energy.match(/\p{Emoji}/u);
+    return m ? m[0] : "·";
+  }
+
+  return (
+    <div>
+      <div style={{ marginBottom:20 }}>
+        <Lbl style={{ marginBottom:6 }}>WOCHE · LETZTE 7 TAGE</Lbl>
+        <h2 style={{ fontSize:20, fontWeight:300, color:T.text, margin:0 }}>
+          Dein <span style={{ color:T.acc }}>Verlauf.</span>
+        </h2>
+      </div>
+
+      {/* Summary */}
+      <Card accent style={{ marginBottom:14 }}>
+        <Lbl style={{ marginBottom:12 }}>SCHNITTWERTE</Lbl>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:14 }}>
+          <div>
+            <div style={{ fontSize:11, color:T.muted, marginBottom:4 }}>💧 Wasser</div>
+            <div style={{ fontSize:22, fontWeight:300, color:T.text, fontFamily:T.mono }}>
+              {avgWater}<span style={{ fontSize:11, color:T.muted, marginLeft:4 }}>/8</span>
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize:11, color:T.muted, marginBottom:4 }}>😴 Schlaf</div>
+            <div style={{ fontSize:22, fontWeight:300, color:T.text, fontFamily:T.mono }}>
+              {avgSleep}<span style={{ fontSize:11, color:T.muted, marginLeft:4 }}>h</span>
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize:11, color:T.muted, marginBottom:4 }}>🍽 kcal</div>
+            <div style={{ fontSize:22, fontWeight:300, color:T.text, fontFamily:T.mono }}>
+              {avgKcal}
+            </div>
+          </div>
+        </div>
+        {stats.count === 0 && (
+          <p style={{ color:T.muted, fontStyle:"italic", fontSize:12, fontFamily:T.serif, margin:"12px 0 0" }}>
+            Noch keine Daten – trag heute was ein, dann füllt sich der Verlauf.
+          </p>
+        )}
+      </Card>
+
+      {/* Tagesliste */}
+      <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+        {days.map((dateKey, idx) => {
+          const l = logsByDate?.[dateKey];
+          const kcal = l?.meals?.reduce((s,m)=>s+(m.calories||0),0) || 0;
+          const empty = !l || ((l.meals?.length||0)===0 && !l.water && !l.sleep && !l.energy);
+          const isToday = idx === 0;
+          return (
+            <Card key={dateKey} style={{
+              opacity: empty ? 0.55 : 1,
+              borderColor: isToday ? T.acc+"55" : T.borderS,
+              padding:"14px 18px"
+            }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:10 }}>
+                <div style={{ minWidth:0, flex:"0 0 auto" }}>
+                  <div style={{ fontSize:13, color:isToday?T.acc:T.text, fontWeight:500 }}>
+                    {labelFor(dateKey, idx)}
+                  </div>
+                  {!isToday && idx !== 1 && (
+                    <div style={{ fontSize:9, color:T.muted, fontFamily:T.mono, letterSpacing:1, marginTop:2 }}>
+                      {new Date(dateKey).toLocaleDateString("de-DE",{day:"2-digit",month:"2-digit"})}
+                    </div>
+                  )}
+                </div>
+                {empty ? (
+                  <div style={{ color:T.muted, fontStyle:"italic", fontSize:12, fontFamily:T.serif }}>
+                    Keine Einträge
+                  </div>
+                ) : (
+                  <div style={{ display:"flex", gap:12, alignItems:"center", flexWrap:"wrap", justifyContent:"flex-end" }}>
+                    <div style={{ fontFamily:T.mono, fontSize:11, color:T.acc }}>
+                      💧 {l.water||0}<span style={{ color:T.muted }}>/8</span>
+                    </div>
+                    <div style={{ fontFamily:T.mono, fontSize:11, color:T.mid }}>
+                      😴 {l.sleep||"–"}<span style={{ color:T.muted }}>h</span>
+                    </div>
+                    <div style={{ fontFamily:T.mono, fontSize:11, color:T.gold }}>
+                      🍽 {kcal}
+                    </div>
+                    <div style={{ fontSize:14 }}>{moodEmoji(l.energy)}</div>
+                  </div>
+                )}
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ─── EYLA CHAT ────────────────────────────────────────────────────────────────
-function ChatScreen({ profile, log, events }) {
+function ChatScreen({ profile, log, events, logsByDate }) {
   const [messages, setMessages] = useState(()=>[{
     role:"assistant",
     content:`${profile.name.split(" ")[0]}. Ich weiß was heute ansteht${events.length>0?` – ${events.length} Termine`:""}. Was brauchst du?`
@@ -641,10 +812,11 @@ function ChatScreen({ profile, log, events }) {
     setMessages(next);
     setLoading(true);
     try {
+      const weekHistory = weekHistoryFromLogs(logsByDate || {});
       const res = await fetch("/api/chat",{
         method:"POST", headers:{"Content-Type":"application/json"},
         body:JSON.stringify({ model:"claude-sonnet-4-5", max_tokens:1000,
-          system:buildPrompt(profile,log,events), messages:next })
+          system:buildPrompt(profile,log,events,weekHistory), messages:next })
       });
       const data = await res.json();
       const reply = data.content?.find(b=>b.type==="text")?.text||"…";
@@ -906,35 +1078,43 @@ function ProfilScreen({ profile, onReset }) {
 // ─── MAIN ─────────────────────────────────────────────────────────────────────
 export default function App() {
   const [profile, setProfile] = useState(null);
-  const [log, setLog_] = useState(EMPTY_LOG());
+  const [logsByDate, setLogsByDate] = useState({});
   const [screen, setScreen] = useState("heute");
   const [events, setEvents] = useState([]);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [ready, setReady] = useState(false);
 
+  // Abgeleiteter Log für heute
+  const log = logsByDate[TODAY] || EMPTY_LOG();
+
   // Load everything on mount – migriert alle alten Keys automatisch
   useEffect(()=>{
     (async()=>{
       const profileKeys = ["eyla_profile_v3","eyla_profile_v2","lyra_profile_v2","lyra_profile"];
-      const logKeys     = ["eyla_log_v3","eyla_log_v2","lyra_log_v2","lyra_log"];
 
       let p = null;
       for (const k of profileKeys) { p = await retrieve(k); if (p) break; }
-
-      let l = null;
-      for (const k of logKeys) { l = await retrieve(k); if (l) break; }
 
       // Profil: gespeichertes prüfen – wenn Name noch "Marcus" war, Default nehmen
       const finalProfile = (p && p.name !== "Marcus") ? p : DEFAULT_PROFILE;
       setProfile(finalProfile);
       persist("eyla_profile_v3", finalProfile);
 
-      if (l && l.date===TODAY) {
-        setLog_(l);
-        persist("eyla_log_v3", l);
-      } else {
-        setLog_(EMPTY_LOG());
+      // Neue Date-Map laden
+      let map = await retrieve("eyla_logs_v1", null) || {};
+
+      // Migration: alter Single-Day-Log → Date-Map
+      const legacyLog = await retrieve("eyla_log_v3", null);
+      if (legacyLog && legacyLog.date) {
+        // Nur einfügen wenn dieser Tag noch nicht in der neuen Map ist
+        if (!map[legacyLog.date]) {
+          map = { ...map, [legacyLog.date]: legacyLog };
+        }
+        await persist("eyla_logs_v1", map);
+        await persist("eyla_log_v3", null);
       }
+
+      setLogsByDate(map);
       setReady(true);
     })();
   },[]);
@@ -951,11 +1131,13 @@ export default function App() {
   }
 
   function setLog(fn) {
-    setLog_(prev=>{
-      const next = typeof fn==="function" ? fn(prev) : fn;
+    setLogsByDate(prevMap=>{
+      const prevLog = prevMap[TODAY] || EMPTY_LOG();
+      const next = typeof fn==="function" ? fn(prevLog) : fn;
       const withDate = {...next, date:TODAY};
-      persist("eyla_log_v3", withDate);
-      return withDate;
+      const nextMap = { ...prevMap, [TODAY]: withDate };
+      persist("eyla_logs_v1", nextMap);
+      return nextMap;
     });
   }
 
@@ -967,9 +1149,10 @@ export default function App() {
   function reset() {
     persist("eyla_profile_v3", null);
     persist("eyla_log_v3", null);
+    persist("eyla_logs_v1", null);
     persist("eyla_local_events_v2", null);
     setProfile(null);
-    setLog_(EMPTY_LOG());
+    setLogsByDate({});
     setEvents([]);
   }
 
@@ -983,13 +1166,14 @@ export default function App() {
 
   const nav = [
     {id:"heute",    icon:"◎", label:"Heute"},
+    {id:"woche",    icon:"≡", label:"Woche"},
     {id:"kalender", icon:"▦", label:"Kalender"},
     {id:"chat",     icon:"✦", label:"EYLA"},
     {id:"plan",     icon:"◈", label:"Plan"},
     {id:"profil",   icon:"◉", label:"Profil"},
   ];
 
-  const sectionColor = screen==="heute" ? T.acc : screen==="kalender" ? T.gold : screen==="chat" ? T.acc : screen==="plan" ? T.gold : T.muted;
+  const sectionColor = screen==="heute" ? T.acc : screen==="woche" ? T.acc : screen==="kalender" ? T.gold : screen==="chat" ? T.acc : screen==="plan" ? T.gold : T.muted;
 
   return (
     <div style={{ minHeight:"100vh", background:T.bg, fontFamily:T.serif, color:T.text }}>
@@ -1029,8 +1213,9 @@ export default function App() {
       {/* Content */}
       <div style={{ maxWidth:760,margin:"0 auto",padding:"22px 18px 96px",position:"relative",zIndex:2 }}>
         {screen==="heute"    && <TodayScreen profile={profile} log={log} setLog={setLog}/>}
+        {screen==="woche"    && <WeekScreen logsByDate={logsByDate}/>}
         {screen==="kalender" && <KalenderScreen events={events} eventsLoading={eventsLoading} onRefresh={loadCalendar} profile={profile} log={log}/>}
-        {screen==="chat"     && <ChatScreen profile={profile} log={log} events={events}/>}
+        {screen==="chat"     && <ChatScreen profile={profile} log={log} events={events} logsByDate={logsByDate}/>}
         {screen==="plan"     && <PlanScreen profile={profile}/>}
         {screen==="profil"   && <ProfilScreen profile={profile} onReset={reset}/>}
       </div>
@@ -1039,18 +1224,18 @@ export default function App() {
       <div style={{ position:"fixed",bottom:0,left:0,right:0,zIndex:40,
         background:T.bg+"F0",backdropFilter:"blur(20px)",borderTop:`1px solid ${T.border}`,
         padding:"8px 0 14px" }}>
-        <div style={{ display:"flex",justifyContent:"space-around",maxWidth:500,margin:"0 auto" }}>
+        <div style={{ display:"flex",justifyContent:"space-around",maxWidth:560,margin:"0 auto",padding:"0 4px" }}>
           {nav.map(n=>(
             <button key={n.id} onClick={()=>setScreen(n.id)} style={{
               background:"none",border:"none",cursor:"pointer",
               display:"flex",flexDirection:"column",alignItems:"center",gap:3,
               color:screen===n.id?sectionColor:T.muted,
-              transition:"color .2s",padding:"4px 12px"
+              transition:"color .2s",padding:"4px 6px",flex:"1 1 0",minWidth:0
             }}>
-              <span style={{ fontSize:18,
+              <span style={{ fontSize:17,
                 filter:screen===n.id?`drop-shadow(0 0 6px ${sectionColor})`:"none",
                 transition:"filter .2s" }}>{n.icon}</span>
-              <span style={{ fontFamily:T.mono,fontSize:8,letterSpacing:2 }}>{n.label.toUpperCase()}</span>
+              <span style={{ fontFamily:T.mono,fontSize:8,letterSpacing:1.5 }}>{n.label.toUpperCase()}</span>
             </button>
           ))}
         </div>
