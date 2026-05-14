@@ -885,28 +885,56 @@ function TodayScreen({ profile, log, setLog }) {
         </div>
       </Card>
 
-      {/* Wasser */}
-      <Card style={{ marginBottom:12 }}>
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-          <div>
-            <Lbl style={{ marginBottom:5 }}>Wasser heute</Lbl>
-            <div style={{ fontSize:24, fontWeight:300, color:T.text }}>{log.water}
-              <span style={{ fontSize:12, color:T.muted, marginLeft:6 }}>{(log.water*.25).toFixed(1)}L</span>
-            </div>
+      {/* Wasser + Gewicht */}
+      <div style={{ display:"grid", gridTemplateColumns:"1.5fr 1fr", gap:12, marginBottom:12 }}>
+        <Card style={{ padding:"14px 16px" }}>
+          <Lbl style={{ marginBottom:5 }}>Wasser</Lbl>
+          <div style={{ fontSize:22, fontWeight:300, color:T.text, marginBottom:8 }}>{log.water}
+            <span style={{ fontSize:11, color:T.muted, marginLeft:6 }}>{(log.water*.25).toFixed(1)}L</span>
           </div>
-          <div style={{ display:"flex", gap:10, alignItems:"center" }}>
-            <button onClick={()=>setLog(l=>({...l,water:Math.max(0,l.water-1)}))} style={{ width:36,height:36,borderRadius:"50%",background:T.bg2,border:`1px solid ${T.borderS}`,color:T.muted,fontSize:18,cursor:"pointer" }}>−</button>
-            <div style={{ display:"flex", gap:3 }}>
+          <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+            <button onClick={()=>setLog(l=>({...l,water:Math.max(0,l.water-1)}))} style={{ width:30,height:30,borderRadius:"50%",background:T.bg2,border:`1px solid ${T.borderS}`,color:T.muted,fontSize:16,cursor:"pointer" }}>−</button>
+            <div style={{ display:"flex", gap:2, flex:1 }}>
               {Array.from({length:8}).map((_,i)=>(
-                <div key={i} style={{ width:11,height:24,borderRadius:3,
+                <div key={i} style={{ flex:1, height:22, borderRadius:3,
                   background:i<log.water?`linear-gradient(${T.dim},${T.acc})`:T.bg2,
                   border:`1px solid ${T.borderS}`,transition:"background .2s" }}/>
               ))}
             </div>
-            <button onClick={()=>setLog(l=>({...l,water:Math.min(12,l.water+1)}))} style={{ width:36,height:36,borderRadius:"50%",background:T.acc+"22",border:`1px solid ${T.acc}`,color:T.acc,fontSize:18,cursor:"pointer" }}>+</button>
+            <button onClick={()=>setLog(l=>({...l,water:Math.min(12,l.water+1)}))} style={{ width:30,height:30,borderRadius:"50%",background:T.acc+"22",border:`1px solid ${T.acc}`,color:T.acc,fontSize:16,cursor:"pointer" }}>+</button>
           </div>
-        </div>
-      </Card>
+        </Card>
+        <Card style={{ padding:"14px 16px" }}>
+          <Lbl style={{ marginBottom:5 }}>Gewicht</Lbl>
+          <div style={{ display:"flex", alignItems:"baseline", gap:4 }}>
+            <input
+              type="number"
+              step="0.1"
+              value={log.weight||""}
+              onChange={e=>setLog(l=>({...l, weight: e.target.value === "" ? null : parseFloat(e.target.value)}))}
+              placeholder={profile.weight}
+              style={{
+                width:"100%",
+                background:"transparent", border:"none",
+                color: log.weight ? T.text : T.muted,
+                fontFamily: T.mono, fontSize: 22, fontWeight: 300,
+                outline:"none", padding:0, minWidth:0
+              }}
+            />
+            <span style={{ fontSize:11, color:T.muted, fontFamily:T.mono }}>kg</span>
+          </div>
+          {log.weight && profile.weight && (
+            <div style={{ fontSize:10, color: log.weight < parseFloat(profile.weight) ? T.green : log.weight > parseFloat(profile.weight) ? T.gold : T.muted, fontFamily:T.mono, marginTop:4 }}>
+              {(log.weight - parseFloat(profile.weight)).toFixed(1) > 0 ? "+" : ""}{(log.weight - parseFloat(profile.weight)).toFixed(1)}kg vs. Start
+            </div>
+          )}
+          {!log.weight && (
+            <div style={{ fontSize:10, color:T.muted, fontStyle:"italic", marginTop:4, fontFamily:T.serif }}>
+              Heute morgens gewogen?
+            </div>
+          )}
+        </Card>
+      </div>
 
       {/* Mahlzeiten */}
       <Card>
@@ -1644,6 +1672,15 @@ const EYLA_TOOLS = [
     }
   },
   {
+    name: "set_weight",
+    description: "Trag das heutige Körpergewicht in kg ein (z.B. 78.5).",
+    input_schema: {
+      type: "object",
+      properties: { kg: { type: "number" } },
+      required: ["kg"]
+    }
+  },
+  {
     name: "add_event",
     description: "Trag einen Termin in den Kalender ein. Wenn kein Datum angegeben wird, ist es heute.",
     input_schema: {
@@ -1690,19 +1727,35 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
   const [loaded, setLoaded] = useState(false);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [voiceOn, setVoiceOn] = useState(false);
   // Kontext-Daten (Plan + Einkaufsliste) für EYLAs Wissen
   const [plan, setPlan] = useState(null);
   const [shopping, setShopping] = useState(null);
   const bottomRef = useRef(null);
+  const ttsSupported = typeof window !== "undefined" && "speechSynthesis" in window;
+
+  function speak(text) {
+    if (!voiceOn || !ttsSupported || !text) return;
+    try {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = "de-DE";
+      u.rate = 1.05;
+      u.pitch = 1;
+      window.speechSynthesis.speak(u);
+    } catch {}
+  }
 
   // Initial: Chat + Kontext laden
   useEffect(()=>{
     (async () => {
-      const [savedMsgs, sh, pl] = await Promise.all([
+      const [savedMsgs, sh, pl, vOn] = await Promise.all([
         retrieve("eyla_chat_v1", []),
         retrieve("eyla_shopping_v1", null),
         retrieve("eyla_plan_v1", null),
+        retrieve("eyla_chat_voice_v1", false),
       ]);
+      setVoiceOn(!!vOn);
       if (savedMsgs && savedMsgs.length > 0) {
         setMessages(savedMsgs);
       } else {
@@ -1785,6 +1838,12 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
         case "set_energy": {
           setLog(l => ({...l, energy: String(input.mood)}));
           return `Energie: ${input.mood}`;
+        }
+        case "set_weight": {
+          const w = parseFloat(input.kg);
+          if (!w || w < 30 || w > 300) return `Ungültiges Gewicht: ${input.kg}`;
+          setLog(l => ({...l, weight: w}));
+          return `Gewicht heute: ${w}kg`;
         }
         case "add_event": {
           const todayK = isoDateKey(new Date());
@@ -1920,6 +1979,7 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
         { role:"user", content:t },
         { role:"assistant", content: finalText || "…", actions: allActions }
       ]);
+      speak(finalText);
     } catch {
       setMessages([
         ...messages,
@@ -1932,16 +1992,31 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
 
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"calc(100vh - 130px)" }}>
-      {/* Chat Header mit Clear-Button */}
+      {/* Chat Header mit Voice + Clear-Button */}
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
         <Lbl>EYLA · CHAT</Lbl>
-        {messages.length > 1 && (
-          <button onClick={clearChat} style={{
-            background:"transparent", border:`1px solid ${T.borderS}`, borderRadius:8,
-            padding:"4px 10px", color:T.muted, fontFamily:T.mono, fontSize:9,
-            letterSpacing:1, cursor:"pointer", transition:"all .2s"
-          }}>↺ NEU</button>
-        )}
+        <div style={{ display:"flex", gap:6 }}>
+          {ttsSupported && (
+            <button onClick={()=>{
+              const v = !voiceOn;
+              setVoiceOn(v);
+              persist("eyla_chat_voice_v1", v);
+              if (!v) try { window.speechSynthesis.cancel(); } catch {}
+            }} style={{
+              background: voiceOn ? T.acc+"22" : "transparent",
+              border:`1px solid ${voiceOn?T.acc:T.borderS}`, borderRadius:8,
+              padding:"4px 10px", color: voiceOn?T.acc:T.muted,
+              fontFamily:T.mono, fontSize:9, letterSpacing:1, cursor:"pointer", transition:"all .2s"
+            }} title="EYLA spricht ihre Antworten">🔊 STIMME</button>
+          )}
+          {messages.length > 1 && (
+            <button onClick={clearChat} style={{
+              background:"transparent", border:`1px solid ${T.borderS}`, borderRadius:8,
+              padding:"4px 10px", color:T.muted, fontFamily:T.mono, fontSize:9,
+              letterSpacing:1, cursor:"pointer", transition:"all .2s"
+            }}>↺ NEU</button>
+          )}
+        </div>
       </div>
 
       {listening && (
@@ -3253,14 +3328,15 @@ function AppContent() {
         @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
       `}</style>
 
-      {/* BG glow */}
-      <div style={{ position:"fixed",inset:0,pointerEvents:"none",
-        background:"radial-gradient(ellipse at 50% 0%, #00E5FF05 0%, transparent 50%)" }}/>
+      {/* BG glow – Farbe je nach aktivem Tab */}
+      <div style={{ position:"fixed",inset:0,pointerEvents:"none",transition:"background .4s",
+        background:`radial-gradient(ellipse at 50% 0%, ${sectionColor}0A 0%, transparent 50%)` }}/>
 
-      {/* Top bar */}
+      {/* Top bar – feiner Akzent von Section-Color am unteren Rand */}
       <div style={{ position:"sticky",top:0,zIndex:40,background:T.bg+"F0",
-        backdropFilter:"blur(20px)",borderBottom:`1px solid ${T.border}`,
-        padding:"12px 20px",display:"flex",alignItems:"center",justifyContent:"space-between" }}>
+        backdropFilter:"blur(20px)",borderBottom:`1px solid ${sectionColor}33`,
+        padding:"12px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",
+        transition:"border-color .4s" }}>
         <div style={{ display:"flex",alignItems:"center",gap:12 }}>
           <EylaOrb size={38} thinking={eventsLoading}/>
           <div>
