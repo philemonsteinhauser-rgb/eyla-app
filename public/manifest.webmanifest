@@ -1,7 +1,7 @@
 {
   "name": "EYLA",
   "short_name": "EYLA",
-  "description": "Synthetische Begleiterin. Ruhig. Genau.",
+  "description": "Deine Begleiterin. Ruhig. Genau.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
