@@ -221,7 +221,7 @@ function calorieTarget(profile) {
 }
 
 const TODAY = new Date().toDateString();
-const EMPTY_LOG = () => ({ meals:[], water:0, energy:"", sleep:"", date:TODAY });
+const EMPTY_LOG = () => ({ meals:[], water:0, energy:"", sleep:"", workouts:[], weight:null, date:TODAY });
 
 // ─── LADEN-LAYOUTS ────────────────────────────────────────────────────────────
 // Typische Gang-Reihenfolge vom Eingang zur Kasse pro Discounter/Supermarkt.
@@ -482,6 +482,7 @@ HEUTE:
 - Makros: P ${log.meals.reduce((s,m)=>s+(m.protein||0),0)}g / C ${log.meals.reduce((s,m)=>s+(m.carbs||0),0)}g / F ${log.meals.reduce((s,m)=>s+(m.fat||0),0)}g (Ziel: P ${macroTarget(profile).protein}g / C ${macroTarget(profile).carbs}g / F ${macroTarget(profile).fat}g)
 - Wasser: ${log.water} Gläser (${(log.water*.25).toFixed(1)}L)
 - Energie: ${log.energy||"k.A."} | Schlaf: ${log.sleep||"k.A."}h
+- Training: ${(log.workouts||[]).length > 0 ? log.workouts.map(w=>`${w.type} ${w.duration}min`).join(", ") : "noch nicht"}
 
 LETZTE 7 TAGE:
 ${historyStr}
@@ -837,7 +838,7 @@ function Onboarding({ onDone }) {
 }
 
 // ─── TODAY SCREEN ─────────────────────────────────────────────────────────────
-function TodayScreen({ profile, log, setLog }) {
+function TodayScreen({ profile, log, setLog, logsByDate }) {
   const [mealName, setMealName] = useState("");
   const [mealCal, setMealCal] = useState("");
   const [mealP, setMealP] = useState("");
@@ -858,6 +859,39 @@ function TodayScreen({ profile, log, setLog }) {
   const mt = macroTarget(profile);
   const tdee = ct.tdee;
   const targetKcal = ct.target;
+
+  // Häufige Mahlzeiten der letzten 14 Tage (für Quick-Add). Nach Letzt-Verwendung sortiert,
+  // ohne die heute schon eingetragenen.
+  const recentMeals = (() => {
+    const today = TODAY;
+    const seen = new Set(log.meals.map(m => m.name.toLowerCase()));
+    const out = [];
+    const keys = lastNDays(14).slice(1); // ab gestern rückwärts
+    for (const k of keys) {
+      const l = logsByDate?.[k];
+      if (!l?.meals) continue;
+      for (const m of [...l.meals].reverse()) {
+        const lk = m.name.toLowerCase();
+        if (seen.has(lk)) continue;
+        seen.add(lk);
+        out.push({ name: m.name, calories: m.calories||0, protein: m.protein||0, carbs: m.carbs||0, fat: m.fat||0 });
+        if (out.length >= 5) return out;
+      }
+    }
+    return out;
+  })();
+
+  function quickAddMeal(m) {
+    setLog(l => ({...l, meals:[...l.meals, {
+      id: Date.now(),
+      name: m.name,
+      calories: m.calories,
+      protein: m.protein,
+      carbs: m.carbs,
+      fat: m.fat,
+      time: new Date().toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})
+    }]}));
+  }
 
   const onMealVoice = useCallback((text) => {
     const calMatch = text.match(/(\d+)\s*(kal|kalorien|kcal)?/i);
@@ -1053,6 +1087,59 @@ function TodayScreen({ profile, log, setLog }) {
         </Card>
       </div>
 
+      {/* Training */}
+      <Card style={{ marginBottom:12 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10 }}>
+          <div>
+            <Lbl style={{ marginBottom:5 }}>Training heute</Lbl>
+            <div style={{ fontSize:18, fontWeight:300, color:T.text }}>
+              {(log.workouts||[]).length === 0
+                ? <span style={{ color:T.muted, fontStyle:"italic", fontSize:13, fontFamily:T.serif }}>Noch nichts</span>
+                : <>{(log.workouts||[]).reduce((s,w)=>s+(w.duration||0),0)} <span style={{ fontSize:12, color:T.muted }}>min</span></>}
+            </div>
+          </div>
+        </div>
+        {/* Quick-Add Buttons */}
+        <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:(log.workouts||[]).length>0?10:0 }}>
+          {[
+            { type:"Beweglichkeit", duration:90, icon:"🧘" },
+            { type:"Cardio",        duration:30, icon:"🏃" },
+            { type:"Kraft",         duration:45, icon:"💪" },
+            { type:"Gehen",         duration:45, icon:"🚶" },
+          ].map(opt => (
+            <button key={opt.type} onClick={()=>setLog(l=>({...l, workouts:[...(l.workouts||[]), {
+              id:Date.now(), type:opt.type, duration:opt.duration,
+              time:new Date().toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})
+            }]}))} style={{
+              background:"transparent", border:`1px solid ${T.borderS}`, borderRadius:18,
+              padding:"5px 12px", color:T.muted, fontFamily:T.serif, fontSize:12,
+              fontStyle:"italic", cursor:"pointer", transition:"all .2s",
+              display:"flex", alignItems:"center", gap:5
+            }}
+            onMouseEnter={e=>{e.currentTarget.style.borderColor=T.acc; e.currentTarget.style.color=T.text;}}
+            onMouseLeave={e=>{e.currentTarget.style.borderColor=T.borderS; e.currentTarget.style.color=T.muted;}}>
+              <span>{opt.icon}</span><span>{opt.type}</span><span style={{ fontFamily:T.mono, fontSize:10, color:T.muted, marginLeft:2 }}>{opt.duration}min</span>
+            </button>
+          ))}
+        </div>
+
+        {/* Liste */}
+        {(log.workouts||[]).length > 0 && (
+          <div>
+            {(log.workouts||[]).map(w => (
+              <div key={w.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 0", borderBottom:`1px solid ${T.border}` }}>
+                <div style={{ color:T.text, fontSize:13 }}>{w.type}</div>
+                <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                  <div style={{ color:T.mid, fontFamily:T.mono, fontSize:12 }}>{w.duration||0}<span style={{ color:T.muted, marginLeft:2 }}>min</span></div>
+                  <div style={{ color:T.muted, fontFamily:T.mono, fontSize:10 }}>{w.time}</div>
+                  <button onClick={()=>setLog(l=>({...l, workouts:(l.workouts||[]).filter(x=>x.id!==w.id)}))} style={{ background:"none", border:"none", color:T.muted, cursor:"pointer", fontSize:15, padding:2 }}>×</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
       {/* Mahlzeiten */}
       <Card>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:14 }}>
@@ -1134,6 +1221,28 @@ function TodayScreen({ profile, log, setLog }) {
               padding:"6px 12px", background:T.green+"11", border:`1px solid ${T.green}33`, borderRadius:8 }}>
               <div style={{ width:6,height:6,borderRadius:"50%",background:T.green,animation:"blink 1s infinite" }}/>
               <span style={{ color:T.green, fontFamily:T.mono, fontSize:10, letterSpacing:1 }}>EYLA HÖRT ZU …</span>
+            </div>
+          )}
+
+          {/* Quick-Add aus Historie */}
+          {recentMeals.length > 0 && !photoData && !listening && (
+            <div style={{ marginBottom:10 }}>
+              <Lbl style={{ marginBottom:6, fontSize:10 }}>HÄUFIG</Lbl>
+              <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+                {recentMeals.map((m, i) => (
+                  <button key={i} onClick={()=>quickAddMeal(m)} style={{
+                    background:"transparent", border:`1px solid ${T.borderS}`, borderRadius:18,
+                    padding:"4px 10px", color:T.muted, fontFamily:T.serif, fontSize:11,
+                    fontStyle:"italic", cursor:"pointer", transition:"all .2s",
+                    display:"flex", alignItems:"center", gap:5
+                  }}
+                  onMouseEnter={e=>{e.currentTarget.style.borderColor=T.acc; e.currentTarget.style.color=T.text;}}
+                  onMouseLeave={e=>{e.currentTarget.style.borderColor=T.borderS; e.currentTarget.style.color=T.muted;}}>
+                    <span style={{ maxWidth:120, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{m.name}</span>
+                    {m.calories>0 && <span style={{ fontFamily:T.mono, fontSize:9, color:T.muted }}>{m.calories}</span>}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
           <div style={{ display:"flex", gap:8, marginBottom:8 }}>
@@ -1504,6 +1613,73 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
 function WeekScreen({ logsByDate, profile }) {
   const days = lastNDays(7);
   const targetK = calorieTarget(profile || {}).target;
+  const [insight, setInsight] = useState(null);
+  const [insightLoading, setInsightLoading] = useState(false);
+  const [insightError, setInsightError] = useState(null);
+
+  // Week-Hash zur Cache-Invalidierung: Datum + Anzahl Einträge
+  const weekHash = days[0] + "|" + days.reduce((s,k)=>{
+    const l = logsByDate?.[k]; if(!l) return s;
+    return s + (l.meals?.length||0) + (l.water||0) + (l.workouts?.length||0) + (l.weight?1:0);
+  }, 0);
+
+  useEffect(() => {
+    retrieve("eyla_week_insight_v1", null).then(saved => {
+      if (saved && saved.hash === weekHash) setInsight(saved.text);
+    });
+  }, [weekHash]);
+
+  async function generateInsight() {
+    setInsightLoading(true);
+    setInsightError(null);
+    try {
+      // Komprimiertes Wochen-Summary
+      const summary = days.map((k, i) => {
+        const l = logsByDate?.[k];
+        if (!l) return null;
+        const kcal = l.meals?.reduce((s,m)=>s+(m.calories||0),0) || 0;
+        const wo = (l.workouts||[]).map(w=>`${w.type}${w.duration?` ${w.duration}min`:""}`).join(", ");
+        const parts = [];
+        if (l.water) parts.push(`💧${l.water}`);
+        if (l.sleep) parts.push(`😴${l.sleep}h`);
+        if (kcal) parts.push(`🍽${kcal}`);
+        if (l.energy) parts.push(l.energy);
+        if (l.weight) parts.push(`⚖${l.weight}kg`);
+        if (wo) parts.push(`🏋${wo}`);
+        const label = i === 0 ? "Heute" : i === 1 ? "Gestern" : new Date(k).toLocaleDateString("de-DE",{weekday:"short"});
+        return parts.length ? `${label}: ${parts.join(" · ")}` : null;
+      }).filter(Boolean).join("\n");
+
+      if (!summary) {
+        setInsightError("Zu wenig Daten – trag mehr ein bevor ich was sagen kann.");
+        setInsightLoading(false);
+        return;
+      }
+
+      const ct = calorieTarget(profile);
+      const ziel = ct.type === "halten" ? `Halten ~${ct.target}kcal` :
+                   ct.type === "abnehmen" ? `Abnehmen, Tagesziel ${ct.target}kcal` :
+                   `Aufbauen, Tagesziel ${ct.target}kcal`;
+
+      const res = await fetch("/api/chat", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          model:"claude-sonnet-4-5",
+          max_tokens:400,
+          system:`Du bist EYLA, ${profile.name||"Phil"}s Begleiterin. Lies die Wochen-Daten und schreib eine kurze, ehrliche Analyse: 3-5 Sätze. Konkret, präzise, keine Ratschlag-Phrasen. Wenn was auffällt (Trend, Lücke, Stärke) – benenne es. Wenn Daten dünn sind, sag das. Keine Listen, keine Bullets, kein "Insgesamt …" am Anfang. Direkt rein.`,
+          messages:[{ role:"user", content:`Ziel: ${ziel}\n\nWoche:\n${summary}` }]
+        })
+      });
+      const data = await res.json();
+      const text = data.content?.find(b=>b.type==="text")?.text || "";
+      if (!text) throw new Error("Leere Antwort");
+      setInsight(text);
+      await persist("eyla_week_insight_v1", { hash: weekHash, text, createdAt: new Date().toISOString() });
+    } catch(e) {
+      setInsightError("Konnte keine Analyse erstellen.");
+    }
+    setInsightLoading(false);
+  }
 
   // Per-Day-Werte (auch für Charts)
   const dayData = days.map(key => {
@@ -1604,6 +1780,44 @@ function WeekScreen({ logsByDate, profile }) {
           Dein <span style={{ color:T.acc }}>Verlauf.</span>
         </h2>
       </div>
+
+      {/* EYLAs Wochen-Analyse */}
+      {insight ? (
+        <Card accent style={{ marginBottom:12, padding:"14px 18px" }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:8, gap:8 }}>
+            <Lbl style={{ marginBottom:0 }}>✦ EYLAS ANALYSE</Lbl>
+            <button onClick={()=>{ persist("eyla_week_insight_v1", null); setInsight(null); }} style={{
+              background:"transparent", border:"none", color:T.muted,
+              fontFamily:T.mono, fontSize:9, letterSpacing:1, cursor:"pointer", padding:0
+            }}>↺ NEU</button>
+          </div>
+          <p style={{ color:T.mid, fontSize:13, lineHeight:1.7, fontFamily:T.serif, fontStyle:"italic", margin:0 }}>
+            {insight}
+          </p>
+        </Card>
+      ) : (
+        <button onClick={generateInsight} disabled={insightLoading} style={{
+          width:"100%", marginBottom:12, padding:"11px 14px", borderRadius:10,
+          border:`1px solid ${T.acc}44`,
+          background: insightLoading ? T.bg2 : T.acc+"10",
+          color:T.acc, fontFamily:T.serif, fontSize:13,
+          cursor: insightLoading ? "default" : "pointer",
+          fontStyle:"italic", transition:"all .2s",
+          display:"flex", alignItems:"center", justifyContent:"center", gap:8
+        }}>
+          {insightLoading ? (
+            <>
+              <Waveform/>
+              <span style={{ fontFamily:T.mono, fontSize:10, letterSpacing:1 }}>EYLA LIEST DEINE WOCHE …</span>
+            </>
+          ) : (
+            <>✦ EYLAs Analyse zur Woche</>
+          )}
+        </button>
+      )}
+      {insightError && (
+        <p style={{ color:T.red, fontSize:11, fontStyle:"italic", margin:"-6px 0 12px", fontFamily:T.serif }}>{insightError}</p>
+      )}
 
       {/* Streaks */}
       {(waterStreak > 0 || sleepStreak > 0 || mealStreak > 0) && (
@@ -1798,6 +2012,19 @@ const EYLA_TOOLS = [
     }
   },
   {
+    name: "add_workout",
+    description: "Trag eine Trainingseinheit heute ein (z.B. wenn der User 'hab grad 30min joggen war' sagt).",
+    input_schema: {
+      type: "object",
+      properties: {
+        type: { type: "string", description: "z.B. Beweglichkeit, Cardio, Kraft, Gehen, Yoga, Schwimmen" },
+        duration: { type: "number", description: "Dauer in Minuten" },
+        intensity: { type: "string", description: "leicht | mittel | hart (optional)" }
+      },
+      required: ["type", "duration"]
+    }
+  },
+  {
     name: "add_event",
     description: "Trag einen Termin in den Kalender ein. Wenn kein Datum angegeben wird, ist es heute.",
     input_schema: {
@@ -1961,6 +2188,18 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
           if (!w || w < 30 || w > 300) return `Ungültiges Gewicht: ${input.kg}`;
           setLog(l => ({...l, weight: w}));
           return `Gewicht heute: ${w}kg`;
+        }
+        case "add_workout": {
+          const dur = parseInt(input.duration) || 0;
+          const wo = {
+            id: Date.now(),
+            type: String(input.type || "Training"),
+            duration: dur,
+            intensity: input.intensity || "",
+            time: new Date().toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})
+          };
+          setLog(l => ({...l, workouts: [...(l.workouts||[]), wo]}));
+          return `Training: ${wo.type} ${dur}min${wo.intensity?` (${wo.intensity})`:""}`;
         }
         case "add_event": {
           const todayK = isoDateKey(new Date());
@@ -2943,7 +3182,15 @@ function ShoppingScreen() {
 }
 
 // ─── PROFIL SCREEN ────────────────────────────────────────────────────────────
-function ProfilScreen({ profile, onReset, onUpdate }) {
+function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
+  // Gewichts-Historie aus allen logs sammeln (gefiltert auf nicht-null)
+  const weightHistory = (() => {
+    const entries = Object.entries(logsByDate || {})
+      .filter(([_, l]) => typeof l?.weight === "number")
+      .map(([k, l]) => ({ date: k, weight: l.weight, ts: new Date(k).getTime() }))
+      .sort((a, b) => a.ts - b.ts);
+    return entries;
+  })();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(profile);
 
@@ -3194,6 +3441,64 @@ function ProfilScreen({ profile, onReset, onUpdate }) {
           </Card>
         );
       })()}
+
+      {/* Gewichts-Verlauf */}
+      {weightHistory.length >= 2 && (
+        <Card style={{ marginBottom:12 }}>
+          <Lbl style={{ marginBottom:12 }}>GEWICHTS-VERLAUF · {weightHistory.length} EINTRÄGE</Lbl>
+          {(() => {
+            const values = weightHistory.map(e => e.weight);
+            const min = Math.min(...values, parseFloat(profile.targetWeight)||values[0]) - 0.5;
+            const max = Math.max(...values, parseFloat(profile.targetWeight)||values[0]) + 0.5;
+            const range = Math.max(0.001, max - min);
+            const W = 100, H = 60;
+            const pts = weightHistory.map((e, i) => {
+              const x = (i / (weightHistory.length-1)) * W;
+              const y = H - ((e.weight - min) / range) * H;
+              return `${x.toFixed(1)},${y.toFixed(1)}`;
+            }).join(" ");
+            const targetY = profile.targetWeight ? H - ((parseFloat(profile.targetWeight) - min) / range) * H : null;
+            const lastWeight = values[values.length-1];
+            const firstWeight = values[0];
+            const delta = lastWeight - firstWeight;
+            return (
+              <>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:8 }}>
+                  <div>
+                    <div style={{ fontSize:20, color:T.text, fontFamily:T.mono, fontWeight:300 }}>
+                      {lastWeight}<span style={{ fontSize:11, color:T.muted, marginLeft:3 }}>kg</span>
+                    </div>
+                    <div style={{ fontSize:10, color: delta < 0 ? T.green : delta > 0 ? T.gold : T.muted, fontFamily:T.mono, marginTop:2 }}>
+                      {delta > 0 ? "+" : ""}{delta.toFixed(1)}kg seit {new Date(weightHistory[0].date).toLocaleDateString("de-DE",{day:"2-digit",month:"2-digit"})}
+                    </div>
+                  </div>
+                  {profile.targetWeight && (
+                    <div style={{ fontSize:10, color:T.acc, fontFamily:T.mono, textAlign:"right" }}>
+                      Ziel: {profile.targetWeight}kg
+                      <div style={{ color:T.muted, marginTop:2 }}>
+                        {(lastWeight - parseFloat(profile.targetWeight)).toFixed(1)}kg zu gehen
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width:"100%", height:90, display:"block" }}>
+                  {targetY !== null && (
+                    <line x1="0" y1={targetY} x2={W} y2={targetY}
+                      stroke={T.acc+"66"} strokeWidth="0.4" strokeDasharray="1.5,1.5"/>
+                  )}
+                  <polyline points={pts} fill="none" stroke={T.mid} strokeWidth="0.7" strokeLinejoin="round" strokeLinecap="round"/>
+                  {weightHistory.map((e, i) => {
+                    const x = (i / (weightHistory.length-1)) * W;
+                    const y = H - ((e.weight - min) / range) * H;
+                    return <circle key={i} cx={x} cy={y} r="0.9" fill={T.mid}/>;
+                  })}
+                </svg>
+              </>
+            );
+          })()}
+        </Card>
+      )}
+
       {profile.preferences?.length>0&&<Card style={{ marginBottom:12 }}><Lbl style={{ marginBottom:10 }}>VORLIEBEN</Lbl><div style={{ display:"flex",flexWrap:"wrap",gap:7 }}>{profile.preferences.map((p,i)=><span key={i} style={{ background:T.acc+"18",border:`1px solid ${T.acc}33`,borderRadius:20,padding:"3px 12px",fontSize:11,color:T.acc,fontFamily:T.mono }}>{p}</span>)}</div></Card>}
       {profile.intolerances?.length>0&&<Card style={{ marginBottom:12 }}><Lbl style={{ marginBottom:10 }}>INTOLERANZEN</Lbl><div style={{ display:"flex",flexWrap:"wrap",gap:7 }}>{profile.intolerances.map((p,i)=><span key={i} style={{ background:T.gold+"18",border:`1px solid ${T.gold}33`,borderRadius:20,padding:"3px 12px",fontSize:11,color:T.gold,fontFamily:T.mono }}>{p}</span>)}</div></Card>}
       {profile.apps?.length>0&&<Card style={{ marginBottom:20 }}><Lbl style={{ marginBottom:10 }}>VERBUNDENE APPS</Lbl><div style={{ display:"flex",flexWrap:"wrap",gap:7 }}>{profile.apps.map((a,i)=><div key={i} style={{ display:"flex",alignItems:"center",gap:6,background:T.bg2,border:`1px solid ${T.borderS}`,borderRadius:8,padding:"5px 12px" }}><div style={{ width:5,height:5,borderRadius:"50%",background:T.green,boxShadow:`0 0 5px ${T.green}` }}/><span style={{ color:T.mid,fontFamily:T.mono,fontSize:10 }}>{a}</span></div>)}</div></Card>}
@@ -3553,7 +3858,7 @@ function AppContent() {
               {id:"heute",    label:"Heute",    color:T.acc},
               {id:"kalender", label:"Kalender", color:T.gold},
             ]}/>
-            {tagSub==="heute"    && <TodayScreen profile={profile} log={log} setLog={setLog}/>}
+            {tagSub==="heute"    && <TodayScreen profile={profile} log={log} setLog={setLog} logsByDate={logsByDate}/>}
             {tagSub==="kalender" && <KalenderScreen events={events} eventsLoading={eventsLoading} onRefresh={loadCalendar} profile={profile} log={log}/>}
           </>
         )}
@@ -3569,7 +3874,7 @@ function AppContent() {
             {essenSub==="liste" && <ShoppingScreen/>}
           </>
         )}
-        {screen==="profil" && <ProfilScreen profile={profile} onReset={reset} onUpdate={updateProfile}/>}
+        {screen==="profil" && <ProfilScreen profile={profile} onReset={reset} onUpdate={updateProfile} logsByDate={logsByDate}/>}
       </div>
 
       {/* Bottom nav – Safe-Area unten für iPhone-Home-Indicator */}
