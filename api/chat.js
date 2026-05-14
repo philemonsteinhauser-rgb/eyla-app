@@ -27,7 +27,7 @@ export default async function handler(req, res) {
   try {
     // req.body ist auf Vercel bereits geparst, lokal manchmal nicht
     const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
-    const { model, max_tokens, system, messages } = body || {};
+    const { model, max_tokens, system, messages, tools } = body || {};
 
     if (!model || !messages) {
       return res.status(400).json({ error: "model und messages sind Pflicht" });
@@ -44,6 +44,7 @@ export default async function handler(req, res) {
         model,
         max_tokens: max_tokens ?? 1024,
         ...(system ? { system } : {}),
+        ...(Array.isArray(tools) && tools.length > 0 ? { tools } : {}),
         messages,
       }),
     });

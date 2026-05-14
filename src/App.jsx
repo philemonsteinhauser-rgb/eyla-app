@@ -363,6 +363,12 @@ ${planStr}
 EINKAUFSLISTE (offen):
 ${shoppingStr}
 
+AKTIONEN: Du hast Tools um direkt im Tagebuch des Users Sachen zu tun:
+- add_meal, set_water/add_water, set_sleep, set_energy → Tageslog pflegen
+- add_event → Termin in den Kalender
+- add_shopping_item, check_shopping_item → Einkaufsliste pflegen
+Wenn der User sagt "trag X ein" / "ich hab Y gegessen" / "noch 2 Gläser Wasser" / "Termin morgen 14 Uhr Sport" / "Eier auf die Liste" – nutze die Tools direkt. Kurz bestätigen, nicht ausschweifen. Wenn unklar: nachfragen statt raten.
+
 REGELN: Immer Deutsch. 2–4 Sätze. Konkret mit Mengen/Zeiten. Bei Ernährungsfragen Tagesziel + Rest-kcal einbeziehen. Wenn jemand übers Ziel ist: kein Drama, am nächsten Tag flexibel ausgleichen. Termine einbeziehen wenn sinnvoll. Letzte 7 Tage nur wenn Trend relevant. Nie "Als KI". Nie "ich sehe/kenne deinen Kalender".`;
 }
 
@@ -1340,6 +1346,101 @@ function WeekScreen({ logsByDate }) {
   );
 }
 
+// ─── TOOLS für EYLA-Chat ──────────────────────────────────────────────────────
+// EYLA kann diese Tools im Chat aufrufen, um direkt im User-Datenmodell
+// Änderungen zu machen (Mahlzeit eintragen, Wasser hochzählen, Termin anlegen,
+// Einkaufsliste pflegen). Frontend führt sie lokal aus, sendet tool_result
+// zurück und EYLA generiert ihre Antwort.
+const EYLA_TOOLS = [
+  {
+    name: "add_meal",
+    description: "Trag eine Mahlzeit in den heutigen Tageslog ein. Verwende dies wenn der User sagt was er gegessen hat oder plant zu essen.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Kurzer Name der Mahlzeit" },
+        calories: { type: "number", description: "Geschätzte Kalorien als Zahl" }
+      },
+      required: ["name"]
+    }
+  },
+  {
+    name: "set_water",
+    description: "Setze die Anzahl der heute getrunkenen Wassergläser absolut (je 250ml, max 12).",
+    input_schema: {
+      type: "object",
+      properties: { glasses: { type: "number" } },
+      required: ["glasses"]
+    }
+  },
+  {
+    name: "add_water",
+    description: "Erhöhe oder verringere die Wassergläser um delta (z.B. +2 wenn der User sagt 'hab zwei Gläser getrunken').",
+    input_schema: {
+      type: "object",
+      properties: { delta: { type: "number" } },
+      required: ["delta"]
+    }
+  },
+  {
+    name: "set_sleep",
+    description: "Setze die Schlafdauer letzter Nacht.",
+    input_schema: {
+      type: "object",
+      properties: { hours: { type: "string", description: "z.B. '7', '8', '9+'" } },
+      required: ["hours"]
+    }
+  },
+  {
+    name: "set_energy",
+    description: "Setze Energie/Stimmung. Genau einer der Werte: '💤 Erschöpft', '😴 Müde', '😐 Ok', '😊 Gut', '⚡ Energiegeladen'",
+    input_schema: {
+      type: "object",
+      properties: { mood: { type: "string" } },
+      required: ["mood"]
+    }
+  },
+  {
+    name: "add_event",
+    description: "Trag einen Termin in den Kalender ein. Wenn kein Datum angegeben wird, ist es heute.",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        time: { type: "string", description: "HH:MM" },
+        duration: { type: "string", description: "z.B. '1h', '30min'" },
+        date: { type: "string", description: "YYYY-MM-DD. Default heute." }
+      },
+      required: ["title"]
+    }
+  },
+  {
+    name: "add_shopping_item",
+    description: "Pack ein Item auf die Einkaufsliste. Wähl den passenden Gang.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        menge: { type: "string", description: "z.B. '500g', '2 Stk'" },
+        gang: {
+          type: "string",
+          description: "Eine von: Obst & Gemüse, Brot & Backwaren, Molkerei & Kühlwaren, Fisch & Fleisch, Trockenwaren & Regal-Mitte, Haushalt"
+        }
+      },
+      required: ["name", "gang"]
+    }
+  },
+  {
+    name: "check_shopping_item",
+    description: "Hak ein Item auf der Einkaufsliste ab (gekauft markieren). Sucht per Teilstring-Match im Namen.",
+    input_schema: {
+      type: "object",
+      properties: { name: { type: "string" } },
+      required: ["name"]
+    }
+  }
+];
+
 // ─── EYLA CHAT ────────────────────────────────────────────────────────────────
 function ChatScreen({ profile, log, events, logsByDate, setLog }) {
   const [messages, setMessages] = useState([]);
@@ -1401,15 +1502,119 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
     }]);
   }
 
+  // Tool-Executor – arbeitet direkt mit setLog (Live-State) und localStorage
+  // für Daten, die in anderen Screens leben. Andere Screens lesen beim Tab-
+  // Wechsel automatisch neu, daher reicht das.
+  async function executeTool(toolName, input) {
+    try {
+      switch(toolName) {
+        case "add_meal": {
+          const cal = parseInt(input.calories) || 0;
+          setLog(l => ({...l, meals: [...l.meals, {
+            id: Date.now(),
+            name: input.name,
+            calories: cal,
+            time: new Date().toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})
+          }]}));
+          return `Mahlzeit eingetragen: ${input.name}${cal>0?` (${cal} kcal)`:""}`;
+        }
+        case "set_water": {
+          const g = Math.max(0, Math.min(12, parseInt(input.glasses)||0));
+          setLog(l => ({...l, water: g}));
+          return `Wasser gesetzt auf ${g} Gläser`;
+        }
+        case "add_water": {
+          const delta = parseInt(input.delta)||0;
+          setLog(l => ({...l, water: Math.max(0, Math.min(12, (l.water||0) + delta))}));
+          return `Wasser ${delta>=0?"+":""}${delta} Gläser`;
+        }
+        case "set_sleep": {
+          setLog(l => ({...l, sleep: String(input.hours)}));
+          return `Schlaf: ${input.hours}h`;
+        }
+        case "set_energy": {
+          setLog(l => ({...l, energy: String(input.mood)}));
+          return `Energie: ${input.mood}`;
+        }
+        case "add_event": {
+          const todayK = isoDateKey(new Date());
+          const arr = await retrieve("eyla_local_events_v2", []) || [];
+          const newEv = {
+            id: Date.now(),
+            title: input.title,
+            time: input.time || "",
+            duration: input.duration || "",
+            date: input.date || todayK,
+            local: true
+          };
+          await persist("eyla_local_events_v2", [...arr, newEv]);
+          return `Termin: ${input.title}${input.time?` um ${input.time}`:""}${input.date && input.date !== todayK?` (${input.date})`:""}`;
+        }
+        case "add_shopping_item": {
+          const sh = await retrieve("eyla_shopping_v1", null);
+          if (!sh || !Array.isArray(sh.aisles)) return "Keine Einkaufsliste vorhanden – im Tab Essen → Liste einen Laden wählen.";
+          const targetAisle = sh.aisles.find(a => a.name === input.gang);
+          if (!targetAisle) return `Gang "${input.gang}" gibt's nicht.`;
+          const newSh = {
+            ...sh,
+            aisles: sh.aisles.map(a =>
+              a.name === input.gang ? {
+                ...a,
+                items: [...a.items, { name: input.name, menge: input.menge || "1", quelle: "manuell" }]
+              } : a
+            )
+          };
+          await persist("eyla_shopping_v1", newSh);
+          setShopping(newSh);
+          return `Zur Liste: ${input.name} (${input.gang})`;
+        }
+        case "check_shopping_item": {
+          const sh = await retrieve("eyla_shopping_v1", null);
+          if (!sh) return "Keine Einkaufsliste vorhanden.";
+          const q = input.name.toLowerCase();
+          let foundKey = null;
+          let foundName = null;
+          for (const a of sh.aisles) {
+            const it = a.items.find(i => i.name.toLowerCase().includes(q));
+            if (it) { foundKey = a.name + "::" + it.name; foundName = it.name; break; }
+          }
+          if (!foundKey) return `"${input.name}" nicht auf Liste.`;
+          const newSh = { ...sh, checked: { ...sh.checked, [foundKey]: true } };
+          await persist("eyla_shopping_v1", newSh);
+          setShopping(newSh);
+          return `Abgehakt: ${foundName}`;
+        }
+        default:
+          return `Unbekanntes Tool: ${toolName}`;
+      }
+    } catch(e) {
+      return `Fehler: ${e?.message || e}`;
+    }
+  }
+
+  // Wandelt Chat-Nachrichten in das Anthropic-API-Format um.
+  // Einfache Text-Nachrichten bleiben Strings; Tool-Roundtrip-Nachrichten
+  // haben bereits ein Array von content-Blocks.
+  function msgToApi(m) {
+    return { role: m.role, content: m.content };
+  }
+
   async function send(text) {
     const t = text||input.trim();
     if (!t||loading) return;
     setInput("");
-    const next = [...messages, {role:"user",content:t}];
-    setMessages(next);
+
+    // UI-Messages: schöne Anzeige-Liste
+    const baseUi = [...messages, { role:"user", content:t }];
+    setMessages(baseUi);
     setLoading(true);
+
+    // API-Konversation: kann content-blocks für Tool-Roundtrip enthalten
+    let convo = [...messages, { role:"user", content:t }];
+    const allActions = [];
+    let finalText = "";
+
     try {
-      // Frischer Kontext bei jedem Send (falls in anderen Tabs Änderungen)
       const [freshShopping, freshPlan] = await Promise.all([
         retrieve("eyla_shopping_v1", null),
         retrieve("eyla_plan_v1", null),
@@ -1420,15 +1625,58 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
       const weekHistory = weekHistoryFromLogs(logsByDate || {});
       const systemMsg = buildPrompt(profile, log, events, weekHistory, freshPlan, freshShopping);
 
-      const res = await fetch("/api/chat",{
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({ model:"claude-sonnet-4-5", max_tokens:1200,
-          system: systemMsg, messages: next })
-      });
-      const data = await res.json();
-      const reply = data.content?.find(b=>b.type==="text")?.text||"…";
-      setMessages([...next,{role:"assistant",content:reply}]);
-    } catch { setMessages([...next,{role:"assistant",content:"Kurze Unterbrechung."}]); }
+      // Tool-Loop: bis zu 5 Runden
+      let safety = 5;
+      while (safety-- > 0) {
+        const res = await fetch("/api/chat",{
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({
+            model:"claude-sonnet-4-5",
+            max_tokens:1500,
+            system: systemMsg,
+            tools: EYLA_TOOLS,
+            messages: convo.map(msgToApi)
+          })
+        });
+        const data = await res.json();
+        const contentArr = data.content || [];
+        const textBlocks = contentArr.filter(b=>b.type==="text").map(b=>b.text).filter(Boolean);
+        const toolUses = contentArr.filter(b=>b.type==="tool_use");
+
+        if (textBlocks.length > 0) finalText = textBlocks.join("\n");
+
+        if (toolUses.length === 0 || data.stop_reason !== "tool_use") break;
+
+        // Tools ausführen
+        const toolResults = [];
+        for (const tu of toolUses) {
+          const result = await executeTool(tu.name, tu.input || {});
+          allActions.push({ name: tu.name, result });
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: tu.id,
+            content: result
+          });
+        }
+        convo = [
+          ...convo,
+          { role: "assistant", content: contentArr },
+          { role: "user", content: toolResults }
+        ];
+      }
+
+      setMessages([
+        ...messages,
+        { role:"user", content:t },
+        { role:"assistant", content: finalText || "…", actions: allActions }
+      ]);
+    } catch {
+      setMessages([
+        ...messages,
+        { role:"user", content:t },
+        { role:"assistant", content:"Kurze Unterbrechung." }
+      ]);
+    }
     setLoading(false);
   }
 
@@ -1488,8 +1736,19 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
                   border:`1px solid ${isE?T.acc+"22":"#1e293b"}`,
                   borderRadius:isE?"3px 14px 14px 14px":"14px 3px 14px 14px",
                   padding:"11px 15px",color:isE?T.text:"#cbd5e1",fontSize:14,lineHeight:1.75 }}>
-                  {msg.content}
+                  {typeof msg.content === "string" ? msg.content : "(Tool-Roundtrip)"}
                 </div>
+                {/* Tool-Aktionen, die EYLA in diesem Turn ausgeführt hat */}
+                {Array.isArray(msg.actions) && msg.actions.length > 0 && (
+                  <div style={{ marginTop:6, display:"flex", flexDirection:"column", gap:3 }}>
+                    {msg.actions.map((a, ai) => (
+                      <div key={ai} style={{
+                        fontSize:10, fontFamily:T.mono, color:T.green,
+                        letterSpacing:.5, paddingLeft:2
+                      }}>✓ {a.result}</div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           );
