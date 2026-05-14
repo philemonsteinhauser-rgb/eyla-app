@@ -57,6 +57,20 @@ const DEFAULT_PROFILE = {
   targetWeeks: "",        // Wochen bis Zielgewicht
 };
 
+// Makronährstoff-Ziele aus Kalorien + Diät-Typ. Protein angemessen für Aktivität,
+// Fett ~28% der Kalorien, Kohlenhydrate fülllen den Rest.
+function macroTarget(profile) {
+  const ct = calorieTarget(profile);
+  const w = parseFloat(profile.weight) || 79;
+  const proteinPerKg = ct.type === "aufbauen" ? 2.0 : ct.type === "abnehmen" ? 1.8 : 1.4;
+  const protein = Math.round(w * proteinPerKg);
+  const fatKcal = Math.round(ct.target * 0.28);
+  const fat = Math.round(fatKcal / 9);
+  const carbsKcal = Math.max(0, ct.target - protein*4 - fatKcal);
+  const carbs = Math.round(carbsKcal / 4);
+  return { protein, fat, carbs, kcal: ct.target };
+}
+
 // Kalorienziel + TDEE berechnen aus Profil. Mifflin-St-Jeor +
 // pauschaler Aktivitätsoffset (+400). Geschlecht beeinflusst BMR-Konstante.
 // Sicherheitslimit: Defizit max. 1000, Min. 1200.
@@ -348,6 +362,7 @@ ERNÄHRUNGSZIEL: ${zielStr}
 
 HEUTE:
 - Gegessen: ${eaten} kcal (${restStr}) – ${log.meals.map(m=>m.name).join(", ")||"noch nichts"}
+- Makros: P ${log.meals.reduce((s,m)=>s+(m.protein||0),0)}g / C ${log.meals.reduce((s,m)=>s+(m.carbs||0),0)}g / F ${log.meals.reduce((s,m)=>s+(m.fat||0),0)}g (Ziel: P ${macroTarget(profile).protein}g / C ${macroTarget(profile).carbs}g / F ${macroTarget(profile).fat}g)
 - Wasser: ${log.water} Gläser (${(log.water*.25).toFixed(1)}L)
 - Energie: ${log.energy||"k.A."} | Schlaf: ${log.sleep||"k.A."}h
 
@@ -708,6 +723,10 @@ function Onboarding({ onDone }) {
 function TodayScreen({ profile, log, setLog }) {
   const [mealName, setMealName] = useState("");
   const [mealCal, setMealCal] = useState("");
+  const [mealP, setMealP] = useState("");
+  const [mealC, setMealC] = useState("");
+  const [mealF, setMealF] = useState("");
+  const [showMacros, setShowMacros] = useState(false);
   // Foto-Analyse-State
   const [photoData, setPhotoData] = useState(null);      // {mime, base64, dataUrl}
   const [analyzing, setAnalyzing] = useState(false);
@@ -715,7 +734,11 @@ function TodayScreen({ profile, log, setLog }) {
   const fileInputRef = useRef(null);
 
   const eaten = log.meals.reduce((s,m)=>s+(m.calories||0),0);
+  const eatenP = log.meals.reduce((s,m)=>s+(m.protein||0),0);
+  const eatenC = log.meals.reduce((s,m)=>s+(m.carbs||0),0);
+  const eatenF = log.meals.reduce((s,m)=>s+(m.fat||0),0);
   const ct = calorieTarget(profile);
+  const mt = macroTarget(profile);
   const tdee = ct.tdee;
   const targetKcal = ct.target;
 
@@ -730,8 +753,18 @@ function TodayScreen({ profile, log, setLog }) {
 
   function addMeal() {
     if (!mealName.trim()) return;
-    setLog(l=>({...l, meals:[...l.meals, {id:Date.now(),name:mealName.trim(),calories:parseInt(mealCal)||0,time:new Date().toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})}]}));
-    setMealName(""); setMealCal("");
+    const meal = {
+      id: Date.now(),
+      name: mealName.trim(),
+      calories: parseInt(mealCal) || 0,
+      protein: parseInt(mealP) || 0,
+      carbs:   parseInt(mealC) || 0,
+      fat:     parseInt(mealF) || 0,
+      time: new Date().toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})
+    };
+    setLog(l=>({...l, meals:[...l.meals, meal]}));
+    setMealName(""); setMealCal(""); setMealP(""); setMealC(""); setMealF("");
+    setShowMacros(false);
   }
 
   // Foto auswählen und an Claude Vision schicken
@@ -771,12 +804,12 @@ function TodayScreen({ profile, log, setLog }) {
         body: JSON.stringify({
           model: "claude-sonnet-4-5",
           max_tokens: 400,
-          system: "Du analysierst Essens-Fotos. Antworte IMMER in genau zwei Zeilen, ohne weitere Erklärungen:\nNAME: kurze Beschreibung der Mahlzeit (max 6 Wörter)\nKCAL: geschätzte Gesamtkalorien (nur Zahl, z.B. 620)",
+          system: "Du analysierst Essens-Fotos. Antworte IMMER in genau diesen 5 Zeilen, ohne weitere Erklärungen, keine Markdown:\nNAME: kurze Beschreibung der Mahlzeit (max 6 Wörter)\nKCAL: geschätzte Gesamtkalorien (nur Zahl, z.B. 620)\nPROTEIN: Protein in g (nur Zahl)\nCARBS: Kohlenhydrate in g (nur Zahl)\nFAT: Fett in g (nur Zahl)",
           messages: [{
             role:"user",
             content: [
               { type:"image", source:{ type:"base64", media_type:"image/jpeg", data: base64 } },
-              { type:"text", text:"Was ist auf dem Bild? Schätze die Gesamtkalorien." }
+              { type:"text", text:"Was ist auf dem Bild? Schätze Kalorien und Makronährstoffe (Protein, Kohlenhydrate, Fett in g)." }
             ]
           }]
         })
@@ -785,10 +818,17 @@ function TodayScreen({ profile, log, setLog }) {
       const text = data.content?.find(b=>b.type==="text")?.text || "";
       const nameMatch = text.match(/NAME:\s*(.+)/i);
       const kcalMatch = text.match(/KCAL:\s*(\d+)/i);
+      const pMatch = text.match(/PROTEIN:\s*(\d+)/i);
+      const cMatch = text.match(/CARBS:\s*(\d+)/i);
+      const fMatch = text.match(/FAT:\s*(\d+)/i);
       const name = nameMatch ? nameMatch[1].trim() : "Mahlzeit";
       const cal = kcalMatch ? parseInt(kcalMatch[1]) : 0;
       setMealName(name);
       setMealCal(String(cal));
+      if (pMatch) setMealP(pMatch[1]); else setMealP("");
+      if (cMatch) setMealC(cMatch[1]); else setMealC("");
+      if (fMatch) setMealF(fMatch[1]); else setMealF("");
+      setShowMacros(true);
     } catch(e) {
       setAnalysisError("Konnte das Bild nicht analysieren – versuch's nochmal oder tipp ein.");
     }
@@ -880,6 +920,14 @@ function TodayScreen({ profile, log, setLog }) {
                 {ct.dailyDelta > 0 && <span style={{ color:T.gold,  marginLeft:4 }}>↑</span>}
               </span>
             </div>
+            {/* Daily Makros */}
+            {(eatenP > 0 || eatenC > 0 || eatenF > 0 || log.meals.length > 0) && (
+              <div style={{ display:"flex", gap:10, marginTop:6, fontFamily:T.mono, fontSize:10 }}>
+                <span style={{ color:eatenP >= mt.protein ? T.green : T.rose }}>P {eatenP}<span style={{ color:T.muted }}>/{mt.protein}</span></span>
+                <span style={{ color:T.gold }}>C {eatenC}<span style={{ color:T.muted }}>/{mt.carbs}</span></span>
+                <span style={{ color:T.green }}>F {eatenF}<span style={{ color:T.muted }}>/{mt.fat}</span></span>
+              </div>
+            )}
           </div>
           <div style={{ width:48,height:48,borderRadius:"50%",
             background:`conic-gradient(${T.acc} ${Math.min(100,Math.round(eaten/targetKcal*100))}%,${T.bg2} 0)`,
@@ -950,6 +998,25 @@ function TodayScreen({ profile, log, setLog }) {
             <input value={mealCal} onChange={e=>setMealCal(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addMeal()}
               placeholder="kcal" type="number" style={{ width:70,background:"transparent",border:`1px solid ${T.borderS}`,borderRadius:8,padding:"9px 10px",color:T.text,fontFamily:T.mono,fontSize:13,outline:"none" }}/>
           </div>
+
+          {/* Makros (optional, expandierbar) */}
+          {showMacros ? (
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6, marginBottom:8, animation:"fadeUp .2s ease both" }}>
+              {[["P","mealP",mealP,setMealP,T.rose],["C","mealC",mealC,setMealC,T.gold],["F","mealF",mealF,setMealF,T.green]].map(([lbl,k,v,setter,col]) => (
+                <div key={k} style={{ display:"flex", alignItems:"center", background:"transparent", border:`1px solid ${T.borderS}`, borderRadius:8, padding:"6px 10px", gap:6 }}>
+                  <span style={{ color:col, fontFamily:T.mono, fontSize:11, fontWeight:700 }}>{lbl}</span>
+                  <input value={v} onChange={e=>setter(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addMeal()}
+                    placeholder="g" type="number" style={{ flex:1, background:"transparent", border:"none", color:T.text, fontFamily:T.mono, fontSize:12, outline:"none", minWidth:0, width:"100%" }}/>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <button onClick={()=>setShowMacros(true)} style={{
+              background:"transparent", border:"none", color:T.muted,
+              fontFamily:T.serif, fontSize:11, fontStyle:"italic", cursor:"pointer",
+              padding:"0 0 8px", textDecoration:"underline dotted"
+            }}>+ Makros (P / C / F)</button>
+          )}
           <div style={{ display:"flex", gap:8, alignItems:"center" }}>
             <VoiceBtn toggle={toggle} listening={listening} supported={supported}/>
             <button onClick={()=>fileInputRef.current?.click()} disabled={analyzing} style={{
@@ -1031,6 +1098,7 @@ function MealRow({ meal, onEdit, onDelete }) {
     );
   }
 
+  const hasMacros = (meal.protein || meal.carbs || meal.fat);
   return (
     <div onClick={()=>setEditing(true)} style={{
       display:"flex", justifyContent:"space-between", alignItems:"center",
@@ -1039,7 +1107,16 @@ function MealRow({ meal, onEdit, onDelete }) {
     }}
     onMouseEnter={e=>e.currentTarget.style.background=T.acc+"06"}
     onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-      <div style={{ color:T.text, fontSize:13 }}>{meal.name}</div>
+      <div style={{ flex:1, minWidth:0 }}>
+        <div style={{ color:T.text, fontSize:13 }}>{meal.name}</div>
+        {hasMacros && (
+          <div style={{ display:"flex", gap:8, marginTop:2, fontFamily:T.mono, fontSize:9 }}>
+            {meal.protein > 0 && <span style={{ color:T.rose }}>P {meal.protein}g</span>}
+            {meal.carbs   > 0 && <span style={{ color:T.gold }}>C {meal.carbs}g</span>}
+            {meal.fat     > 0 && <span style={{ color:T.green }}>F {meal.fat}g</span>}
+          </div>
+        )}
+      </div>
       <div style={{ display:"flex", alignItems:"center", gap:10 }}>
         {meal.calories>0 && <div style={{ color:T.acc, fontFamily:T.mono, fontSize:12 }}>{meal.calories}</div>}
         <div style={{ color:T.muted, fontFamily:T.mono, fontSize:10 }}>{meal.time}</div>
@@ -1517,12 +1594,15 @@ function WeekScreen({ logsByDate, profile }) {
 const EYLA_TOOLS = [
   {
     name: "add_meal",
-    description: "Trag eine Mahlzeit in den heutigen Tageslog ein. Verwende dies wenn der User sagt was er gegessen hat oder plant zu essen.",
+    description: "Trag eine Mahlzeit in den heutigen Tageslog ein. Verwende dies wenn der User sagt was er gegessen hat oder plant zu essen. Wenn möglich auch Makronährstoffe schätzen.",
     input_schema: {
       type: "object",
       properties: {
         name: { type: "string", description: "Kurzer Name der Mahlzeit" },
-        calories: { type: "number", description: "Geschätzte Kalorien als Zahl" }
+        calories: { type: "number", description: "Geschätzte Kalorien als Zahl" },
+        protein: { type: "number", description: "Protein in g (geschätzt)" },
+        carbs:   { type: "number", description: "Kohlenhydrate in g (geschätzt)" },
+        fat:     { type: "number", description: "Fett in g (geschätzt)" }
       },
       required: ["name"]
     }
@@ -1673,13 +1753,20 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
       switch(toolName) {
         case "add_meal": {
           const cal = parseInt(input.calories) || 0;
+          const p = parseInt(input.protein) || 0;
+          const c = parseInt(input.carbs) || 0;
+          const f = parseInt(input.fat) || 0;
           setLog(l => ({...l, meals: [...l.meals, {
             id: Date.now(),
             name: input.name,
             calories: cal,
+            protein: p,
+            carbs: c,
+            fat: f,
             time: new Date().toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})
           }]}));
-          return `Mahlzeit eingetragen: ${input.name}${cal>0?` (${cal} kcal)`:""}`;
+          const macroStr = (p||c||f) ? ` P${p} C${c} F${f}` : "";
+          return `Mahlzeit eingetragen: ${input.name}${cal>0?` (${cal} kcal)`:""}${macroStr}`;
         }
         case "set_water": {
           const g = Math.max(0, Math.min(12, parseInt(input.glasses)||0));
