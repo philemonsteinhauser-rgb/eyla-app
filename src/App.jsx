@@ -38,6 +38,8 @@ const T = {
   sans:   "'Trebuchet MS', 'Gill Sans', sans-serif",
 };
 
+const GOALS = ["Langfristig fit bleiben","Mehr Energie","Gesünder essen","Gewicht halten","Besser schlafen","Leistung steigern"];
+
 const DEFAULT_PROFILE = {
   name: "Phil",
   sex: "m",               // "m" | "f" | "d"
@@ -252,7 +254,7 @@ HALTUNG: Du arbeitest mit dem Vertrauen, dass der Mensch geschaffen ist und in d
 WISSENSCHAFTS-BASIS: Mediterrane Ernährung, Whole Foods (NOVA 1+2), adäquates Protein, Ballaststoffe, pflanzliche Vielfalt, Time-Restricted Eating bei Abnehmen erlaubt. Du kennst die Evidenz, gibst sie aber nicht als Vortrag aus.
 
 PROFIL: ${profile.name}, ${profile.age}J, ${profile.weight}kg, ${profile.height}cm
-Aktivität: ${profile.activity||"k.A."} | Ziel: ${profile.goal||"Wohlbefinden"}
+Aktivität: ${profile.activity||"k.A."} | Ziele: ${Array.isArray(profile.goal) ? (profile.goal.join(", ")||"Wohlbefinden") : (profile.goal||"Wohlbefinden")}
 Vorlieben: ${profile.preferences?.join(", ")||"k.A."} | Intoleranzen: ${profile.intolerances?.join(", ")||"keine"}
 
 ERNÄHRUNGSZIEL: ${zielStr}
@@ -404,13 +406,13 @@ function VoiceBtn({ toggle, listening, supported }) {
 // ─── ONBOARDING ───────────────────────────────────────────────────────────────
 function Onboarding({ onDone }) {
   const [step, setStep] = useState(0);
-  const [p, setP] = useState({ name:"", sex:"", age:"", weight:"", height:"", goal:"", activity:"", preferences:"", intolerances:"", apps:[], goalType:"halten", targetWeight:"", targetWeeks:"" });
+  const [p, setP] = useState({ name:"", sex:"", age:"", weight:"", height:"", goal:[], activity:"", preferences:"", intolerances:"", apps:[], goalType:"halten", targetWeight:"", targetWeeks:"" });
   const set = (k,v) => setP(prev=>({...prev,[k]:v}));
   const iStyle = { width:"100%", background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:10,
     padding:"12px 16px", color:T.text, fontSize:14, fontFamily:T.serif, outline:"none",
     fontStyle:"italic", boxSizing:"border-box", transition:"border-color .2s" };
 
-  const goals = ["Langfristig fit bleiben","Mehr Energie","Gesünder essen","Gewicht halten","Besser schlafen","Leistung steigern"];
+  const goals = GOALS;
   const apps  = ["Apple Health","Google Fit","Garmin","Polar","MyFitnessPal","Whoop","Oura Ring"];
 
   const steps = [
@@ -463,16 +465,23 @@ function Onboarding({ onDone }) {
         </div>
       </div>
     )},
-    { title:"Was willst du?", sub:"Kein Muss. Nur eine Richtung.", content:(
+    { title:"Was willst du?", sub:"Mehrere möglich.", content:(
       <div>
-        <Lbl style={{ marginBottom:12 }}>Mein Ziel</Lbl>
+        <Lbl style={{ marginBottom:12 }}>Meine Ziele</Lbl>
         <div style={{ display:"flex", flexWrap:"wrap", gap:8, marginBottom:20 }}>
-          {goals.map(g=>(
-            <button key={g} onClick={()=>set("goal",g)} style={{ background:p.goal===g?T.acc+"22":"transparent",
-              border:`1px solid ${p.goal===g?T.acc:T.borderS}`, borderRadius:20, padding:"8px 16px",
-              color:p.goal===g?T.text:T.muted, fontFamily:T.serif, fontSize:13, cursor:"pointer",
-              fontStyle:"italic", transition:"all .2s" }}>{g}</button>
-          ))}
+          {goals.map(g=>{
+            const sel = Array.isArray(p.goal) ? p.goal.includes(g) : p.goal===g;
+            return (
+              <button key={g} onClick={()=>{
+                const current = Array.isArray(p.goal) ? p.goal : (p.goal ? [p.goal] : []);
+                const next = current.includes(g) ? current.filter(x=>x!==g) : [...current, g];
+                set("goal", next);
+              }} style={{ background:sel?T.acc+"22":"transparent",
+                border:`1px solid ${sel?T.acc:T.borderS}`, borderRadius:20, padding:"8px 16px",
+                color:sel?T.text:T.muted, fontFamily:T.serif, fontSize:13, cursor:"pointer",
+                fontStyle:"italic", transition:"all .2s" }}>{g}</button>
+            );
+          })}
         </div>
         <Lbl style={{ marginBottom:8 }}>Wie aktiv bist du?</Lbl>
         <input value={p.activity} onChange={e=>set("activity",e.target.value)}
@@ -1472,7 +1481,7 @@ TIPP: [Konkreter Hinweis für diesen Tag – Timing, Zubereitung, Variation. Nic
                   <div key={m} style={{ marginBottom:9 }}>
                     <div style={{ display:"flex", gap:6, alignItems:"baseline" }}>
                       <span style={{ fontSize:11 }}>{icons[m]}</span>
-                      <Lbl style={{ fontSize:8 }}>{labels[m]}</Lbl>
+                      <Lbl style={{ fontSize:10 }}>{labels[m]}</Lbl>
                     </div>
                     <div style={{ color:T.mid, fontSize:12, paddingLeft:18, fontStyle:"italic", fontFamily:T.serif }}>{day[m]}</div>
                   </div>
@@ -1937,19 +1946,36 @@ function ProfilScreen({ profile, onReset, onUpdate }) {
         <Card style={{ marginBottom:12 }}>
           <Lbl style={{ marginBottom:10 }}>NAME & ZIEL</Lbl>
           <div style={{ marginBottom:12 }}>
-            <Lbl style={{ marginBottom:6, fontSize:8 }}>NAME</Lbl>
+            <Lbl style={{ marginBottom:6, fontSize:10 }}>NAME</Lbl>
             <input value={draft.name||""} onChange={e=>set("name",e.target.value)} style={inputStyle}/>
           </div>
           <div>
-            <Lbl style={{ marginBottom:6, fontSize:8 }}>ZIEL</Lbl>
-            <input value={draft.goal||""} onChange={e=>set("goal",e.target.value)} style={inputStyle} placeholder="z.B. fit bleiben"/>
+            <Lbl style={{ marginBottom:8, fontSize:10 }}>ZIELE (MEHRERE)</Lbl>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+              {GOALS.map(g=>{
+                const currentArr = Array.isArray(draft.goal) ? draft.goal : (draft.goal ? [draft.goal] : []);
+                const sel = currentArr.includes(g);
+                return (
+                  <button key={g} onClick={()=>{
+                    const next = sel ? currentArr.filter(x=>x!==g) : [...currentArr, g];
+                    set("goal", next);
+                  }} style={{
+                    background:sel?T.acc+"22":"transparent",
+                    border:`1px solid ${sel?T.acc:T.borderS}`, borderRadius:18,
+                    padding:"6px 12px", color:sel?T.text:T.muted,
+                    fontFamily:T.serif, fontSize:12, cursor:"pointer",
+                    fontStyle:sel?"normal":"italic", transition:"all .2s"
+                  }}>{g}</button>
+                );
+              })}
+            </div>
           </div>
         </Card>
 
         <Card style={{ marginBottom:12 }}>
           <Lbl style={{ marginBottom:10 }}>KÖRPERDATEN</Lbl>
           <div style={{ marginBottom:12 }}>
-            <Lbl style={{ marginBottom:6, fontSize:8 }}>GESCHLECHT</Lbl>
+            <Lbl style={{ marginBottom:6, fontSize:10 }}>GESCHLECHT</Lbl>
             <div style={{ display:"flex", gap:6 }}>
               {[
                 {id:"m", label:"♂ Mann"},
@@ -1971,13 +1997,13 @@ function ProfilScreen({ profile, onReset, onUpdate }) {
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10, marginBottom:12 }}>
             {[["ALTER","age","Jahre"],["GEWICHT","weight","kg"],["GRÖSSE","height","cm"]].map(([l,k,ph])=>(
               <div key={k}>
-                <Lbl style={{ marginBottom:6, fontSize:8 }}>{l}</Lbl>
+                <Lbl style={{ marginBottom:6, fontSize:10 }}>{l}</Lbl>
                 <input value={draft[k]||""} onChange={e=>set(k,e.target.value)} type="number" placeholder={ph} style={numStyle}/>
               </div>
             ))}
           </div>
           <div>
-            <Lbl style={{ marginBottom:6, fontSize:8 }}>AKTIVITÄT</Lbl>
+            <Lbl style={{ marginBottom:6, fontSize:10 }}>AKTIVITÄT</Lbl>
             <input value={draft.activity||""} onChange={e=>set("activity",e.target.value)} placeholder="z.B. 5x Woche Beweglichkeit" style={inputStyle}/>
           </div>
         </Card>
@@ -2004,11 +2030,11 @@ function ProfilScreen({ profile, onReset, onUpdate }) {
           {(draft.goalType && draft.goalType !== "halten") && (
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
               <div>
-                <Lbl style={{ marginBottom:6, fontSize:8 }}>ZIELGEWICHT (KG)</Lbl>
+                <Lbl style={{ marginBottom:6, fontSize:10 }}>ZIELGEWICHT (KG)</Lbl>
                 <input value={draft.targetWeight||""} onChange={e=>set("targetWeight",e.target.value)} type="number" placeholder="kg" style={numStyle}/>
               </div>
               <div>
-                <Lbl style={{ marginBottom:6, fontSize:8 }}>IN WOCHEN</Lbl>
+                <Lbl style={{ marginBottom:6, fontSize:10 }}>IN WOCHEN</Lbl>
                 <input value={draft.targetWeeks||""} onChange={e=>set("targetWeeks",e.target.value)} type="number" placeholder="z.B. 12" style={numStyle}/>
               </div>
             </div>
@@ -2028,11 +2054,11 @@ function ProfilScreen({ profile, onReset, onUpdate }) {
         <Card style={{ marginBottom:12 }}>
           <Lbl style={{ marginBottom:10 }}>KÜCHE</Lbl>
           <div style={{ marginBottom:12 }}>
-            <Lbl style={{ marginBottom:6, fontSize:8 }}>VORLIEBEN (KOMMAGETRENNT)</Lbl>
+            <Lbl style={{ marginBottom:6, fontSize:10 }}>VORLIEBEN (KOMMAGETRENNT)</Lbl>
             <input value={draft.preferences||""} onChange={e=>set("preferences",e.target.value)} placeholder="z.B. Mediterran, Proteinreich" style={inputStyle}/>
           </div>
           <div>
-            <Lbl style={{ marginBottom:6, fontSize:8 }}>INTOLERANZEN (KOMMAGETRENNT)</Lbl>
+            <Lbl style={{ marginBottom:6, fontSize:10 }}>INTOLERANZEN (KOMMAGETRENNT)</Lbl>
             <input value={draft.intolerances||""} onChange={e=>set("intolerances",e.target.value)} placeholder="z.B. Laktose, Gluten" style={inputStyle}/>
           </div>
         </Card>
@@ -2064,7 +2090,7 @@ function ProfilScreen({ profile, onReset, onUpdate }) {
         <div style={{ flex:1, minWidth:0 }}>
           <Lbl style={{ marginBottom:5 }}>DEIN PROFIL</Lbl>
           <h2 style={{ fontSize:22,fontWeight:300,color:T.text,margin:0 }}>{profile.name}</h2>
-          <p style={{ color:T.muted,fontStyle:"italic",fontSize:12,margin:"4px 0 0",fontFamily:T.serif }}>{profile.goal||"Wohlbefinden"}</p>
+          <p style={{ color:T.muted,fontStyle:"italic",fontSize:12,margin:"4px 0 0",fontFamily:T.serif }}>{Array.isArray(profile.goal) ? (profile.goal.join(", ")||"Wohlbefinden") : (profile.goal||"Wohlbefinden")}</p>
         </div>
         <button onClick={startEdit} style={{
           background:T.acc+"18", border:`1px solid ${T.acc}44`, borderRadius:10,
@@ -2076,7 +2102,7 @@ function ProfilScreen({ profile, onReset, onUpdate }) {
         <Lbl style={{ marginBottom:14 }}>KÖRPERDATEN</Lbl>
         <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:14 }}>
           {[["Alter",`${profile.age}J`],["Gewicht",`${profile.weight}kg`],["Größe",`${profile.height}cm`],["Aktivität",profile.activity||"–"]].map(([k,v])=>(
-            <div key={k}><Lbl style={{ marginBottom:3,fontSize:8 }}>{k}</Lbl><div style={{ color:T.text,fontSize:14 }}>{v}</div></div>
+            <div key={k}><Lbl style={{ marginBottom:3,fontSize:10 }}>{k}</Lbl><div style={{ color:T.text,fontSize:14 }}>{v}</div></div>
           ))}
         </div>
       </Card>
@@ -2101,11 +2127,11 @@ function ProfilScreen({ profile, onReset, onUpdate }) {
             </div>
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
               <div>
-                <Lbl style={{ marginBottom:3, fontSize:8 }}>TDEE</Lbl>
+                <Lbl style={{ marginBottom:3, fontSize:10 }}>TDEE</Lbl>
                 <div style={{ color:T.muted, fontSize:14, fontFamily:T.mono }}>{ct.tdee} kcal</div>
               </div>
               <div>
-                <Lbl style={{ marginBottom:3, fontSize:8 }}>TAGESZIEL</Lbl>
+                <Lbl style={{ marginBottom:3, fontSize:10 }}>TAGESZIEL</Lbl>
                 <div style={{ color:typeCol, fontSize:14, fontFamily:T.mono }}>
                   {ct.target} kcal
                   {ct.dailyDelta !== 0 && (
