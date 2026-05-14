@@ -1279,27 +1279,50 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
 }
 
 // ─── WOCHEN SCREEN ────────────────────────────────────────────────────────────
-function WeekScreen({ logsByDate }) {
+function WeekScreen({ logsByDate, profile }) {
   const days = lastNDays(7);
+  const targetK = calorieTarget(profile || {}).target;
+
+  // Per-Day-Werte (auch für Charts)
+  const dayData = days.map(key => {
+    const l = logsByDate?.[key];
+    const kcal = l?.meals?.reduce((s,m)=>s+(m.calories||0),0) || 0;
+    const sleepNum = parseFloat(String(l?.sleep||"").replace("+","")) || 0;
+    return {
+      key,
+      water: l?.water || 0,
+      sleepNum,
+      kcal,
+      hasAny: !!(l && ((l.meals?.length||0) > 0 || l.water > 0 || l.sleep || l.energy)),
+    };
+  });
 
   // Aggregate für Summary
-  const stats = days.reduce((acc, key) => {
-    const l = logsByDate?.[key];
-    if (!l) return acc;
-    const kcal = l.meals?.reduce((s,m)=>s+(m.calories||0),0) || 0;
-    const hasAny = (l.meals?.length||0) > 0 || l.water > 0 || l.sleep || l.energy;
-    if (!hasAny) return acc;
+  const stats = dayData.reduce((acc, d) => {
+    if (!d.hasAny) return acc;
     acc.count++;
-    acc.water += l.water || 0;
-    acc.kcal += kcal;
-    const sleepNum = parseFloat(String(l.sleep).replace("+","")) || 0;
-    if (sleepNum > 0) { acc.sleep += sleepNum; acc.sleepN++; }
+    acc.water += d.water;
+    acc.kcal += d.kcal;
+    if (d.sleepNum > 0) { acc.sleep += d.sleepNum; acc.sleepN++; }
     return acc;
   }, { count:0, water:0, kcal:0, sleep:0, sleepN:0 });
 
   const avgWater = stats.count>0 ? (stats.water/stats.count).toFixed(1) : "0";
   const avgSleep = stats.sleepN>0 ? (stats.sleep/stats.sleepN).toFixed(1) : "–";
   const avgKcal  = stats.count>0 ? Math.round(stats.kcal/stats.count) : 0;
+
+  // Streaks (heute zuerst, rückwärts)
+  function streakOf(predicate) {
+    let s = 0;
+    for (const d of dayData) {
+      if (predicate(d)) s++;
+      else break;
+    }
+    return s;
+  }
+  const waterStreak = streakOf(d => d.water >= 8);
+  const sleepStreak = streakOf(d => d.sleepNum >= 7);
+  const mealStreak  = streakOf(d => d.hasAny && (logsByDate?.[d.key]?.meals?.length||0) > 0);
 
   function labelFor(dateKey, idx) {
     if (idx === 0) return "Heute";
@@ -1310,9 +1333,45 @@ function WeekScreen({ logsByDate }) {
 
   function moodEmoji(energy) {
     if (!energy) return "·";
-    // Extrahiere erstes Emoji aus dem Energie-String
     const m = energy.match(/\p{Emoji}/u);
     return m ? m[0] : "·";
+  }
+
+  // Mini-Bar-Chart Komponente (SVG-frei, pure DOM)
+  function MiniBars({ values, max, color, targetLine }) {
+    return (
+      <div style={{ position:"relative", display:"flex", gap:5, height:50, alignItems:"flex-end", padding:"4px 0" }}>
+        {/* Target-Linie */}
+        {targetLine && max > 0 && (
+          <div style={{
+            position:"absolute", left:0, right:0,
+            bottom: `${Math.min(98, (targetLine/max)*100)}%`,
+            height:1, borderTop:`1px dashed ${T.muted}55`, pointerEvents:"none"
+          }}/>
+        )}
+        {values.slice().reverse().map((v, i) => (
+          <div key={i} style={{
+            flex:1,
+            height: max > 0 ? `${Math.max(2, Math.min(100, (v/max)*100))}%` : "2px",
+            background: v > 0 ? color : T.faint,
+            borderRadius:2,
+            opacity: v > 0 ? 1 : 0.4,
+            transition:"height .3s"
+          }} title={`${v}`}/>
+        ))}
+      </div>
+    );
+  }
+  function chartLabels() {
+    return (
+      <div style={{ display:"flex", gap:5, fontSize:9, color:T.muted, fontFamily:T.mono, marginTop:4 }}>
+        {dayData.slice().reverse().map((d, i) => {
+          const dt = new Date(d.key);
+          const label = i === dayData.length-1 ? "H" : dt.toLocaleDateString("de-DE",{weekday:"narrow"});
+          return <div key={i} style={{ flex:1, textAlign:"center" }}>{label}</div>;
+        })}
+      </div>
+    );
   }
 
   return (
@@ -1324,8 +1383,29 @@ function WeekScreen({ logsByDate }) {
         </h2>
       </div>
 
+      {/* Streaks */}
+      {(waterStreak > 0 || sleepStreak > 0 || mealStreak > 0) && (
+        <Card style={{ marginBottom:12, padding:"14px 18px" }}>
+          <Lbl style={{ marginBottom:10 }}>STREAKS</Lbl>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10 }}>
+            {[
+              { label:"💧 Wasser ≥8", value:waterStreak, color:T.acc },
+              { label:"😴 Schlaf ≥7h", value:sleepStreak, color:T.mid },
+              { label:"🍽 Mahlzeit", value:mealStreak, color:T.gold },
+            ].map(s => (
+              <div key={s.label}>
+                <div style={{ fontSize:10, color:T.muted, marginBottom:2, fontStyle:"italic", fontFamily:T.serif }}>{s.label}</div>
+                <div style={{ fontSize:18, fontFamily:T.mono, color:s.value > 0 ? s.color : T.muted }}>
+                  {s.value}<span style={{ fontSize:10, color:T.muted, marginLeft:3 }}>Tag{s.value===1?"":"e"}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
       {/* Summary */}
-      <Card accent style={{ marginBottom:14 }}>
+      <Card accent style={{ marginBottom:12 }}>
         <Lbl style={{ marginBottom:12 }}>SCHNITTWERTE</Lbl>
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:14 }}>
           <div>
@@ -1353,6 +1433,30 @@ function WeekScreen({ logsByDate }) {
           </p>
         )}
       </Card>
+
+      {/* Charts */}
+      {stats.count > 0 && (
+        <Card style={{ marginBottom:12, padding:"14px 18px" }}>
+          <Lbl style={{ marginBottom:10 }}>VERLAUF</Lbl>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:14 }}>
+            <div>
+              <div style={{ fontSize:10, color:T.muted, marginBottom:4, fontFamily:T.mono, letterSpacing:1 }}>💧 WASSER</div>
+              <MiniBars values={dayData.map(d=>d.water)} max={12} color={T.acc} targetLine={8}/>
+              {chartLabels()}
+            </div>
+            <div>
+              <div style={{ fontSize:10, color:T.muted, marginBottom:4, fontFamily:T.mono, letterSpacing:1 }}>😴 SCHLAF</div>
+              <MiniBars values={dayData.map(d=>d.sleepNum)} max={10} color={T.mid} targetLine={7}/>
+              {chartLabels()}
+            </div>
+            <div>
+              <div style={{ fontSize:10, color:T.muted, marginBottom:4, fontFamily:T.mono, letterSpacing:1 }}>🍽 KCAL</div>
+              <MiniBars values={dayData.map(d=>d.kcal)} max={Math.max(targetK*1.4, ...dayData.map(d=>d.kcal))} color={T.gold} targetLine={targetK}/>
+              {chartLabels()}
+            </div>
+          </div>
+        </Card>
+      )}
 
       {/* Tagesliste */}
       <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
@@ -3099,7 +3203,7 @@ function AppContent() {
             {tagSub==="kalender" && <KalenderScreen events={events} eventsLoading={eventsLoading} onRefresh={loadCalendar} profile={profile} log={log}/>}
           </>
         )}
-        {screen==="woche" && <WeekScreen logsByDate={logsByDate}/>}
+        {screen==="woche" && <WeekScreen logsByDate={logsByDate} profile={profile}/>}
         {screen==="chat"  && <ChatScreen profile={profile} log={log} events={events} logsByDate={logsByDate} setLog={setLog}/>}
         {screen==="essen" && (
           <>
