@@ -1461,7 +1461,8 @@ TIPP: [Konkreter Hinweis für diesen Tag – Timing, Zubereitung, Variation. Nic
       const introMatch = text.match(/INTRO:\s*(.+)/);
       if (introMatch) setIntro(introMatch[1].trim());
 
-      const blocks = text.split(/TAG:\s*/g).slice(1);
+      // Nur auf TAG: am Zeilenanfang splitten – sonst matcht es das TAG in MITTAG.
+      const blocks = text.split(/^\s*TAG:\s*/gm).slice(1);
       const parsed = blocks.map(block => {
         const lines = block.split("\n").map(l => l.trim()).filter(Boolean);
         const day = lines[0]?.replace(/[*_#]/g, "").trim() || "";
