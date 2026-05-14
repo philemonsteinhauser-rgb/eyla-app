@@ -419,7 +419,7 @@ function Onboarding({ onDone }) {
         <div style={{ display:"flex", justifyContent:"center", marginBottom:32 }}><EylaOrb size={90}/></div>
         <p style={{ color:T.mid, lineHeight:1.9, fontStyle:"italic", fontSize:15, fontFamily:T.serif }}>
           Du erzählst, was du isst, wie du schläfst, was ansteht.<br/>
-          Ich denke mit, merke mir.<br/>
+          Ich denke mit. Ich erinnere dich.<br/>
           Keine Trends. Keine Vorhaltungen.<br/>
           Was dein Körper braucht, ist meist schon da –<br/>
           ich helfe dir, hinzuhören.
