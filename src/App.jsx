@@ -1743,6 +1743,49 @@ function ShoppingScreen() {
   const checkedCount = Object.values(data.checked).filter(Boolean).length;
   const progress = totalItems > 0 ? Math.round((checkedCount/totalItems)*100) : 0;
 
+  // Wenn noch kein Laden gewählt: groß die Frage stellen, Liste verstecken
+  if (!data.storeId) {
+    return (
+      <div>
+        <div style={{ marginBottom:20 }}>
+          <Lbl style={{ marginBottom:6 }}>EINKAUFSLISTE</Lbl>
+          <h2 style={{ fontSize:22, fontWeight:300, color:T.text, margin:"0 0 4px", display:"flex", alignItems:"center", gap:10 }}>
+            <span style={{ fontSize:22 }}>🛒</span> Wo gehst du heute einkaufen?
+          </h2>
+          <p style={{ color:T.mid, fontSize:13, fontStyle:"italic", fontFamily:T.serif, margin:"6px 0 0", lineHeight:1.6 }}>
+            Dann sortiere ich die Liste so wie der Laden aufgebaut ist –<br/>
+            damit du nicht hin und her läufst.
+          </p>
+        </div>
+
+        <Card accent style={{ padding:"18px 20px" }}>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+            {Object.entries(STORES).map(([id, st]) => {
+              const isCustom = id === "custom";
+              return (
+                <button key={id} onClick={()=>selectStore(id)} style={{
+                  padding:"14px 16px",
+                  borderRadius:12,
+                  background: isCustom ? "transparent" : T.bg2,
+                  border:`1px solid ${isCustom ? T.borderS : T.acc+"55"}`,
+                  color: isCustom ? T.muted : T.acc,
+                  fontFamily:T.serif, fontSize:15,
+                  cursor:"pointer",
+                  fontStyle: isCustom ? "italic" : "normal",
+                  transition:"all .2s",
+                  textAlign:"left"
+                }}>{st.name}</button>
+              );
+            })}
+          </div>
+          <p style={{ color:T.muted, fontSize:11, fontStyle:"italic", fontFamily:T.serif, margin:"14px 0 0", textAlign:"center" }}>
+            Kannst später jederzeit den Laden wechseln.
+          </p>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div>
       <div style={{ marginBottom:18 }}>
@@ -1750,18 +1793,14 @@ function ShoppingScreen() {
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:10 }}>
           <h2 style={{ fontSize:20, fontWeight:300, color:T.text, margin:0, display:"flex", alignItems:"center", gap:8 }}>
             <span style={{ fontSize:20 }}>🛒</span>
-            {data.storeId ? (
-              <span style={{ color:T.acc }}>{data.storeId === "custom" ? (data.store||"Eigener") : STORES[data.storeId].name}</span>
-            ) : (
-              <span style={{ color:T.muted, fontStyle:"italic" }}>Laden wählen</span>
-            )}
+            <span style={{ color:T.acc }}>{data.storeId === "custom" ? (data.store||"Eigener") : STORES[data.storeId].name}</span>
           </h2>
           <div style={{ fontFamily:T.mono, fontSize:11, color:T.muted }}>
             <span style={{ color:T.acc }}>{checkedCount}</span>/{totalItems}
           </div>
         </div>
 
-        {/* Store-Picker */}
+        {/* Store-Picker (klein, zum Wechseln) */}
         <div style={{
           display:"flex", gap:6, marginTop:12, overflowX:"auto",
           paddingBottom:6, scrollbarWidth:"none"
