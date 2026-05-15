@@ -2279,15 +2279,26 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
 
       const u = new SpeechSynthesisUtterance(text);
       u.lang = "de-DE";
-      u.rate = 1.0;
+      u.rate = 1.15;   // bisschen flotter als default für natürlichen Klang
       u.pitch = 1.0;
       u.volume = 1.0;
 
-      // Beste deutsche Stimme wenn vorhanden
+      // Stimmen-Priorität:
+      // 1. Premium iOS-Stimmen (Anna/Helena/Petra haben sehr gute Qualität)
+      // 2. Alles mit "Premium" oder "Enhanced" im Namen
+      // 3. Weibliche deutsche Stimmen
+      // 4. Irgendeine deutsche Stimme
       const list = voices.length ? voices : (window.speechSynthesis.getVoices() || []);
-      const de = list.find(v => v.lang?.toLowerCase().startsWith("de"))
-              || list.find(v => v.lang?.toLowerCase().includes("de"));
-      if (de) u.voice = de;
+      const deVoices = list.filter(v => v.lang?.toLowerCase().startsWith("de"));
+      const preferredNames = ["anna", "helena", "petra", "vicki", "katharina", "marlene"];
+      const findByName = (n) => deVoices.find(v => v.name?.toLowerCase().includes(n));
+      const u_voice =
+        preferredNames.map(findByName).find(Boolean) ||
+        deVoices.find(v => /premium|enhanced|natural|neural/i.test(v.name||"")) ||
+        deVoices.find(v => /female|frau/i.test(v.name||"")) ||
+        deVoices[0] ||
+        list.find(v => v.lang?.toLowerCase().includes("de"));
+      if (u_voice) u.voice = u_voice;
 
       u.onstart = () => setSpeaking(true);
       u.onend   = () => setSpeaking(false);
