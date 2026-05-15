@@ -4175,12 +4175,15 @@ function VoiceSettings() {
                     ))}
                   </optgroup>
                 )}
-                <optgroup label="ElevenLabs Library">
-                  {elVoices.filter(v => v.category !== "cloned" && v.category !== "generated" && v.category !== "professional").map(v => (
-                    <option key={v.voice_id} value={v.voice_id}>
-                      {v.name}{v.labels?.gender ? ` · ${v.labels.gender}` : ""}{v.labels?.accent ? ` (${v.labels.accent})` : ""}
-                    </option>
-                  ))}
+                <optgroup label="ElevenLabs Library (weiblich)">
+                  {elVoices
+                    .filter(v => v.category !== "cloned" && v.category !== "generated" && v.category !== "professional")
+                    .filter(v => (v.labels?.gender || "").toLowerCase() === "female")
+                    .map(v => (
+                      <option key={v.voice_id} value={v.voice_id}>
+                        {v.name}{v.labels?.accent ? ` · ${v.labels.accent}` : ""}{v.labels?.age ? ` · ${v.labels.age}` : ""}
+                      </option>
+                    ))}
                 </optgroup>
               </>
             ) : !elVoicesLoading ? (
