@@ -4170,6 +4170,69 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
       {profile.preferences?.length>0&&<Card style={{ marginBottom:12 }}><Lbl style={{ marginBottom:10 }}>VORLIEBEN</Lbl><div style={{ display:"flex",flexWrap:"wrap",gap:7 }}>{profile.preferences.map((p,i)=><span key={i} style={{ background:T.acc+"18",border:`1px solid ${T.acc}33`,borderRadius:20,padding:"3px 12px",fontSize:11,color:T.acc,fontFamily:T.mono }}>{p}</span>)}</div></Card>}
       {profile.intolerances?.length>0&&<Card style={{ marginBottom:12 }}><Lbl style={{ marginBottom:10 }}>INTOLERANZEN</Lbl><div style={{ display:"flex",flexWrap:"wrap",gap:7 }}>{profile.intolerances.map((p,i)=><span key={i} style={{ background:T.gold+"18",border:`1px solid ${T.gold}33`,borderRadius:20,padding:"3px 12px",fontSize:11,color:T.gold,fontFamily:T.mono }}>{p}</span>)}</div></Card>}
       {profile.apps?.length>0&&<Card style={{ marginBottom:20 }}><Lbl style={{ marginBottom:10 }}>VERBUNDENE APPS</Lbl><div style={{ display:"flex",flexWrap:"wrap",gap:7 }}>{profile.apps.map((a,i)=><div key={i} style={{ display:"flex",alignItems:"center",gap:6,background:T.bg2,border:`1px solid ${T.borderS}`,borderRadius:8,padding:"5px 12px" }}><div style={{ width:5,height:5,borderRadius:"50%",background:T.green,boxShadow:`0 0 5px ${T.green}` }}/><span style={{ color:T.mid,fontFamily:T.mono,fontSize:10 }}>{a}</span></div>)}</div></Card>}
+      {/* Daten: Export / Import / Reset */}
+      <Card style={{ marginBottom:12 }}>
+        <Lbl style={{ marginBottom:10 }}>DATEN</Lbl>
+        <p style={{ color:T.muted, fontSize:11, fontStyle:"italic", fontFamily:T.serif, margin:"0 0 14px", lineHeight:1.6 }}>
+          Sicherheits-Backup als JSON. Wenn was schiefgeht oder du auf ein anderes Gerät willst – Datei reichen, fertig.
+        </p>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          <button onClick={async ()=>{
+            const keys = ["eyla_profile_v3","eyla_logs_v1","eyla_local_events_v2","eyla_shopping_v1","eyla_plan_v1","eyla_chat_v1","eyla_chat_voice_v1"];
+            const data = {};
+            for (const k of keys) {
+              const raw = localStorage.getItem(k);
+              if (raw) { try { data[k] = JSON.parse(raw); } catch {} }
+            }
+            const blob = new Blob([JSON.stringify({ exportedAt:new Date().toISOString(), version:1, data }, null, 2)], { type:"application/json" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            const today = new Date().toISOString().slice(0,10);
+            a.href = url;
+            a.download = `eyla-backup-${today}.json`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+          }} style={{
+            background:T.acc+"18", border:`1px solid ${T.acc}44`, borderRadius:10,
+            padding:"9px 16px", color:T.acc, fontFamily:T.serif, fontSize:12,
+            cursor:"pointer", fontStyle:"italic"
+          }}>↓ Export (JSON)</button>
+
+          <button onClick={()=>document.getElementById("eyla-import-input")?.click()} style={{
+            background:"transparent", border:`1px solid ${T.borderS}`, borderRadius:10,
+            padding:"9px 16px", color:T.mid, fontFamily:T.serif, fontSize:12,
+            cursor:"pointer", fontStyle:"italic"
+          }}>↑ Import</button>
+          <input id="eyla-import-input" type="file" accept="application/json,.json" style={{ display:"none" }}
+            onChange={(e)=>{
+              const file = e.target.files?.[0];
+              if (!file) return;
+              const reader = new FileReader();
+              reader.onload = () => {
+                try {
+                  const parsed = JSON.parse(reader.result);
+                  const data = parsed?.data || parsed;
+                  if (!data || typeof data !== "object") throw new Error("ungültig");
+                  if (!confirm("Daten aus dem Backup importieren? Bestehende Daten werden überschrieben.")) return;
+                  for (const [k, v] of Object.entries(data)) {
+                    if (k.startsWith("eyla_")) {
+                      try { localStorage.setItem(k, JSON.stringify(v)); } catch {}
+                    }
+                  }
+                  alert("Import erfolgreich. App lädt neu.");
+                  location.reload();
+                } catch (err) {
+                  alert("Konnte Backup nicht lesen: " + (err.message||err));
+                }
+                e.target.value = "";
+              };
+              reader.readAsText(file);
+            }}/>
+        </div>
+      </Card>
+
       <button onClick={onReset} style={{ background:"transparent",border:`1px solid ${T.borderS}`,borderRadius:10,padding:"9px 18px",color:T.muted,fontFamily:T.serif,fontSize:12,cursor:"pointer",fontStyle:"italic" }}>Profil zurücksetzen</button>
     </div>
   );
