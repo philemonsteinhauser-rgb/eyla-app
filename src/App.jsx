@@ -941,7 +941,7 @@ function ActivityRings({ water, waterTarget, sleep, sleepTarget, kcal, kcalTarge
   );
 }
 
-function TodayScreen({ profile, log, setLog, logsByDate }) {
+function TodayScreen({ profile, setLog: setLogRaw, logsByDate }) {
   const [mealName, setMealName] = useState("");
   const [mealCal, setMealCal] = useState("");
   const [mealP, setMealP] = useState("");
@@ -949,10 +949,23 @@ function TodayScreen({ profile, log, setLog, logsByDate }) {
   const [mealF, setMealF] = useState("");
   const [showMacros, setShowMacros] = useState(false);
   // Foto-Analyse-State
-  const [photoData, setPhotoData] = useState(null);      // {mime, base64, dataUrl}
+  const [photoData, setPhotoData] = useState(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState(null);
   const fileInputRef = useRef(null);
+
+  // Datum-Navigator: User kann auch andere Tage nachtragen
+  const [tagDate, setTagDate] = useState(()=>new Date());
+  const tagKey = tagDate.toDateString();
+  const todayKey = new Date().toDateString();
+  const isToday = tagKey === todayKey;
+  const isPast = tagKey < todayKey;
+  const log = logsByDate?.[tagKey] || { meals:[], water:0, energy:"", sleep:"", workouts:[], weight:null, date:tagKey };
+  // setLog für den gerade gewählten Tag
+  const setLog = useCallback((updater) => setLogRaw(updater, tagKey), [setLogRaw, tagKey]);
+  function prevDay() { const d = new Date(tagDate); d.setDate(d.getDate()-1); setTagDate(d); }
+  function nextDay() { const d = new Date(tagDate); d.setDate(d.getDate()+1); setTagDate(d); }
+  function goToday() { setTagDate(new Date()); }
 
   const eaten = log.meals.reduce((s,m)=>s+(m.calories||0),0);
   const eatenP = log.meals.reduce((s,m)=>s+(m.protein||0),0);
@@ -1106,11 +1119,15 @@ function TodayScreen({ profile, log, setLog, logsByDate }) {
 
   return (
     <div>
-      <div style={{ marginBottom:22, display:"flex", alignItems:"center", justifyContent:"space-between", gap:14 }}>
+      <div style={{ marginBottom:14, display:"flex", alignItems:"center", justifyContent:"space-between", gap:14 }}>
         <div style={{ minWidth:0, flex:1 }}>
-          <Lbl style={{ marginBottom:6 }}>HEUTE · {new Date().toLocaleDateString("de-DE",{weekday:"long",day:"numeric",month:"long"})}</Lbl>
+          <Lbl style={{ marginBottom:6 }}>
+            {isToday ? "HEUTE" : isPast ? "RÜCKBLICK" : "VORAUS"} · {tagDate.toLocaleDateString("de-DE",{weekday:"long",day:"numeric",month:"long"})}
+          </Lbl>
           <h2 style={{ fontSize:20, fontWeight:300, color:T.text, margin:0 }}>
-            Wie geht's dir, <span style={{ color:T.acc }}>{profile.name.split(" ")[0]}</span>?
+            {isToday
+              ? <>Wie geht's dir, <span style={{ color:T.acc }}>{profile.name.split(" ")[0]}</span>?</>
+              : <span style={{ color:T.muted, fontStyle:"italic" }}>Nachtragen</span>}
           </h2>
         </div>
         <ActivityRings
@@ -1119,6 +1136,27 @@ function TodayScreen({ profile, log, setLog, logsByDate }) {
           kcal={eaten} kcalTarget={targetKcal}
           workouts={(log.workouts||[]).reduce((s,w)=>s+(w.duration||0),0)}
         />
+      </div>
+
+      {/* Datum-Navigator */}
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8, marginBottom:18 }}>
+        <button onClick={prevDay} style={{
+          background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:10,
+          padding:"6px 12px", color:T.mid, fontFamily:T.serif, fontSize:16, cursor:"pointer", lineHeight:1
+        }}>‹</button>
+        {!isToday ? (
+          <button onClick={goToday} style={{
+            background:T.acc+"18", border:`1px solid ${T.acc}44`, borderRadius:18,
+            padding:"5px 14px", color:T.acc, fontFamily:T.mono, fontSize:10,
+            cursor:"pointer", letterSpacing:1.5
+          }}>↺ HEUTE</button>
+        ) : (
+          <span style={{ color:T.muted, fontFamily:T.mono, fontSize:9, letterSpacing:1 }}>← gestern · morgen →</span>
+        )}
+        <button onClick={nextDay} style={{
+          background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:10,
+          padding:"6px 12px", color:T.mid, fontFamily:T.serif, fontSize:16, cursor:"pointer", lineHeight:1
+        }}>›</button>
       </div>
 
       {/* Energie & Schlaf */}
@@ -1425,6 +1463,11 @@ function TodayScreen({ profile, log, setLog, logsByDate }) {
             <MealRow key={m.id} meal={m}
               onEdit={(updated)=>setLog(l=>({...l, meals: l.meals.map(x=>x.id===m.id?{...x,...updated}:x)}))}
               onDelete={()=>setLog(l=>({...l,meals:l.meals.filter(x=>x.id!==m.id)}))}
+              onDuplicate={()=>setLog(l=>({...l, meals: [...l.meals, {
+                ...m,
+                id: Date.now(),
+                time: new Date().toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})
+              }]}))}
             />
           ))
         }
@@ -1458,7 +1501,7 @@ function TodayScreen({ profile, log, setLog, logsByDate }) {
 }
 
 // Einzelne Mahlzeit-Zeile mit Tap-to-Edit (Name, kcal, Makros)
-function MealRow({ meal, onEdit, onDelete }) {
+function MealRow({ meal, onEdit, onDelete, onDuplicate }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(meal.name);
   const [cal, setCal] = useState(String(meal.calories || ""));
@@ -1536,6 +1579,13 @@ function MealRow({ meal, onEdit, onDelete }) {
       <div style={{ display:"flex", alignItems:"center", gap:10 }}>
         {meal.calories>0 && <div style={{ color:T.acc, fontFamily:T.mono, fontSize:12 }}>{meal.calories}</div>}
         <div style={{ color:T.muted, fontFamily:T.mono, fontSize:10 }}>{meal.time}</div>
+        {onDuplicate && (
+          <button onClick={(e)=>{ e.stopPropagation(); onDuplicate(); }}
+            title="Nochmal eintragen"
+            style={{ background:"transparent", border:`1px solid ${T.borderS}`, borderRadius:6,
+              padding:"2px 7px", color:T.muted, fontFamily:T.mono, fontSize:11, cursor:"pointer", lineHeight:1 }}
+          >+1</button>
+        )}
       </div>
     </div>
   );
@@ -1557,6 +1607,12 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
   const [localEvents, setLocalEvents] = useState([]);
   const [showAdd, setShowAdd] = useState(false);
   const [selectedDate, setSelectedDate] = useState(()=>new Date());
+  // Inline-Edit-Mode für Termine
+  const [editingId, setEditingId] = useState(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editTime, setEditTime] = useState("");
+  const [editDur, setEditDur] = useState("");
+  const [editDate, setEditDate] = useState("");
 
   const todayKey = isoDateKey(new Date());
   const selectedKey = isoDateKey(selectedDate);
@@ -1576,6 +1632,26 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
   }, []);
 
   function saveLocal(evts) { setLocalEvents(evts); persist("eyla_local_events_v2", evts); }
+
+  function startEdit(ev) {
+    setEditingId(ev.id);
+    setEditTitle(ev.title || "");
+    setEditTime(ev.time || "");
+    setEditDur(ev.duration || "");
+    setEditDate(ev.date || selectedKey);
+  }
+  function cancelEdit() { setEditingId(null); }
+  function saveEdit() {
+    if (!editTitle.trim()) return;
+    saveLocal(localEvents.map(e => e.id === editingId ? {
+      ...e,
+      title: editTitle.trim(),
+      time: editTime,
+      duration: editDur,
+      date: editDate || e.date,
+    } : e));
+    setEditingId(null);
+  }
 
   function addEvent() {
     if (!newTitle.trim()) return;
@@ -1736,25 +1812,52 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
 
               {/* Inhalt */}
               <div style={{ flex:1, paddingLeft:12, paddingBottom:evts.length>0?8:4, paddingTop:2, paddingRight:16 }}>
-                {evts.map((e,i)=>(
-                  <div key={e.id||i} style={{ background:e.local?T.gold+"18":T.acc+"12",
-                    border:`1px solid ${e.local?T.gold+"44":T.acc+"33"}`,
-                    borderRadius:8, padding:"8px 12px", marginBottom:4,
-                    display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
-                    <div>
-                      <div style={{ color:T.text, fontSize:13, fontWeight:500 }}>{e.title}</div>
-                      <div style={{ display:"flex", gap:10, marginTop:3 }}>
-                        {e.time && <span style={{ color:e.local?T.gold:T.acc, fontFamily:T.mono, fontSize:10 }}>{e.time}</span>}
-                        {e.duration && <span style={{ color:T.muted, fontFamily:T.mono, fontSize:10 }}>⏱ {e.duration}</span>}
-                        {e.location && <span style={{ color:T.muted, fontSize:10 }}>📍 {e.location}</span>}
+                {evts.map((e,i)=>{
+                  const isEditing = editingId === e.id;
+                  if (isEditing) {
+                    return (
+                      <div key={e.id} style={{ background:T.gold+"11", border:`1px solid ${T.gold}55`,
+                        borderRadius:8, padding:10, marginBottom:4, animation:"fadeUp .2s ease both" }}>
+                        <input value={editTitle} onChange={ev=>setEditTitle(ev.target.value)} onKeyDown={ev=>ev.key==="Enter"&&saveEdit()}
+                          autoFocus placeholder="Was?" style={{ width:"100%", marginBottom:6, background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:6, padding:"6px 10px", color:T.text, fontFamily:T.serif, fontSize:13, fontStyle:"italic", outline:"none", boxSizing:"border-box" }}/>
+                        <div style={{ display:"grid", gridTemplateColumns:"1.3fr 1fr 1fr", gap:6, marginBottom:6 }}>
+                          <input value={editDate} onChange={ev=>setEditDate(ev.target.value)} type="date"
+                            style={{ background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:6, padding:"6px 8px", color:T.text, fontFamily:T.mono, fontSize:11, outline:"none" }}/>
+                          <input value={editTime} onChange={ev=>setEditTime(ev.target.value)} type="time"
+                            style={{ background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:6, padding:"6px 8px", color:T.text, fontFamily:T.mono, fontSize:11, outline:"none" }}/>
+                          <input value={editDur} onChange={ev=>setEditDur(ev.target.value)} placeholder="z.B. 1h"
+                            style={{ background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:6, padding:"6px 8px", color:T.text, fontFamily:T.mono, fontSize:11, outline:"none" }}/>
+                        </div>
+                        <div style={{ display:"flex", gap:6 }}>
+                          <button onClick={saveEdit} style={{ background:`linear-gradient(135deg,#78350F,${T.goldL})`, border:"none", borderRadius:6, padding:"4px 14px", color:T.bg, fontFamily:T.serif, fontSize:11, fontWeight:700, cursor:"pointer" }}>Speichern</button>
+                          <button onClick={cancelEdit} style={{ background:"transparent", border:`1px solid ${T.borderS}`, borderRadius:6, padding:"4px 12px", color:T.muted, fontFamily:T.serif, fontSize:11, cursor:"pointer", fontStyle:"italic" }}>Abbrechen</button>
+                          <button onClick={()=>{ saveLocal(localEvents.filter(x=>x.id!==e.id)); setEditingId(null); }} style={{ marginLeft:"auto", background:"transparent", border:`1px solid ${T.red}33`, borderRadius:6, padding:"4px 12px", color:T.red, fontFamily:T.mono, fontSize:10, cursor:"pointer", letterSpacing:1 }}>LÖSCHEN</button>
+                        </div>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div key={e.id||i}
+                      onClick={()=> e.local && startEdit(e)}
+                      style={{ background:e.local?T.gold+"18":T.acc+"12",
+                        border:`1px solid ${e.local?T.gold+"44":T.acc+"33"}`,
+                        borderRadius:8, padding:"8px 12px", marginBottom:4,
+                        display:"flex", justifyContent:"space-between", alignItems:"flex-start",
+                        cursor: e.local ? "pointer" : "default" }}>
+                      <div>
+                        <div style={{ color:T.text, fontSize:13, fontWeight:500 }}>{e.title}</div>
+                        <div style={{ display:"flex", gap:10, marginTop:3 }}>
+                          {e.time && <span style={{ color:e.local?T.gold:T.acc, fontFamily:T.mono, fontSize:10 }}>{e.time}</span>}
+                          {e.duration && <span style={{ color:T.muted, fontFamily:T.mono, fontSize:10 }}>⏱ {e.duration}</span>}
+                          {e.location && <span style={{ color:T.muted, fontSize:10 }}>📍 {e.location}</span>}
+                        </div>
+                      </div>
+                      <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                        {e.local && <span style={{ fontFamily:T.mono,fontSize:10,color:T.gold,background:T.gold+"18",border:`1px solid ${T.gold}33`,borderRadius:3,padding:"1px 6px",letterSpacing:1 }}>LOKAL</span>}
                       </div>
                     </div>
-                    <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-                      {e.local && <span style={{ fontFamily:T.mono,fontSize:10,color:T.gold,background:T.gold+"18",border:`1px solid ${T.gold}33`,borderRadius:3,padding:"1px 6px",letterSpacing:1 }}>LOKAL</span>}
-                      {e.local && <button onClick={()=>saveLocal(localEvents.filter(x=>x.id!==e.id))} style={{ background:"none",border:"none",color:T.muted,cursor:"pointer",fontSize:14,padding:2 }}>×</button>}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           );
@@ -4730,12 +4833,14 @@ function AppContent() {
     fetchCalendarEvents().then(ev=>{ setEvents(ev||[]); setEventsLoading(false); });
   }
 
-  function setLog(fn) {
+  // setLog akzeptiert optional einen dateKey (toDateString format) – sonst TODAY
+  function setLog(fn, dateKey) {
+    const key = dateKey || TODAY;
     setLogsByDate(prevMap=>{
-      const prevLog = prevMap[TODAY] || EMPTY_LOG();
+      const prevLog = prevMap[key] || { meals:[], water:0, energy:"", sleep:"", workouts:[], weight:null, date:key };
       const next = typeof fn==="function" ? fn(prevLog) : fn;
-      const withDate = {...next, date:TODAY};
-      const nextMap = { ...prevMap, [TODAY]: withDate };
+      const withDate = {...next, date:key};
+      const nextMap = { ...prevMap, [key]: withDate };
       persist("eyla_logs_v1", nextMap);
       return nextMap;
     });
@@ -4867,7 +4972,7 @@ function AppContent() {
               {id:"heute",    label:"Heute",    color:T.acc},
               {id:"kalender", label:"Kalender", color:T.gold},
             ]}/>
-            {tagSub==="heute"    && <TodayScreen profile={profile} log={log} setLog={setLog} logsByDate={logsByDate}/>}
+            {tagSub==="heute"    && <TodayScreen profile={profile} setLog={setLog} logsByDate={logsByDate}/>}
             {tagSub==="kalender" && <KalenderScreen events={events} eventsLoading={eventsLoading} onRefresh={loadCalendar} profile={profile} log={log}/>}
           </>
         )}
