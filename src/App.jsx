@@ -538,16 +538,24 @@ function useVoice(onResult) {
     setSupported(true);
     const rec = new SR();
     rec.lang = "de-DE"; rec.continuous = false; rec.interimResults = false;
-    rec.onresult = e => { const t = e.results[0][0].transcript; if(t) cbRef.current(t); setListening(false); };
-    rec.onerror = () => setListening(false);
+    // onresult: Ergebnis da → SOFORT Mikrofon freigeben via abort(),
+    // erst danach Callback ausführen damit nachgelagerte Verarbeitung das Mic
+    // nicht mehr blockiert.
+    rec.onresult = e => {
+      const t = e.results[0][0].transcript;
+      try { rec.abort(); } catch {}
+      setListening(false);
+      if (t) cbRef.current(t);
+    };
+    rec.onerror = () => { try { rec.abort(); } catch {} setListening(false); };
     rec.onend = () => setListening(false);
     recRef.current = rec;
-    return () => { try { rec.stop(); } catch {} };
+    return () => { try { rec.abort(); } catch {} };
   }, []);
   const toggle = useCallback(() => {
     if (!recRef.current) return;
-    if (listening) { try { recRef.current.stop(); } catch {} setListening(false); }
-    else { try { recRef.current.start(); setListening(true); } catch(e) { try { recRef.current.abort(); recRef.current.start(); setListening(true); } catch {} } }
+    if (listening) { try { recRef.current.abort(); } catch {} setListening(false); }
+    else { try { recRef.current.start(); setListening(true); } catch { try { recRef.current.abort(); recRef.current.start(); setListening(true); } catch {} } }
   }, [listening]);
   return { listening, supported, toggle };
 }
