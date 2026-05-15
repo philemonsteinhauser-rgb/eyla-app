@@ -483,6 +483,7 @@ HEUTE:
 - Wasser: ${log.water} Gläser (${(log.water*.25).toFixed(1)}L)
 - Energie: ${log.energy||"k.A."} | Schlaf: ${log.sleep||"k.A."}h
 - Training: ${(log.workouts||[]).length > 0 ? log.workouts.map(w=>`${w.type} ${w.duration}min`).join(", ") : "noch nicht"}
+- Notiz: ${log.note ? `"${log.note.slice(0, 200)}"` : "–"}
 
 LETZTE 7 TAGE:
 ${historyStr}
@@ -1350,23 +1351,57 @@ function TodayScreen({ profile, log, setLog, logsByDate }) {
           ))
         }
       </Card>
+
+      {/* Journal / Tagebuch */}
+      <Card style={{ marginTop:12 }}>
+        <Lbl style={{ marginBottom:10 }}>Notiz zum Tag</Lbl>
+        <textarea
+          value={log.note || ""}
+          onChange={e=>setLog(l=>({...l, note: e.target.value}))}
+          placeholder="Wie war dein Tag? Was lief? Was nicht?"
+          rows={2}
+          style={{
+            width:"100%", background:T.bg2,
+            border:`1px solid ${T.borderS}`, borderRadius:8,
+            padding:"10px 12px", color:T.text,
+            fontFamily:T.serif, fontSize:13, fontStyle:"italic",
+            outline:"none", boxSizing:"border-box", resize:"vertical",
+            minHeight:60, lineHeight:1.6
+          }}
+        />
+        {log.note && (
+          <div style={{ fontSize:10, color:T.muted, fontFamily:T.mono, marginTop:4, textAlign:"right" }}>
+            {log.note.length} Zeichen
+          </div>
+        )}
+      </Card>
     </div>
   );
 }
 
-// Einzelne Mahlzeit-Zeile mit Tap-to-Edit
+// Einzelne Mahlzeit-Zeile mit Tap-to-Edit (Name, kcal, Makros)
 function MealRow({ meal, onEdit, onDelete }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(meal.name);
   const [cal, setCal] = useState(String(meal.calories || ""));
+  const [p, setP] = useState(String(meal.protein || ""));
+  const [c, setC] = useState(String(meal.carbs || ""));
+  const [f, setF] = useState(String(meal.fat || ""));
 
   function save() {
     if (!name.trim()) return;
-    onEdit({ name: name.trim(), calories: parseInt(cal) || 0 });
+    onEdit({
+      name: name.trim(),
+      calories: parseInt(cal) || 0,
+      protein: parseInt(p) || 0,
+      carbs: parseInt(c) || 0,
+      fat: parseInt(f) || 0
+    });
     setEditing(false);
   }
   function cancel() {
     setName(meal.name); setCal(String(meal.calories || ""));
+    setP(String(meal.protein || "")); setC(String(meal.carbs || "")); setF(String(meal.fat || ""));
     setEditing(false);
   }
 
@@ -1378,6 +1413,19 @@ function MealRow({ meal, onEdit, onDelete }) {
             autoFocus style={{ flex:1, background:T.bg, border:`1px solid ${T.acc}55`, borderRadius:6, padding:"6px 10px", color:T.text, fontFamily:T.serif, fontSize:13, fontStyle:"italic", outline:"none" }}/>
           <input value={cal} onChange={e=>setCal(e.target.value)} onKeyDown={e=>e.key==="Enter"&&save()}
             type="number" placeholder="kcal" style={{ width:70, background:T.bg, border:`1px solid ${T.acc}55`, borderRadius:6, padding:"6px 8px", color:T.text, fontFamily:T.mono, fontSize:12, outline:"none" }}/>
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6, marginBottom:6 }}>
+          {[
+            ["P", p, setP, T.rose],
+            ["C", c, setC, T.gold],
+            ["F", f, setF, T.green],
+          ].map(([lbl, val, setter, col]) => (
+            <div key={lbl} style={{ display:"flex", alignItems:"center", gap:5, background:T.bg, border:`1px solid ${T.borderS}`, borderRadius:6, padding:"4px 8px" }}>
+              <span style={{ color:col, fontFamily:T.mono, fontSize:10, fontWeight:700 }}>{lbl}</span>
+              <input value={val} onChange={e=>setter(e.target.value)} onKeyDown={e=>e.key==="Enter"&&save()}
+                type="number" placeholder="g" style={{ flex:1, background:"transparent", border:"none", color:T.text, fontFamily:T.mono, fontSize:11, outline:"none", minWidth:0, width:"100%" }}/>
+            </div>
+          ))}
         </div>
         <div style={{ display:"flex", gap:6 }}>
           <button onClick={save} style={{ background:`linear-gradient(135deg,${T.dim},${T.acc})`, border:"none", borderRadius:6, padding:"4px 14px", color:T.bg, fontFamily:T.serif, fontSize:11, fontWeight:700, cursor:"pointer" }}>Speichern</button>
@@ -2111,6 +2159,9 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
   // Kontext-Daten (Plan + Einkaufsliste) für EYLAs Wissen
   const [plan, setPlan] = useState(null);
   const [shopping, setShopping] = useState(null);
+  // Foto-Anhang fürs nächste Send
+  const [chatPhoto, setChatPhoto] = useState(null);
+  const chatFileRef = useRef(null);
   const bottomRef = useRef(null);
   const ttsSupported = typeof window !== "undefined" && "speechSynthesis" in window;
 
@@ -2150,10 +2201,44 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
     })();
   }, []);
 
-  // Persistieren bei Änderung
+  // Persistieren bei Änderung. Bilder werden gestrippt (zu groß für localStorage),
+  // nur Text + Image-Marker bleiben übrig.
   useEffect(()=>{
-    if (loaded && messages.length > 0) persist("eyla_chat_v1", messages);
+    if (loaded && messages.length > 0) {
+      const stripped = messages.map(m => {
+        if (Array.isArray(m.content)) {
+          const txt = m.content.filter(b => b.type === "text").map(b => b.text).join("\n");
+          const hasImg = m.content.some(b => b.type === "image");
+          return { ...m, content: txt || (hasImg ? "[Foto]" : ""), _hadImage: hasImg };
+        }
+        return m;
+      });
+      persist("eyla_chat_v1", stripped);
+    }
   }, [messages, loaded]);
+
+  // Foto auswählen → komprimieren → bereit für Send
+  async function handleChatFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const img = new Image();
+      img.src = reader.result;
+      await new Promise(r => { img.onload = r; });
+      const max = 1024;
+      const scale = Math.min(1, max/Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width*scale);
+      canvas.height = Math.round(img.height*scale);
+      const ctx2 = canvas.getContext("2d");
+      ctx2.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+      setChatPhoto({ dataUrl, base64: dataUrl.split(",")[1] });
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  }
 
   useEffect(()=>{ bottomRef.current?.scrollIntoView({behavior:"smooth"}); },[messages,loading]);
 
@@ -2302,16 +2387,28 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
 
   async function send(text) {
     const t = text||input.trim();
-    if (!t||loading) return;
+    if ((!t && !chatPhoto) || loading) return;
     setInput("");
 
-    // UI-Messages: schöne Anzeige-Liste
-    const baseUi = [...messages, { role:"user", content:t }];
+    // Wenn Foto angehängt: User-Message wird ein Content-Array mit Bild + Text
+    const photo = chatPhoto;
+    setChatPhoto(null);
+    const userContent = photo
+      ? [
+          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: photo.base64 } },
+          { type: "text", text: t || "Was siehst du auf dem Bild?" }
+        ]
+      : t;
+    // _imageUrl ist nur für die UI-Darstellung in dieser Session
+    const userMsg = photo
+      ? { role:"user", content: userContent, _imageUrl: photo.dataUrl }
+      : { role:"user", content: t };
+
+    const baseUi = [...messages, userMsg];
     setMessages(baseUi);
     setLoading(true);
 
-    // API-Konversation: kann content-blocks für Tool-Roundtrip enthalten
-    let convo = [...messages, { role:"user", content:t }];
+    let convo = [...messages, userMsg];
     const allActions = [];
     let finalText = "";
 
@@ -2368,14 +2465,14 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
 
       setMessages([
         ...messages,
-        { role:"user", content:t },
+        userMsg,
         { role:"assistant", content: finalText || "…", actions: allActions }
       ]);
       speak(finalText);
     } catch {
       setMessages([
         ...messages,
-        { role:"user", content:t },
+        userMsg,
         { role:"assistant", content:"Kurze Unterbrechung." }
       ]);
     }
@@ -2459,7 +2556,22 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
                   border:`1px solid ${isE?T.acc+"22":"#1e293b"}`,
                   borderRadius:isE?"3px 14px 14px 14px":"14px 3px 14px 14px",
                   padding:"11px 15px",color:isE?T.text:"#cbd5e1",fontSize:14,lineHeight:1.75 }}>
-                  {typeof msg.content === "string" ? msg.content : "(Tool-Roundtrip)"}
+                  {/* Foto-Vorschau wenn Bild angehängt war */}
+                  {msg._imageUrl && (
+                    <img src={msg._imageUrl} alt="" style={{
+                      maxWidth:"100%", maxHeight:200, borderRadius:8,
+                      marginBottom: (typeof msg.content === "string" ? msg.content : "").trim() ? 8 : 0,
+                      display:"block"
+                    }}/>
+                  )}
+                  {/* Marker wenn das Foto nicht mehr da ist (persistiert ohne Bild) */}
+                  {!msg._imageUrl && msg._hadImage && (
+                    <div style={{ fontSize:10, color:T.muted, fontStyle:"italic", marginBottom:6, fontFamily:T.mono, letterSpacing:1 }}>📷 FOTO</div>
+                  )}
+                  {/* Text-Inhalt */}
+                  {typeof msg.content === "string"
+                    ? msg.content
+                    : (msg.content||[]).filter(b => b.type === "text").map((b,bi) => <div key={bi}>{b.text}</div>)}
                 </div>
                 {/* Tool-Aktionen, die EYLA in diesem Turn ausgeführt hat */}
                 {Array.isArray(msg.actions) && msg.actions.length > 0 && (
@@ -2489,17 +2601,51 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
       </div>
 
       <div style={{ paddingTop:12, borderTop:`1px solid ${T.border}` }}>
+        {/* Foto-Preview wenn angehängt */}
+        {chatPhoto && (
+          <div style={{
+            display:"flex", alignItems:"center", gap:10, marginBottom:8,
+            padding:8, background:T.bg2, borderRadius:10,
+            border:`1px solid ${T.acc}33`, animation:"fadeUp .2s ease both"
+          }}>
+            <img src={chatPhoto.dataUrl} alt="" style={{
+              width:48, height:48, objectFit:"cover", borderRadius:6,
+              border:`1px solid ${T.borderS}`, flexShrink:0
+            }}/>
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ color:T.acc, fontFamily:T.mono, fontSize:10, letterSpacing:1 }}>FOTO ANGEHÄNGT</div>
+              <div style={{ color:T.muted, fontSize:11, fontStyle:"italic", fontFamily:T.serif, marginTop:2 }}>
+                Tipp: schreib was dazu oder schick einfach so.
+              </div>
+            </div>
+            <button onClick={()=>setChatPhoto(null)} style={{
+              background:"none", border:"none", color:T.muted, cursor:"pointer",
+              fontSize:18, padding:"0 4px"
+            }}>×</button>
+          </div>
+        )}
+
         <div style={{ display:"flex",gap:8,alignItems:"center",background:T.card,
           border:`1px solid ${T.borderS}`,borderRadius:12,padding:"5px 5px 5px 14px" }}>
+          <input ref={chatFileRef} type="file" accept="image/*" capture="environment"
+            onChange={handleChatFile} style={{ display:"none" }}/>
           <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&send()}
-            placeholder="Frag EYLA …" style={{ flex:1,background:"none",border:"none",outline:"none",
+            placeholder={chatPhoto ? "Schreib was zum Foto …" : "Frag EYLA …"}
+            style={{ flex:1,background:"none",border:"none",outline:"none",
             color:T.text,fontSize:14,fontFamily:T.serif,padding:"9px 0",fontStyle:"italic" }}/>
+          <button onClick={()=>chatFileRef.current?.click()} disabled={loading} style={{
+            width:36, height:36, borderRadius:8, flexShrink:0,
+            border:"none", background: chatPhoto ? T.acc+"22" : "transparent",
+            color: chatPhoto ? T.acc : T.muted,
+            fontSize:14, cursor: loading ? "default" : "pointer",
+            display:"flex", alignItems:"center", justifyContent:"center"
+          }} title="Foto anhängen">📷</button>
           <VoiceBtn toggle={toggle} listening={listening} supported={supported}/>
-          <button onClick={()=>send()} disabled={!input.trim()||loading} style={{
+          <button onClick={()=>send()} disabled={(!input.trim() && !chatPhoto)||loading} style={{
             width:38,height:38,borderRadius:9,border:"none",flexShrink:0,
-            background:input.trim()&&!loading?`linear-gradient(135deg,${T.dim},${T.acc})`:T.bg2,
-            color:input.trim()&&!loading?T.bg:T.muted,
-            fontSize:15,cursor:input.trim()&&!loading?"pointer":"default",transition:"all .2s"
+            background:((input.trim()||chatPhoto)&&!loading)?`linear-gradient(135deg,${T.dim},${T.acc})`:T.bg2,
+            color:((input.trim()||chatPhoto)&&!loading)?T.bg:T.muted,
+            fontSize:15,cursor:((input.trim()||chatPhoto)&&!loading)?"pointer":"default",transition:"all .2s"
           }}>{loading?"✦":"↑"}</button>
         </div>
       </div>
