@@ -38,13 +38,32 @@ const syncListeners = new Set();
 function notifySyncListeners() { syncListeners.forEach(l => l(SYNC_STATE)); }
 
 let syncTimer = null;
+let syncPending = false;
 function scheduleSyncUp() {
   // Nicht syncen wenn Cloud-Sync deaktiviert
   try {
     if (localStorage.getItem("eyla_cloud_sync_disabled_v1") === "true") return;
   } catch {}
+  syncPending = true;
   clearTimeout(syncTimer);
-  syncTimer = setTimeout(syncUp, 1500);
+  syncTimer = setTimeout(() => { syncPending = false; syncUp(); }, 800);
+}
+
+// Wenn App in den Hintergrund wandert (iOS PWA close, Tab-Switch):
+// pending Sync sofort fluschen, weil iOS sonst alles verliert.
+if (typeof window !== "undefined") {
+  const flush = () => {
+    if (syncPending) {
+      clearTimeout(syncTimer);
+      syncPending = false;
+      syncUp();
+    }
+  };
+  window.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flush();
+  });
+  window.addEventListener("pagehide", flush);
+  window.addEventListener("beforeunload", flush);
 }
 
 async function syncUp() {
@@ -3930,15 +3949,12 @@ function AppContent() {
       let p = null;
       for (const k of profileKeys) { p = await retrieve(k); if (p) break; }
 
-      // Nur echte User-Profile akzeptieren. Sonst Onboarding zeigen.
-      // "Marcus" und "Phil" waren alte Demo-Defaults → werden ignoriert.
-      const isRealProfile = p && p.name && p.name.trim().length > 0
-        && p.name !== "Marcus" && p.name !== "Phil";
-      if (isRealProfile) {
+      // Profil akzeptieren wenn es gesetzt ist und einen Namen hat.
+      // (Frueher wurden "Phil" und "Marcus" als Demo-Defaults verworfen –
+      //  Quatsch wenn der User echt Phil heisst.)
+      if (p && p.name && p.name.trim().length > 0) {
         setProfile(p);
-        persist("eyla_profile_v3", p);
       } else {
-        // Onboarding wird gezeigt (setProfile bleibt null)
         setProfile(null);
       }
 
