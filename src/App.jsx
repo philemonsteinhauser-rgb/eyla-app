@@ -1607,6 +1607,7 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
   const [newTitle, setNewTitle] = useState("");
   const [newTime, setNewTime] = useState("");
   const [newDur, setNewDur] = useState("");
+  const [newRec, setNewRec] = useState("");  // ""|"daily"|"weekly"
   const [localEvents, setLocalEvents] = useState([]);
   const [showAdd, setShowAdd] = useState(false);
   const [selectedDate, setSelectedDate] = useState(()=>new Date());
@@ -1616,6 +1617,7 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
   const [editTime, setEditTime] = useState("");
   const [editDur, setEditDur] = useState("");
   const [editDate, setEditDate] = useState("");
+  const [editRec, setEditRec] = useState("");
 
   const todayKey = isoDateKey(new Date());
   const selectedKey = isoDateKey(selectedDate);
@@ -1642,6 +1644,7 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
     setEditTime(ev.time || "");
     setEditDur(ev.duration || "");
     setEditDate(ev.date || selectedKey);
+    setEditRec(ev.recurrence || "");
   }
   function cancelEdit() { setEditingId(null); }
   function saveEdit() {
@@ -1652,6 +1655,7 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
       time: editTime,
       duration: editDur,
       date: editDate || e.date,
+      recurrence: editRec || null,
     } : e));
     setEditingId(null);
   }
@@ -1660,9 +1664,10 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
     if (!newTitle.trim()) return;
     saveLocal([...localEvents, {
       id:Date.now(), title:newTitle.trim(), time:newTime||"",
-      duration:newDur||"", date:selectedKey, local:true
+      duration:newDur||"", date:selectedKey, local:true,
+      recurrence: newRec || null,
     }]);
-    setNewTitle(""); setNewTime(""); setNewDur(""); setShowAdd(false);
+    setNewTitle(""); setNewTime(""); setNewDur(""); setNewRec(""); setShowAdd(false);
   }
 
   function prevDay() {
@@ -1678,9 +1683,29 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
   function goToToday() { setSelectedDate(new Date()); }
 
   // Events nur für ausgewählten Tag (Migration: events von API werden als heute behandelt)
+  // Wiederkehrende Events einbeziehen:
+  // - "daily": jeden Tag ab event.date
+  // - "weekly": gleicher Wochentag wie event.date, ab event.date
+  // - kein recurrence: nur exakt am event.date
+  const selDate = new Date(selectedDate);
+  const selWeekday = selDate.getDay();
+  const matchesRecurrence = (e) => {
+    const evDateStr = e.date || todayKey;
+    if (evDateStr === selectedKey) return true; // direkt Match
+    if (!e.recurrence) return false;
+    // Nur ab Original-Datum
+    if (evDateStr > selectedKey) return false;
+    if (e.recurrence === "daily") return true;
+    if (e.recurrence === "weekly") {
+      const evDate = new Date(evDateStr);
+      return evDate.getDay() === selWeekday;
+    }
+    return false;
+  };
+
   const eventsForSelected = [
     ...(isToday ? events.map(e=>({...e,local:false,date:todayKey})) : []),
-    ...localEvents.filter(e => (e.date || todayKey) === selectedKey)
+    ...localEvents.filter(matchesRecurrence)
   ].sort((a,b)=>(a.time||"99:99").localeCompare(b.time||"99:99"));
 
   const nowH = new Date().getHours();
@@ -1764,6 +1789,19 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
             <input value={newDur} onChange={e=>setNewDur(e.target.value)} placeholder="z.B. 1h"
               style={{ background:T.bg2,border:`1px solid ${T.borderS}`,borderRadius:8,padding:"9px 10px",color:T.text,fontFamily:T.mono,fontSize:12,outline:"none" }}/>
           </div>
+          {/* Recurrence */}
+          <div style={{ display:"flex", gap:6, marginBottom:10 }}>
+            {[["", "Einmalig"], ["daily", "Täglich"], ["weekly", "Wöchentlich"]].map(([val, lbl])=>(
+              <button key={val} onClick={()=>setNewRec(val)} style={{
+                flex:1, padding:"7px 8px", borderRadius:8,
+                background: newRec===val ? T.gold+"22" : "transparent",
+                border: `1px solid ${newRec===val ? T.gold : T.borderS}`,
+                color: newRec===val ? T.text : T.muted,
+                fontFamily:T.serif, fontSize:11, cursor:"pointer",
+                fontStyle: newRec===val ? "normal" : "italic"
+              }}>{lbl}</button>
+            ))}
+          </div>
           <div style={{ display:"flex", gap:8 }}>
             <button onClick={addEvent} disabled={!newTitle.trim()} style={{
               background:newTitle.trim()?`linear-gradient(135deg,#78350F,${T.goldL})`:"transparent",
@@ -1831,6 +1869,18 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
                           <input value={editDur} onChange={ev=>setEditDur(ev.target.value)} placeholder="z.B. 1h"
                             style={{ background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:6, padding:"6px 8px", color:T.text, fontFamily:T.mono, fontSize:11, outline:"none" }}/>
                         </div>
+                        <div style={{ display:"flex", gap:4, marginBottom:6 }}>
+                          {[["", "Einmalig"], ["daily", "Täglich"], ["weekly", "Wöchentlich"]].map(([val, lbl])=>(
+                            <button key={val} onClick={()=>setEditRec(val)} style={{
+                              flex:1, padding:"4px 6px", borderRadius:6,
+                              background: editRec===val ? T.gold+"22" : "transparent",
+                              border: `1px solid ${editRec===val ? T.gold : T.borderS}`,
+                              color: editRec===val ? T.text : T.muted,
+                              fontFamily:T.serif, fontSize:10, cursor:"pointer",
+                              fontStyle: editRec===val ? "normal" : "italic"
+                            }}>{lbl}</button>
+                          ))}
+                        </div>
                         <div style={{ display:"flex", gap:6 }}>
                           <button onClick={saveEdit} style={{ background:`linear-gradient(135deg,#78350F,${T.goldL})`, border:"none", borderRadius:6, padding:"4px 14px", color:T.bg, fontFamily:T.serif, fontSize:11, fontWeight:700, cursor:"pointer" }}>Speichern</button>
                           <button onClick={cancelEdit} style={{ background:"transparent", border:`1px solid ${T.borderS}`, borderRadius:6, padding:"4px 12px", color:T.muted, fontFamily:T.serif, fontSize:11, cursor:"pointer", fontStyle:"italic" }}>Abbrechen</button>
@@ -1856,6 +1906,12 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
                         </div>
                       </div>
                       <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                        {e.recurrence && (
+                          <span style={{ fontFamily:T.mono,fontSize:10,color:T.gold,background:"transparent",border:`1px solid ${T.gold}33`,borderRadius:3,padding:"1px 6px",letterSpacing:.5 }}
+                            title={e.recurrence === "weekly" ? "Wöchentlich" : "Täglich"}>
+                            ↻ {e.recurrence === "weekly" ? "wö" : "tgl"}
+                          </span>
+                        )}
                         {e.local && <span style={{ fontFamily:T.mono,fontSize:10,color:T.gold,background:T.gold+"18",border:`1px solid ${T.gold}33`,borderRadius:3,padding:"1px 6px",letterSpacing:1 }}>LOKAL</span>}
                       </div>
                     </div>
@@ -4294,6 +4350,22 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
     return entries;
   })();
 
+  // Lifetime-Stats: Total-Counts über alles
+  const stats = (() => {
+    const entries = Object.values(logsByDate || {});
+    let totalDays = 0, totalMeals = 0, totalWorkouts = 0, totalMinutes = 0, totalWater = 0;
+    for (const l of entries) {
+      if (!l) continue;
+      const hasAny = (l.meals?.length||0) > 0 || l.water > 0 || l.sleep || l.energy || (l.workouts?.length||0) > 0;
+      if (hasAny) totalDays++;
+      totalMeals += l.meals?.length || 0;
+      totalWater += l.water || 0;
+      totalWorkouts += l.workouts?.length || 0;
+      totalMinutes += (l.workouts||[]).reduce((s,w)=>s+(w.duration||0),0);
+    }
+    return { totalDays, totalMeals, totalWorkouts, totalMinutes, totalWater };
+  })();
+
   // Längste Streaks aller Zeiten – durchgehende Tage rückwärts ab je Endpunkt scannen,
   // den längsten Run finden für Wasser≥8, Schlaf≥7h, mindestens 1 Mahlzeit.
   const allTimeStreaks = (() => {
@@ -4634,6 +4706,36 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
 
       {/* Voice-Settings */}
       <VoiceSettings/>
+
+      {/* Lifetime-Stats */}
+      {stats.totalDays > 0 && (
+        <Card style={{ marginBottom:12 }}>
+          <Lbl style={{ marginBottom:12 }}>ZAHLEN · GESAMT</Lbl>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:10 }}>
+            <div style={{ textAlign:"center" }}>
+              <div style={{ fontSize:20, color:T.text, fontFamily:T.mono, fontWeight:300 }}>{stats.totalDays}</div>
+              <div style={{ fontSize:9, color:T.muted, fontFamily:T.mono, letterSpacing:1, marginTop:2 }}>TAGE</div>
+            </div>
+            <div style={{ textAlign:"center" }}>
+              <div style={{ fontSize:20, color:T.gold, fontFamily:T.mono, fontWeight:300 }}>{stats.totalMeals}</div>
+              <div style={{ fontSize:9, color:T.muted, fontFamily:T.mono, letterSpacing:1, marginTop:2 }}>MAHLZEITEN</div>
+            </div>
+            <div style={{ textAlign:"center" }}>
+              <div style={{ fontSize:20, color:T.green, fontFamily:T.mono, fontWeight:300 }}>{stats.totalWorkouts}</div>
+              <div style={{ fontSize:9, color:T.muted, fontFamily:T.mono, letterSpacing:1, marginTop:2 }}>WORKOUTS</div>
+            </div>
+            <div style={{ textAlign:"center" }}>
+              <div style={{ fontSize:20, color:T.acc, fontFamily:T.mono, fontWeight:300 }}>{stats.totalWater}</div>
+              <div style={{ fontSize:9, color:T.muted, fontFamily:T.mono, letterSpacing:1, marginTop:2 }}>GLÄSER</div>
+            </div>
+          </div>
+          {stats.totalMinutes > 0 && (
+            <div style={{ marginTop:10, textAlign:"center", color:T.muted, fontFamily:T.serif, fontSize:11, fontStyle:"italic" }}>
+              Insgesamt {Math.floor(stats.totalMinutes/60)}h {stats.totalMinutes%60}min trainiert.
+            </div>
+          )}
+        </Card>
+      )}
 
       {/* Rekord-Streaks */}
       {(allTimeStreaks.water > 0 || allTimeStreaks.sleep > 0 || allTimeStreaks.meal > 0) && (
