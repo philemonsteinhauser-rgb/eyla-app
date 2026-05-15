@@ -956,6 +956,11 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate }) {
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState(null);
   const fileInputRef = useRef(null);
+  // Favoriten aus PlanScreen
+  const [favorites, setFavorites] = useState([]);
+  useEffect(() => {
+    retrieve("eyla_favorites_v1", []).then(f => setFavorites(Array.isArray(f) ? f : []));
+  }, []);
 
   // Datum-Navigator: User kann auch andere Tage nachtragen
   const [tagDate, setTagDate] = useState(()=>new Date());
@@ -1380,25 +1385,49 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate }) {
             </button>
           )}
 
-          {/* Quick-Add aus Historie */}
-          {recentMeals.length > 0 && !photoData && !listening && (
+          {/* Favoriten + Häufig */}
+          {!photoData && !listening && (favorites.length > 0 || recentMeals.length > 0) && (
             <div style={{ marginBottom:10 }}>
-              <Lbl style={{ marginBottom:6, fontSize:10 }}>HÄUFIG</Lbl>
-              <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
-                {recentMeals.map((m, i) => (
-                  <button key={i} onClick={()=>quickAddMeal(m)} style={{
-                    background:"transparent", border:`1px solid ${T.borderS}`, borderRadius:18,
-                    padding:"4px 10px", color:T.muted, fontFamily:T.serif, fontSize:11,
-                    fontStyle:"italic", cursor:"pointer", transition:"all .2s",
-                    display:"flex", alignItems:"center", gap:5
-                  }}
-                  onMouseEnter={e=>{e.currentTarget.style.borderColor=T.acc; e.currentTarget.style.color=T.text;}}
-                  onMouseLeave={e=>{e.currentTarget.style.borderColor=T.borderS; e.currentTarget.style.color=T.muted;}}>
-                    <span style={{ maxWidth:120, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{m.name}</span>
-                    {m.calories>0 && <span style={{ fontFamily:T.mono, fontSize:9, color:T.muted }}>{m.calories}</span>}
-                  </button>
-                ))}
-              </div>
+              {favorites.length > 0 && (
+                <>
+                  <Lbl style={{ marginBottom:6, fontSize:10 }}>★ FAVORITEN</Lbl>
+                  <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:8 }}>
+                    {favorites.slice(0, 6).map((f, i) => (
+                      <button key={i} onClick={()=>quickAddMeal({ name:f.name, calories:0, protein:0, carbs:0, fat:0 })} style={{
+                        background:T.gold+"10", border:`1px solid ${T.gold}33`, borderRadius:18,
+                        padding:"4px 10px", color:T.gold, fontFamily:T.serif, fontSize:11,
+                        fontStyle:"italic", cursor:"pointer", transition:"all .2s",
+                        display:"flex", alignItems:"center", gap:5
+                      }}
+                      onMouseEnter={e=>{e.currentTarget.style.background=T.gold+"22";}}
+                      onMouseLeave={e=>{e.currentTarget.style.background=T.gold+"10";}}>
+                        <span style={{ fontSize:9 }}>★</span>
+                        <span style={{ maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{f.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+              {recentMeals.length > 0 && (
+                <>
+                  <Lbl style={{ marginBottom:6, fontSize:10 }}>HÄUFIG</Lbl>
+                  <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+                    {recentMeals.map((m, i) => (
+                      <button key={i} onClick={()=>quickAddMeal(m)} style={{
+                        background:"transparent", border:`1px solid ${T.borderS}`, borderRadius:18,
+                        padding:"4px 10px", color:T.muted, fontFamily:T.serif, fontSize:11,
+                        fontStyle:"italic", cursor:"pointer", transition:"all .2s",
+                        display:"flex", alignItems:"center", gap:5
+                      }}
+                      onMouseEnter={e=>{e.currentTarget.style.borderColor=T.acc; e.currentTarget.style.color=T.text;}}
+                      onMouseLeave={e=>{e.currentTarget.style.borderColor=T.borderS; e.currentTarget.style.color=T.muted;}}>
+                        <span style={{ maxWidth:120, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{m.name}</span>
+                        {m.calories>0 && <span style={{ fontFamily:T.mono, fontSize:9, color:T.muted }}>{m.calories}</span>}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
           )}
           <div style={{ display:"flex", gap:8, marginBottom:8 }}>
@@ -2261,6 +2290,16 @@ function WeekScreen({ logsByDate, profile }) {
                   </div>
                 )}
               </div>
+              {/* Tagebuch-Notiz wenn vorhanden */}
+              {l?.note && (
+                <div style={{
+                  marginTop:10, paddingTop:10, borderTop:`1px solid ${T.border}`,
+                  color:T.mid, fontSize:12, fontStyle:"italic", fontFamily:T.serif, lineHeight:1.6
+                }}>
+                  <span style={{ color:T.muted, fontFamily:T.mono, fontSize:9, letterSpacing:1, marginRight:6 }}>📝</span>
+                  {l.note}
+                </div>
+              )}
             </Card>
           );
         })}
@@ -3098,6 +3137,22 @@ function PlanScreen({ profile }) {
   const [loaded, setLoaded] = useState(false);
   // Swap-Modus: welche Mahlzeit gerade ersetzt wird (id "dayIdx:slot")
   const [swappingKey, setSwappingKey] = useState(null);
+  // Favoriten – Set von normalisierten Mahlzeit-Namen
+  const [favorites, setFavorites] = useState([]);
+
+  useEffect(() => {
+    retrieve("eyla_favorites_v1", []).then(f => setFavorites(Array.isArray(f) ? f : []));
+  }, []);
+
+  function isFav(meal) {
+    return favorites.some(f => f.name === meal);
+  }
+  function toggleFav(meal) {
+    const exists = favorites.some(f => f.name === meal);
+    const next = exists ? favorites.filter(f => f.name !== meal) : [...favorites, { name: meal, addedAt: Date.now() }];
+    setFavorites(next);
+    persist("eyla_favorites_v1", next);
+  }
 
   // Plan beim Mount aus localStorage laden – sonst geht er bei Tab-Wechsel verloren
   useEffect(() => {
@@ -3344,19 +3399,34 @@ TIPP: [Konkreter Hinweis für diesen Tag – Timing, Zubereitung, Variation. Nic
                           <Lbl style={{ fontSize:10 }}>{labels[m]}</Lbl>
                         </div>
                         {!isEmpty && (
-                          <button
-                            onClick={()=>swapMeal(i, m)}
-                            disabled={isSwapping}
-                            title="Vorschlag tauschen"
-                            style={{
-                              background:"transparent", border:"none", color:T.muted,
-                              cursor: isSwapping ? "default" : "pointer", padding:"2px 4px",
-                              fontFamily:T.mono, fontSize:11, opacity: isSwapping ? 1 : 0.5,
-                              transition:"opacity .15s"
-                            }}
-                            onMouseEnter={e=>{ if(!isSwapping) e.currentTarget.style.opacity="1"; e.currentTarget.style.color = T.acc; }}
-                            onMouseLeave={e=>{ if(!isSwapping) e.currentTarget.style.opacity="0.5"; e.currentTarget.style.color = T.muted; }}
-                          >{isSwapping ? "…" : "↻"}</button>
+                          <div style={{ display:"flex", gap:2 }}>
+                            <button
+                              onClick={()=>toggleFav(day[m])}
+                              title={isFav(day[m]) ? "Aus Favoriten" : "Als Favorit"}
+                              style={{
+                                background:"transparent", border:"none",
+                                color: isFav(day[m]) ? T.gold : T.muted,
+                                cursor:"pointer", padding:"2px 4px",
+                                fontSize:11, opacity: isFav(day[m]) ? 1 : 0.5,
+                                transition:"opacity .15s"
+                              }}
+                              onMouseEnter={e=>{ e.currentTarget.style.opacity="1"; }}
+                              onMouseLeave={e=>{ e.currentTarget.style.opacity = isFav(day[m]) ? "1" : "0.5"; }}
+                            >{isFav(day[m]) ? "★" : "☆"}</button>
+                            <button
+                              onClick={()=>swapMeal(i, m)}
+                              disabled={isSwapping}
+                              title="Vorschlag tauschen"
+                              style={{
+                                background:"transparent", border:"none", color:T.muted,
+                                cursor: isSwapping ? "default" : "pointer", padding:"2px 4px",
+                                fontFamily:T.mono, fontSize:11, opacity: isSwapping ? 1 : 0.5,
+                                transition:"opacity .15s"
+                              }}
+                              onMouseEnter={e=>{ if(!isSwapping) e.currentTarget.style.opacity="1"; e.currentTarget.style.color = T.acc; }}
+                              onMouseLeave={e=>{ if(!isSwapping) e.currentTarget.style.opacity="0.5"; e.currentTarget.style.color = T.muted; }}
+                            >{isSwapping ? "…" : "↻"}</button>
+                          </div>
                         )}
                       </div>
                       <div style={{ color: isSwapping ? T.acc : T.mid, fontSize:12, paddingLeft:18, fontStyle:"italic", fontFamily:T.serif, transition:"color .2s" }}>
