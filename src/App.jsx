@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, Fragment } from "react";
 
 // ─── STORAGE (localStorage – browserkompatibel) ───────────────────────────────
 async function persist(key, value) {
@@ -250,7 +250,7 @@ function calorieTarget(profile) {
 }
 
 const TODAY = new Date().toDateString();
-const EMPTY_LOG = () => ({ meals:[], water:0, energy:"", sleep:"", workouts:[], weight:null, date:TODAY });
+const EMPTY_LOG = () => ({ meals:[], water:0, energy:"", sleep:"", workouts:[], weight:null, habits:{}, date:TODAY });
 
 // ─── LADEN-LAYOUTS ────────────────────────────────────────────────────────────
 // Typische Gang-Reihenfolge vom Eingang zur Kasse pro Discounter/Supermarkt.
@@ -522,6 +522,10 @@ HEUTE:
 - Wasser: ${log.water} Gläser (${(log.water*.25).toFixed(1)}L)
 - Energie: ${log.energy||"k.A."} | Schlaf: ${log.sleep||"k.A."}h
 - Training: ${(log.workouts||[]).length > 0 ? log.workouts.map(w=>`${w.type} ${w.duration}min`).join(", ") : "noch nicht"}
+- Gewohnheiten: ${(profile.habits||[]).length === 0 ? "–" : (profile.habits||[]).map(h => {
+  const done = log.habits && log.habits[h.id];
+  return `${done ? "✓" : "✗"} ${h.name}`;
+}).join(", ")}
 - Notiz: ${log.note ? `"${log.note.slice(0, 200)}"` : "–"}
 
 LETZTE 7 TAGE:
@@ -1505,6 +1509,36 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate }) {
         }
       </Card>
 
+      {/* Habits */}
+      {Array.isArray(profile.habits) && profile.habits.length > 0 && (
+        <Card style={{ marginTop:12 }}>
+          <Lbl style={{ marginBottom:10 }}>Gewohnheiten</Lbl>
+          <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+            {profile.habits.map(h => {
+              const done = !!(log.habits && log.habits[h.id]);
+              return (
+                <button key={h.id} onClick={()=>setLog(l=>({
+                  ...l,
+                  habits: { ...(l.habits||{}), [h.id]: !done }
+                }))} style={{
+                  background: done ? T.acc+"22" : "transparent",
+                  border:`1px solid ${done ? T.acc : T.borderS}`,
+                  borderRadius:20, padding:"7px 12px",
+                  color: done ? T.text : T.muted,
+                  fontFamily:T.serif, fontSize:13, cursor:"pointer",
+                  fontStyle: done ? "normal" : "italic",
+                  display:"flex", alignItems:"center", gap:6,
+                  transition:"all .2s"
+                }}>
+                  <span style={{ fontSize:13 }}>{done ? "✓" : h.emoji}</span>
+                  <span>{h.name}</span>
+                </button>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
       {/* Journal / Tagebuch */}
       <Card style={{ marginTop:12 }}>
         <Lbl style={{ marginBottom:10 }}>Notiz zum Tag</Lbl>
@@ -1963,6 +1997,52 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
 }
 
 // ─── WOCHEN SCREEN ────────────────────────────────────────────────────────────
+// Mini-Heatmap: Habit-Erledigung über 7 Tage (Card rendert nichts wenn keine Habits)
+function HabitHeatmap({ habits, days, logsByDate }) {
+  if (!habits || habits.length === 0) return null;
+  const reversed = days.slice().reverse(); // älteste links → heute rechts
+  return (
+    <Card style={{ marginBottom:12 }}>
+      <Lbl style={{ marginBottom:12 }}>GEWOHNHEITEN · WOCHE</Lbl>
+      <div style={{ display:"grid", gridTemplateColumns:"1.6fr repeat(7, 1fr)", gap:4, alignItems:"center" }}>
+        <div></div>
+        {reversed.map((d, i) => {
+          const dt = new Date(d);
+          const isToday = i === reversed.length - 1;
+          return (
+            <div key={d} style={{
+              textAlign:"center", fontSize:9, color: isToday ? T.acc : T.muted,
+              fontFamily:T.mono, letterSpacing:.5
+            }}>
+              {isToday ? "H" : dt.toLocaleDateString("de-DE",{weekday:"narrow"})}
+            </div>
+          );
+        })}
+        {habits.map(h => (
+          <Fragment key={h.id}>
+            <div style={{ display:"flex", alignItems:"center", gap:6, minWidth:0, paddingRight:4 }}>
+              <span style={{ fontSize:13 }}>{h.emoji}</span>
+              <span style={{ color:T.text, fontSize:11, fontFamily:T.serif, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{h.name}</span>
+            </div>
+            {reversed.map((d) => {
+              const done = !!(logsByDate?.[d]?.habits && logsByDate[d].habits[h.id]);
+              return (
+                <div key={d} style={{
+                  height:18, borderRadius:3,
+                  background: done ? T.acc : T.faint,
+                  border:`1px solid ${done ? T.acc+"55" : T.borderS}`,
+                  opacity: done ? 1 : 0.5,
+                  transition:"background .2s"
+                }}/>
+              );
+            })}
+          </Fragment>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 function WeekScreen({ logsByDate, profile }) {
   const days = lastNDays(7);
   const targetK = calorieTarget(profile || {}).target;
@@ -2171,6 +2251,9 @@ function WeekScreen({ logsByDate, profile }) {
       {insightError && (
         <p style={{ color:T.red, fontSize:11, fontStyle:"italic", margin:"-6px 0 12px", fontFamily:T.serif }}>{insightError}</p>
       )}
+
+      {/* Habit-Heatmap */}
+      <HabitHeatmap habits={profile?.habits || []} days={days} logsByDate={logsByDate}/>
 
       {/* Streaks */}
       {(waterStreak > 0 || sleepStreak > 0 || mealStreak > 0) && (
@@ -2385,6 +2468,18 @@ const EYLA_TOOLS = [
         intensity: { type: "string", description: "leicht | mittel | hart (optional)" }
       },
       required: ["type", "duration"]
+    }
+  },
+  {
+    name: "toggle_habit",
+    description: "Hak eine Gewohnheit für heute ab (oder wieder weg). Sucht per Teilstring-Match im Namen.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Name (oder Teil) der Gewohnheit" },
+        done: { type: "boolean", description: "true = abgehakt, false = nicht erledigt. Default true." }
+      },
+      required: ["name"]
     }
   },
   {
@@ -2778,6 +2873,16 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
           };
           setLog(l => ({...l, workouts: [...(l.workouts||[]), wo]}));
           return `Training: ${wo.type} ${dur}min${wo.intensity?` (${wo.intensity})`:""}`;
+        }
+        case "toggle_habit": {
+          const habits = Array.isArray(profile.habits) ? profile.habits : [];
+          if (habits.length === 0) return "Keine Gewohnheiten definiert.";
+          const q = String(input.name||"").toLowerCase();
+          const habit = habits.find(h => h.name.toLowerCase().includes(q));
+          if (!habit) return `"${input.name}" nicht in Gewohnheiten gefunden.`;
+          const done = input.done === false ? false : true;
+          setLog(l => ({ ...l, habits: { ...(l.habits||{}), [habit.id]: done }}));
+          return `${done ? "✓" : "✗"} ${habit.name}`;
         }
         case "add_event": {
           const todayK = isoDateKey(new Date());
@@ -4410,6 +4515,57 @@ function VoiceSettings() {
   );
 }
 
+// Habits-Editor – im Profil. Profile.habits = [{id, emoji, name}]
+function HabitsEditor({ profile, onUpdate }) {
+  const habits = Array.isArray(profile.habits) ? profile.habits : [];
+  const [newEmoji, setNewEmoji] = useState("✓");
+  const [newName, setNewName] = useState("");
+
+  function add() {
+    if (!newName.trim()) return;
+    const next = [...habits, { id: String(Date.now()), emoji: newEmoji||"·", name: newName.trim() }];
+    onUpdate({ ...profile, habits: next });
+    setNewName(""); setNewEmoji("✓");
+  }
+  function remove(id) {
+    onUpdate({ ...profile, habits: habits.filter(h => h.id !== id) });
+  }
+
+  return (
+    <Card style={{ marginBottom:12 }}>
+      <Lbl style={{ marginBottom:10 }}>GEWOHNHEITEN</Lbl>
+      {habits.length === 0 ? (
+        <p style={{ color:T.muted, fontSize:12, fontStyle:"italic", fontFamily:T.serif, margin:"0 0 12px", lineHeight:1.6 }}>
+          Kleine Sachen die du täglich tun willst – Meditation, 10 Min Lesen, kein Alkohol.
+        </p>
+      ) : (
+        <div style={{ marginBottom:12 }}>
+          {habits.map(h => (
+            <div key={h.id} style={{ display:"flex", alignItems:"center", padding:"6px 0", borderBottom:`1px solid ${T.border}`, gap:10 }}>
+              <span style={{ fontSize:16, width:24, textAlign:"center" }}>{h.emoji}</span>
+              <span style={{ flex:1, color:T.text, fontSize:13 }}>{h.name}</span>
+              <button onClick={()=>remove(h.id)} style={{ background:"none", border:"none", color:T.muted, cursor:"pointer", fontSize:15, padding:2 }}>×</button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ display:"flex", gap:6 }}>
+        <input value={newEmoji} onChange={e=>setNewEmoji(e.target.value.slice(0,2))}
+          placeholder="✓" style={{ width:44, textAlign:"center", background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:8, padding:"8px 6px", color:T.text, fontSize:14, outline:"none" }}/>
+        <input value={newName} onChange={e=>setNewName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()}
+          placeholder="Neue Gewohnheit (z.B. Meditation, 10 Min Lesen)"
+          style={{ flex:1, background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:8, padding:"8px 12px", color:T.text, fontFamily:T.serif, fontSize:13, fontStyle:"italic", outline:"none" }}/>
+        <button onClick={add} disabled={!newName.trim()} style={{
+          background:newName.trim()?`linear-gradient(135deg,${T.dim},${T.acc})`:T.bg2,
+          border:"none", borderRadius:8, padding:"0 14px",
+          color:newName.trim()?T.bg:T.muted, fontFamily:T.serif, fontSize:13, fontWeight:700,
+          cursor:newName.trim()?"pointer":"default"
+        }}>+</button>
+      </div>
+    </Card>
+  );
+}
+
 function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
   // Gewichts-Historie aus allen logs sammeln (gefiltert auf nicht-null)
   const weightHistory = (() => {
@@ -4776,6 +4932,9 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
 
       {/* Voice-Settings */}
       <VoiceSettings/>
+
+      {/* Habits-Editor */}
+      <HabitsEditor profile={profile} onUpdate={onUpdate}/>
 
       {/* Lifetime-Stats */}
       {stats.totalDays > 0 && (
