@@ -2977,6 +2977,11 @@ function ShoppingScreen() {
   const [newMenge, setNewMenge] = useState("");
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState(null);
+  // Receipt-Foto-State
+  const [receiptScanning, setReceiptScanning] = useState(false);
+  const [receiptMatches, setReceiptMatches] = useState(null); // { matched:[{aisle,name,checked}], unmatched:[strings] }
+  const [receiptError, setReceiptError] = useState(null);
+  const receiptFileRef = useRef(null);
 
   // Generiert Einkaufsliste aus dem gespeicherten 7-Tage-Plan.
   // Manuelle Items bleiben erhalten, Plan-Items werden ersetzt.
@@ -3120,6 +3125,112 @@ function ShoppingScreen() {
       delete checkedCopy[d.aisles[aisleIdx].name + "::" + itemName];
       return { ...d, aisles, checked: checkedCopy };
     });
+  }
+
+  // Receipt-Foto: User wählt Bild → wird komprimiert → an Claude Vision für Item-Extraktion
+  async function handleReceiptFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setReceiptError(null);
+    setReceiptScanning(true);
+
+    try {
+      // Bild komprimieren
+      const reader = new FileReader();
+      const dataUrl = await new Promise((resolve, reject) => {
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const img = new Image();
+      img.src = dataUrl;
+      await new Promise(r => { img.onload = r; });
+      const max = 1400;
+      const scale = Math.min(1, max/Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width*scale);
+      canvas.height = Math.round(img.height*scale);
+      const ctx2 = canvas.getContext("2d");
+      ctx2.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const base64 = canvas.toDataURL("image/jpeg", 0.85).split(",")[1];
+
+      // An Claude Vision: alle Lebensmittel-Items vom Kassenbon
+      const res = await fetch("/api/chat", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          model: "claude-sonnet-4-5",
+          max_tokens: 800,
+          system: "Du analysierst Kassenbons. Liste ALLE Lebensmittel-Artikel die du erkennst. Pro Zeile EIN Artikel-Name (vereinfacht, ohne Marke/Menge). Beispiel:\n- Tomaten\n- Vollmilch\n- Vollkornbrot\nKeine Erklärung, keine Markdown-Überschriften. Wenn nichts erkennbar: 'KEINE ITEMS'.",
+          messages: [{
+            role: "user",
+            content: [
+              { type:"image", source:{ type:"base64", media_type:"image/jpeg", data: base64 } },
+              { type:"text", text:"Was steht auf diesem Kassenbon?" }
+            ]
+          }]
+        })
+      });
+      const dataRes = await res.json();
+      const text = dataRes.content?.find(b=>b.type==="text")?.text || "";
+
+      if (!text || text.includes("KEINE ITEMS")) {
+        setReceiptError("Keine Lebensmittel erkannt – versuch ein klareres Foto.");
+        setReceiptScanning(false);
+        return;
+      }
+
+      // Items aus dem Response extrahieren (Zeilen die mit - oder * starten oder einfach Text)
+      const detectedItems = text.split("\n")
+        .map(l => l.replace(/^[\s\-*•·#>]+/, "").replace(/[*_#]/g,"").trim())
+        .filter(l => l.length > 1 && l.length < 60);
+
+      // Fuzzy Match gegen offene Items
+      const matched = [];
+      const unmatched = [];
+      const alreadyMatched = new Set();
+      for (const detected of detectedItems) {
+        const norm = detected.toLowerCase();
+        let hit = null;
+        for (const aisle of data.aisles) {
+          for (const item of aisle.items) {
+            const key = aisle.name + "::" + item.name;
+            if (data.checked[key]) continue; // schon abgehakt
+            if (alreadyMatched.has(key)) continue;
+            const itemNorm = item.name.toLowerCase();
+            // Direkt-Substring oder umgekehrt
+            if (itemNorm.includes(norm) || norm.includes(itemNorm.split(/[\s(]/)[0])) {
+              hit = { aisle: aisle.name, name: item.name, key };
+              break;
+            }
+          }
+          if (hit) break;
+        }
+        if (hit) {
+          alreadyMatched.add(hit.key);
+          matched.push({ ...hit, detected, checked: true });
+        } else {
+          unmatched.push(detected);
+        }
+      }
+
+      setReceiptMatches({ matched, unmatched });
+    } catch(err) {
+      setReceiptError("Konnte Kassenbon nicht lesen: " + (err.message||err));
+    }
+    setReceiptScanning(false);
+    e.target.value = "";
+  }
+
+  function applyReceiptMatches() {
+    if (!receiptMatches) return;
+    setData(d => {
+      const newChecked = { ...d.checked };
+      receiptMatches.matched.filter(m => m.checked).forEach(m => {
+        newChecked[m.key] = true;
+      });
+      return { ...d, checked: newChecked };
+    });
+    setReceiptMatches(null);
   }
 
   function selectStore(storeId) {
@@ -3274,32 +3385,111 @@ function ShoppingScreen() {
           }}>↺ RESET</button>
         </div>
 
-        {/* Aus Plan generieren */}
-        <div style={{ marginTop:10 }}>
-          <button onClick={generateFromPlan} disabled={generating} style={{
-            width:"100%", padding:"9px 14px", borderRadius:10,
+        {/* Aktionen: Aus Plan füllen + Kassenbon scannen */}
+        <input ref={receiptFileRef} type="file" accept="image/*" capture="environment" onChange={handleReceiptFile} style={{ display:"none" }}/>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginTop:10 }}>
+          <button onClick={generateFromPlan} disabled={generating || receiptScanning} style={{
+            padding:"9px 10px", borderRadius:10,
             border:`1px solid ${T.acc}44`,
             background: generating ? T.bg2 : T.acc+"12",
             color: T.acc, fontFamily:T.serif, fontSize:12,
             cursor: generating ? "default" : "pointer",
             fontStyle:"italic", transition:"all .2s",
-            display:"flex", alignItems:"center", justifyContent:"center", gap:8
+            display:"flex", alignItems:"center", justifyContent:"center", gap:6
           }}>
             {generating ? (
               <>
                 <Waveform/>
-                <span style={{ fontFamily:T.mono, fontSize:10, letterSpacing:1 }}>EYLA SCHREIBT LISTE …</span>
+                <span style={{ fontFamily:T.mono, fontSize:9, letterSpacing:1 }}>SCHREIBT …</span>
               </>
             ) : (
-              <>📋 Aus aktuellem Plan füllen</>
+              <>📋 Aus Plan</>
             )}
           </button>
-          {genError && (
-            <p style={{ color:T.red, fontSize:11, fontStyle:"italic", margin:"6px 0 0", fontFamily:T.serif }}>
-              {genError}
-            </p>
-          )}
+          <button onClick={()=>receiptFileRef.current?.click()} disabled={generating || receiptScanning} style={{
+            padding:"9px 10px", borderRadius:10,
+            border:`1px solid ${T.gold}44`,
+            background: receiptScanning ? T.bg2 : T.gold+"12",
+            color: T.gold, fontFamily:T.serif, fontSize:12,
+            cursor: receiptScanning ? "default" : "pointer",
+            fontStyle:"italic", transition:"all .2s",
+            display:"flex", alignItems:"center", justifyContent:"center", gap:6
+          }}>
+            {receiptScanning ? (
+              <>
+                <Waveform/>
+                <span style={{ fontFamily:T.mono, fontSize:9, letterSpacing:1 }}>SCANNT …</span>
+              </>
+            ) : (
+              <>📷 Kassenbon</>
+            )}
+          </button>
         </div>
+        {genError && (
+          <p style={{ color:T.red, fontSize:11, fontStyle:"italic", margin:"6px 0 0", fontFamily:T.serif }}>
+            {genError}
+          </p>
+        )}
+        {receiptError && (
+          <p style={{ color:T.red, fontSize:11, fontStyle:"italic", margin:"6px 0 0", fontFamily:T.serif }}>
+            {receiptError}
+          </p>
+        )}
+
+        {/* Receipt-Matches Preview */}
+        {receiptMatches && (
+          <Card gold style={{ marginTop:12, animation:"fadeUp .3s ease both" }}>
+            <Lbl color={T.gold} style={{ marginBottom:10 }}>KASSENBON ERKANNT</Lbl>
+            {receiptMatches.matched.length > 0 ? (
+              <>
+                <p style={{ color:T.mid, fontSize:12, fontStyle:"italic", fontFamily:T.serif, margin:"0 0 10px" }}>
+                  {receiptMatches.matched.filter(m=>m.checked).length} von {receiptMatches.matched.length} werden abgehakt:
+                </p>
+                <div style={{ marginBottom:12 }}>
+                  {receiptMatches.matched.map((m, i) => (
+                    <label key={i} style={{
+                      display:"flex", alignItems:"center", gap:10,
+                      padding:"6px 0", borderBottom:`1px solid ${T.border}`, cursor:"pointer"
+                    }}>
+                      <input type="checkbox" checked={m.checked} onChange={e=>{
+                        const next = [...receiptMatches.matched];
+                        next[i] = { ...next[i], checked: e.target.checked };
+                        setReceiptMatches({ ...receiptMatches, matched: next });
+                      }} style={{ accentColor:T.gold }}/>
+                      <div style={{ flex:1 }}>
+                        <div style={{ color:T.text, fontSize:13 }}>{m.name}</div>
+                        <div style={{ color:T.muted, fontSize:10, fontFamily:T.mono }}>{m.aisle} · erkannt als „{m.detected}"</div>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p style={{ color:T.muted, fontSize:12, fontStyle:"italic", fontFamily:T.serif, margin:"0 0 10px" }}>
+                Keine Treffer in der Liste.
+              </p>
+            )}
+            {receiptMatches.unmatched.length > 0 && (
+              <p style={{ color:T.muted, fontSize:10, fontStyle:"italic", fontFamily:T.serif, margin:"0 0 12px" }}>
+                Nicht zugeordnet: {receiptMatches.unmatched.slice(0, 8).join(", ")}{receiptMatches.unmatched.length > 8 ? " …" : ""}
+              </p>
+            )}
+            <div style={{ display:"flex", gap:8 }}>
+              {receiptMatches.matched.length > 0 && (
+                <button onClick={applyReceiptMatches} style={{
+                  background:`linear-gradient(135deg,#78350F,${T.goldL})`, border:"none",
+                  borderRadius:8, padding:"8px 18px", color:T.bg,
+                  fontFamily:T.serif, fontSize:13, fontWeight:700, cursor:"pointer"
+                }}>Übernehmen</button>
+              )}
+              <button onClick={()=>setReceiptMatches(null)} style={{
+                background:"transparent", border:`1px solid ${T.borderS}`,
+                borderRadius:8, padding:"8px 14px", color:T.muted,
+                fontFamily:T.serif, fontSize:13, fontStyle:"italic", cursor:"pointer"
+              }}>Abbrechen</button>
+            </div>
+          </Card>
+        )}
       </div>
 
       {/* Legende */}
