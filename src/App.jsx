@@ -3314,6 +3314,87 @@ function PlanScreen({ profile }) {
   const [swappingKey, setSwappingKey] = useState(null);
   // Favoriten – Set von normalisierten Mahlzeit-Namen
   const [favorites, setFavorites] = useState([]);
+  // Kühlschrank-Foto State
+  const [fridgeAnalyzing, setFridgeAnalyzing] = useState(false);
+  const [fridgeIdeas, setFridgeIdeas] = useState(null); // {ingredients, ideas[]}
+  const [fridgeError, setFridgeError] = useState(null);
+  const fridgeFileRef = useRef(null);
+
+  async function handleFridgeFile(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFridgeError(null);
+    setFridgeAnalyzing(true);
+    setFridgeIdeas(null);
+    try {
+      const reader = new FileReader();
+      const dataUrl = await new Promise((resolve, reject) => {
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const img = new Image();
+      img.src = dataUrl;
+      await new Promise(r => { img.onload = r; });
+      const max = 1400;
+      const scale = Math.min(1, max/Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width*scale);
+      canvas.height = Math.round(img.height*scale);
+      const ctx2 = canvas.getContext("2d");
+      ctx2.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const base64 = canvas.toDataURL("image/jpeg", 0.85).split(",")[1];
+
+      const ct = calorieTarget(profile);
+      const mt = macroTarget(profile);
+      const prefs = profile.preferences?.join(", ") || "wenig Fleisch, mediterran";
+      const intol = profile.intolerances?.length>0 ? "Intoleranzen meiden: " + profile.intolerances.join(", ") + "." : "";
+
+      const res = await fetch("/api/chat", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          model: "claude-sonnet-4-5",
+          max_tokens: 800,
+          system: `Du analysierst ein Kühlschrank-/Vorrats-Foto und schlägst Mahlzeit-Ideen vor. Antworte STRENG in diesem Format, kein Markdown:
+
+ZUTATEN: <komma-separierte Liste was du siehst, max 15 Items>
+
+IDEE 1: <kurze Mahlzeit-Beschreibung mit Zutaten aus dem Foto> (~XXX kcal)
+IDEE 2: <...> (~XXX kcal)
+IDEE 3: <...> (~XXX kcal)
+
+Mahlzeiten passend zu Profil (${prefs}, ${ct.type === "abnehmen" ? "Defizit" : ct.type === "aufbauen" ? "Überschuss" : "Halten"}, ${mt.protein}g Protein/Tag-Ziel). ${intol} Kein Markdown, keine Bullets. 3 ideen genau.`,
+          messages: [{
+            role: "user",
+            content: [
+              { type:"image", source:{ type:"base64", media_type:"image/jpeg", data: base64 } },
+              { type:"text", text:"Was siehst du, was kann ich daraus machen?" }
+            ]
+          }]
+        })
+      });
+      const data = await res.json();
+      const text = data.content?.find(b=>b.type==="text")?.text || "";
+      if (!text) throw new Error("Leere Antwort");
+
+      // Parse
+      const ingredientsMatch = text.match(/ZUTATEN:\s*([^\n]+)/i);
+      const ingredients = ingredientsMatch ? ingredientsMatch[1].trim() : "";
+      const ideaRegex = /IDEE\s*\d+:\s*([^\n]+)/gi;
+      const ideas = [];
+      let m;
+      while ((m = ideaRegex.exec(text)) !== null) {
+        ideas.push(m[1].trim());
+      }
+      if (ideas.length === 0) throw new Error("Konnte keine Ideen lesen");
+
+      setFridgeIdeas({ ingredients, ideas });
+    } catch(err) {
+      setFridgeError("Konnte Foto nicht analysieren: " + (err.message||err));
+    }
+    setFridgeAnalyzing(false);
+    e.target.value = "";
+  }
 
   useEffect(() => {
     retrieve("eyla_favorites_v1", []).then(f => setFavorites(Array.isArray(f) ? f : []));
@@ -3529,9 +3610,62 @@ TIPP: [Konkreter Hinweis für diesen Tag – Timing, Zubereitung, Variation. Nic
   return (
     <div>
       <Lbl style={{ marginBottom:8 }}>ERNÄHRUNGSPLAN</Lbl>
-      <h2 style={{ fontSize:20, fontWeight:300, color:T.text, margin:"0 0 20px" }}>
+      <h2 style={{ fontSize:20, fontWeight:300, color:T.text, margin:"0 0 14px" }}>
         Eine Woche, <span style={{ color:T.gold }}>nur für dich.</span>
       </h2>
+
+      {/* Quick-Action: Kühlschrank-Foto → Ideen */}
+      <input ref={fridgeFileRef} type="file" accept="image/*" capture="environment" onChange={handleFridgeFile} style={{ display:"none" }}/>
+      <button onClick={()=>fridgeFileRef.current?.click()} disabled={fridgeAnalyzing} style={{
+        width:"100%", padding:"10px 14px", borderRadius:10, marginBottom:14,
+        border:`1px solid ${T.gold}44`,
+        background: fridgeAnalyzing ? T.bg2 : T.gold+"10",
+        color: T.gold, fontFamily:T.serif, fontSize:13,
+        cursor: fridgeAnalyzing ? "default" : "pointer",
+        fontStyle:"italic", transition:"all .2s",
+        display:"flex", alignItems:"center", justifyContent:"center", gap:8
+      }}>
+        {fridgeAnalyzing ? (
+          <>
+            <Waveform/>
+            <span style={{ fontFamily:T.mono, fontSize:10, letterSpacing:1 }}>EYLA SCHAUT IN DEN KÜHLSCHRANK …</span>
+          </>
+        ) : (
+          <>📷 Was kann ich heute kochen? · Foto vom Kühlschrank</>
+        )}
+      </button>
+      {fridgeError && (
+        <p style={{ color:T.red, fontSize:11, fontStyle:"italic", margin:"0 0 12px", fontFamily:T.serif }}>{fridgeError}</p>
+      )}
+      {fridgeIdeas && (
+        <Card gold style={{ marginBottom:14, animation:"fadeUp .3s ease both" }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:8 }}>
+            <Lbl color={T.gold} style={{ marginBottom:0 }}>EYLAS IDEEN</Lbl>
+            <button onClick={()=>setFridgeIdeas(null)} style={{ background:"none", border:"none", color:T.muted, cursor:"pointer", fontSize:14, padding:2 }}>×</button>
+          </div>
+          {fridgeIdeas.ingredients && (
+            <p style={{ color:T.mid, fontSize:11, fontStyle:"italic", margin:"0 0 12px", lineHeight:1.6, fontFamily:T.serif }}>
+              <span style={{ color:T.muted, fontFamily:T.mono, fontSize:10, letterSpacing:1, marginRight:6 }}>GESEHEN:</span>
+              {fridgeIdeas.ingredients}
+            </p>
+          )}
+          <div>
+            {fridgeIdeas.ideas.map((idea, i) => (
+              <div key={i} style={{
+                padding:"10px 12px", marginBottom:6,
+                background:T.bg2, borderRadius:8,
+                borderLeft:`2px solid ${T.gold}`
+              }}>
+                <div style={{ display:"flex", justifyContent:"space-between", gap:8 }}>
+                  <span style={{ color:T.text, fontSize:13, fontFamily:T.serif, fontStyle:"italic", flex:1 }}>
+                    {idea}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
       {days.length === 0 && !loading && (
         <Card accent style={{ textAlign:"center", padding:40 }}>
           <div style={{ display:"flex", justifyContent:"center", marginBottom:20 }}><EylaOrb size={60}/></div>
