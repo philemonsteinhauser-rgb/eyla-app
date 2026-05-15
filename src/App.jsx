@@ -1753,6 +1753,10 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
   const [editDur, setEditDur] = useState("");
   const [editDate, setEditDate] = useState("");
   const [editRec, setEditRec] = useState("");
+  // AI-Quick-Add
+  const [aiInput, setAiInput] = useState("");
+  const [aiParsing, setAiParsing] = useState(false);
+  const [aiError, setAiError] = useState(null);
 
   const todayKey = isoDateKey(new Date());
   const selectedKey = isoDateKey(selectedDate);
@@ -1803,6 +1807,53 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
       recurrence: newRec || null,
     }]);
     setNewTitle(""); setNewTime(""); setNewDur(""); setNewRec(""); setShowAdd(false);
+  }
+
+  // AI-Quick-Add: Natürliche Sprache → Termin
+  async function aiQuickAdd() {
+    const text = aiInput.trim();
+    if (!text) return;
+    setAiParsing(true);
+    setAiError(null);
+    try {
+      const todayStr = new Date().toLocaleDateString("de-DE",{ weekday:"long", year:"numeric", month:"2-digit", day:"2-digit" });
+      const todayIso = isoDateKey(new Date());
+      const res = await fetch("/api/chat", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          model:"claude-sonnet-4-5",
+          max_tokens:200,
+          system:`Du parst Termin-Beschreibungen in strukturierte Daten. Heute ist ${todayStr} (${todayIso}). Antworte STRENG mit einem JSON-Objekt, KEIN Markdown, KEIN Text drumherum:\n{"title":"<Was>","date":"YYYY-MM-DD","time":"HH:MM oder leer","duration":"z.B. 1h oder leer","recurrence":"daily|weekly|null"}\nWenn 'jeden Mittwoch' o.ä. → recurrence weekly. 'morgen' = heute +1 Tag. 'übermorgen' = +2. 'nächsten Montag' = nächster Montag. Bei Zweifel time leer lassen.`,
+          messages:[{ role:"user", content:text }]
+        })
+      });
+      const data = await res.json();
+      const txt = data.content?.find(b=>b.type==="text")?.text?.trim() || "";
+      // JSON aus Text extrahieren (manchmal hat Modell Markdown-Reste)
+      const cleaned = txt.replace(/^```json\s*|```\s*$/g, "").replace(/^```\s*|```\s*$/g, "").trim();
+      let parsed;
+      try { parsed = JSON.parse(cleaned); } catch { throw new Error("Konnte Antwort nicht parsen"); }
+
+      if (!parsed.title) throw new Error("Titel fehlt");
+      const newEv = {
+        id: Date.now(),
+        title: parsed.title,
+        time: parsed.time || "",
+        duration: parsed.duration || "",
+        date: parsed.date || selectedKey,
+        recurrence: parsed.recurrence && parsed.recurrence !== "null" ? parsed.recurrence : null,
+        local: true,
+      };
+      saveLocal([...localEvents, newEv]);
+      // Springe zum Datum des neuen Events
+      if (parsed.date) {
+        try { setSelectedDate(new Date(parsed.date + "T00:00:00")); } catch {}
+      }
+      setAiInput("");
+    } catch (e) {
+      setAiError("Konnte nicht verstanden werden: " + (e.message||e));
+    }
+    setAiParsing(false);
   }
 
   function prevDay() {
@@ -1861,6 +1912,56 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
       <div style={{ marginBottom:14 }}>
         <Lbl style={{ marginBottom:6 }}>KALENDER</Lbl>
 
+        {/* Wochen-Strip: 7 Tage als Pills mit Event-Dots */}
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(7, 1fr)", gap:4, marginBottom:14 }}>
+          {Array.from({length:7}, (_, i) => {
+            // Strip startet 3 Tage vor selectedDate, endet 3 Tage danach (zentriert auf gewählten)
+            const d = new Date(selectedDate);
+            d.setDate(d.getDate() + (i - 3));
+            const dKey = isoDateKey(d);
+            const dTodayK = isoDateKey(new Date());
+            const isSelected = dKey === selectedKey;
+            const isTodayPill = dKey === dTodayK;
+            // Anzahl Events an dem Tag (lokale + recurring)
+            const dWeekday = d.getDay();
+            const count = localEvents.filter(e => {
+              const evDateStr = e.date || dTodayK;
+              if (evDateStr === dKey) return true;
+              if (!e.recurrence) return false;
+              if (evDateStr > dKey) return false;
+              if (e.recurrence === "daily") return true;
+              if (e.recurrence === "weekly") {
+                const evDate = new Date(evDateStr);
+                return evDate.getDay() === dWeekday;
+              }
+              return false;
+            }).length;
+            return (
+              <button key={dKey} onClick={()=>setSelectedDate(new Date(d))} style={{
+                background: isSelected ? T.gold+"22" : isTodayPill ? T.acc+"14" : T.bg2,
+                border:`1px solid ${isSelected ? T.gold : isTodayPill ? T.acc+"55" : T.borderS}`,
+                borderRadius:10, padding:"6px 2px", cursor:"pointer",
+                color: isSelected ? T.gold : isTodayPill ? T.acc : T.muted,
+                fontFamily:T.mono, fontSize:10, letterSpacing:.5,
+                display:"flex", flexDirection:"column", alignItems:"center", gap:2,
+                transition:"all .2s"
+              }}>
+                <span style={{ fontSize:9, opacity:.7 }}>
+                  {d.toLocaleDateString("de-DE",{weekday:"short"}).slice(0,2).toUpperCase()}
+                </span>
+                <span style={{ fontSize:15, fontWeight:300 }}>{d.getDate()}</span>
+                {count > 0 && (
+                  <span style={{
+                    width: count > 3 ? 18 : 6, height:6, borderRadius:6,
+                    background: isSelected ? T.gold : isTodayPill ? T.acc : T.mid,
+                    fontSize:8, lineHeight:"6px", color:T.bg, textAlign:"center", fontFamily:T.mono
+                  }}>{count > 3 ? count : ""}</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
         {/* Date Navigator */}
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8, marginBottom:14 }}>
           <button onClick={prevDay} style={{
@@ -1909,7 +2010,30 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
       {/* Termin hinzufügen */}
       {showAdd && (
         <Card gold style={{ marginBottom:14, animation:"fadeUp .3s ease both" }}>
-          <Lbl color={T.gold} style={{ marginBottom:10 }}>Neuer Termin</Lbl>
+          {/* AI-Quick-Add via Natural Language */}
+          <Lbl color={T.acc} style={{ marginBottom:6 }}>✦ EYLA VERSTEHT</Lbl>
+          <div style={{ display:"flex", gap:6, marginBottom:14 }}>
+            <input value={aiInput} onChange={e=>setAiInput(e.target.value)}
+              onKeyDown={e=>e.key==="Enter"&&aiQuickAdd()}
+              placeholder='z.B. "morgen 14 Uhr Sport mit Tom" oder "jeden Mittwoch 19 Uhr Yoga"'
+              disabled={aiParsing}
+              style={{ flex:1, background:T.bg2, border:`1px solid ${T.acc}44`, borderRadius:8,
+                padding:"9px 12px", color:T.text, fontFamily:T.serif, fontSize:13,
+                fontStyle:"italic", outline:"none" }}/>
+            <button onClick={aiQuickAdd} disabled={!aiInput.trim()||aiParsing} style={{
+              background: (aiInput.trim()&&!aiParsing) ? `linear-gradient(135deg,${T.dim},${T.acc})` : T.bg2,
+              border:"none", borderRadius:8, padding:"0 14px",
+              color: (aiInput.trim()&&!aiParsing) ? T.bg : T.muted,
+              fontFamily:T.serif, fontSize:13, fontWeight:700,
+              cursor: (aiInput.trim()&&!aiParsing) ? "pointer" : "default"
+            }}>{aiParsing ? "…" : "✦"}</button>
+          </div>
+          {aiError && (
+            <p style={{ color:T.red, fontSize:11, fontStyle:"italic", margin:"-8px 0 12px", fontFamily:T.serif }}>{aiError}</p>
+          )}
+          <div style={{ borderTop:`1px solid ${T.border}`, paddingTop:12, marginBottom:10 }}>
+            <Lbl color={T.gold} style={{ marginBottom:10 }}>Oder manuell</Lbl>
+          </div>
           <input value={newTitle} onChange={e=>setNewTitle(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addEvent()}
             placeholder="Was?" autoFocus
             style={{ width:"100%", background:T.bg2,border:`1px solid ${T.borderS}`,borderRadius:8,padding:"9px 12px",color:T.text,fontFamily:T.serif,fontSize:13,fontStyle:"italic",outline:"none", boxSizing:"border-box", marginBottom:8 }}/>
