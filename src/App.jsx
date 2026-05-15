@@ -418,11 +418,12 @@ function buildPrompt(profile, log, events, weekHistory = [], plan = null, shoppi
     ? events.map(e=>`  - ${e.time||"?"} ${e.title}${e.duration?" ("+e.duration+")":""}`).join("\n")
     : "  Keine Termine heute.";
 
-  // Plan-Kontext: heutige Mahlzeiten aus dem 7-Tage-Plan
+  // Plan-Kontext: HEUTE detailliert + GESAMTE Woche kompakt
   const weekdayNames = ["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"];
   const today = weekdayNames[new Date().getDay()];
-  let planStr = "  Kein Plan vorhanden.";
-  if (plan && Array.isArray(plan.days)) {
+  let planTodayStr = "  Kein Plan vorhanden.";
+  let planWeekStr = "";
+  if (plan && Array.isArray(plan.days) && plan.days.length > 0) {
     const todayPlan = plan.days.find(d => d.day && d.day.toLowerCase().includes(today.toLowerCase()));
     if (todayPlan) {
       const parts = [];
@@ -430,8 +431,17 @@ function buildPrompt(profile, log, events, weekHistory = [], plan = null, shoppi
       if (todayPlan.lunch && todayPlan.lunch !== "–" && todayPlan.lunch !== "—") parts.push(`Mittag: ${todayPlan.lunch}`);
       if (todayPlan.dinner && todayPlan.dinner !== "–" && todayPlan.dinner !== "—") parts.push(`Abend: ${todayPlan.dinner}`);
       if (todayPlan.snack && todayPlan.snack !== "–" && todayPlan.snack !== "—") parts.push(`Snack: ${todayPlan.snack}`);
-      planStr = "  " + parts.join("\n  ");
+      planTodayStr = "  " + parts.join("\n  ");
     }
+    // Komplette Wochenübersicht (kompakt, eine Zeile pro Tag)
+    planWeekStr = plan.days.map(d => {
+      const compact = [];
+      if (d.breakfast && d.breakfast !== "–" && d.breakfast !== "—") compact.push(`F:${d.breakfast.replace(/\s*\(.*?\)\s*/g,'').trim()}`);
+      if (d.lunch     && d.lunch     !== "–" && d.lunch     !== "—") compact.push(`M:${d.lunch.replace(/\s*\(.*?\)\s*/g,'').trim()}`);
+      if (d.dinner    && d.dinner    !== "–" && d.dinner    !== "—") compact.push(`A:${d.dinner.replace(/\s*\(.*?\)\s*/g,'').trim()}`);
+      if (d.snack     && d.snack     !== "–" && d.snack     !== "—") compact.push(`S:${d.snack.replace(/\s*\(.*?\)\s*/g,'').trim()}`);
+      return `  ${d.day}: ${compact.join(" · ")}`;
+    }).join("\n");
   }
 
   // Einkaufsliste-Kontext: offene Items gruppiert
@@ -511,7 +521,10 @@ WAS HEUTE ANSTEHT:
 ${eventStr}
 
 HEUTIGER PLAN (aus 7-Tage-Plan):
-${planStr}
+${planTodayStr}
+
+WOCHEN-PLAN (kompakt):
+${planWeekStr || "  Kein Plan vorhanden."}
 
 EINKAUFSLISTE (offen):
 ${shoppingStr}
@@ -653,13 +666,18 @@ function Lbl({ children, color=T.muted, style={} }) {
 function VoiceBtn({ toggle, listening, supported }) {
   if (!supported) return null;
   return (
-    <button onClick={toggle} style={{ width:40, height:40, borderRadius:10, flexShrink:0,
+    <button onClick={toggle} title={listening ? "Aufnahme stoppen" : "Sprechen"} style={{
+      width:40, height:40, borderRadius:10, flexShrink:0,
       border:`1px solid ${listening?T.green:T.borderS}`,
-      background:listening?T.green+"22":T.bg2,
-      color:listening?T.green:T.muted, fontSize:17, cursor:"pointer", transition:"all .2s",
+      background:listening?T.green+"33":T.bg2,
+      color:listening?T.green:T.muted, fontSize:16, cursor:"pointer", transition:"all .2s",
       display:"flex", alignItems:"center", justifyContent:"center",
-      boxShadow:listening?`0 0 12px ${T.green}44`:"none"
-    }}>🎙</button>
+      boxShadow:listening?`0 0 14px ${T.green}66`:"none",
+      animation: listening ? "vbPulse 1.2s ease-in-out infinite" : "none"
+    }}>
+      <style>{`@keyframes vbPulse{0%,100%{box-shadow:0 0 14px ${T.green}66}50%{box-shadow:0 0 22px ${T.green}aa}}`}</style>
+      {listening ? "⏹" : "🎙"}
+    </button>
   );
 }
 
@@ -1281,11 +1299,15 @@ function TodayScreen({ profile, log, setLog, logsByDate }) {
           )}
 
           {listening && (
-            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10,
-              padding:"6px 12px", background:T.green+"11", border:`1px solid ${T.green}33`, borderRadius:8 }}>
+            <button onClick={toggle} style={{
+              width:"100%", display:"flex", alignItems:"center", gap:8, marginBottom:10,
+              padding:"6px 12px", background:T.green+"11", border:`1px solid ${T.green}33`, borderRadius:8,
+              cursor:"pointer", textAlign:"left"
+            }}>
               <div style={{ width:6,height:6,borderRadius:"50%",background:T.green,animation:"blink 1s infinite" }}/>
-              <span style={{ color:T.green, fontFamily:T.mono, fontSize:10, letterSpacing:1 }}>EYLA HÖRT ZU …</span>
-            </div>
+              <span style={{ color:T.green, fontFamily:T.mono, fontSize:10, letterSpacing:1, flex:1 }}>EYLA HÖRT ZU …</span>
+              <span style={{ color:T.muted, fontFamily:T.serif, fontSize:10, fontStyle:"italic" }}>tippen zum stoppen</span>
+            </button>
           )}
 
           {/* Quick-Add aus Historie */}
@@ -2536,11 +2558,13 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
       </div>
 
       {listening && (
-        <div style={{ display:"flex",alignItems:"center",gap:8,padding:"8px 16px",
-          background:T.green+"11",border:`1px solid ${T.green}33`,borderRadius:10,marginBottom:12 }}>
+        <button onClick={toggle} style={{ width:"100%", display:"flex",alignItems:"center",gap:8,padding:"8px 16px",
+          background:T.green+"11",border:`1px solid ${T.green}33`,borderRadius:10,marginBottom:12,
+          cursor:"pointer", textAlign:"left" }}>
           <div style={{ width:7,height:7,borderRadius:"50%",background:T.green,animation:"blink 1s infinite" }}/>
-          <span style={{ color:T.green,fontFamily:T.mono,fontSize:10,letterSpacing:1 }}>EYLA HÖRT ZU – sprich jetzt</span>
-        </div>
+          <span style={{ color:T.green,fontFamily:T.mono,fontSize:10,letterSpacing:1, flex:1 }}>EYLA HÖRT ZU – sprich jetzt</span>
+          <span style={{ color:T.muted, fontFamily:T.serif, fontSize:11, fontStyle:"italic" }}>tippen zum stoppen</span>
+        </button>
       )}
 
       <div style={{ flex:1, overflowY:"auto", paddingRight:4 }}>
@@ -3659,6 +3683,37 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
       .sort((a, b) => a.ts - b.ts);
     return entries;
   })();
+
+  // Längste Streaks aller Zeiten – durchgehende Tage rückwärts ab je Endpunkt scannen,
+  // den längsten Run finden für Wasser≥8, Schlaf≥7h, mindestens 1 Mahlzeit.
+  const allTimeStreaks = (() => {
+    const dates = Object.keys(logsByDate || {})
+      .map(k => ({ k, ts: new Date(k).getTime() }))
+      .sort((a, b) => a.ts - b.ts);
+    if (dates.length === 0) return { water:0, sleep:0, meal:0 };
+
+    // Vollständige Day-Sequenz vom ersten Eintrag bis heute (mit null wo nichts)
+    const start = new Date(dates[0].ts);
+    const today = new Date();
+    const sequence = [];
+    for (let d = new Date(start); d <= today; d.setDate(d.getDate()+1)) {
+      const key = d.toDateString();
+      sequence.push(logsByDate[key] || null);
+    }
+    function longestStreak(predicate) {
+      let cur = 0, max = 0;
+      for (const l of sequence) {
+        if (l && predicate(l)) { cur++; if (cur > max) max = cur; }
+        else cur = 0;
+      }
+      return max;
+    }
+    return {
+      water: longestStreak(l => (l.water||0) >= 8),
+      sleep: longestStreak(l => (parseFloat(String(l.sleep||"0").replace("+","")) || 0) >= 7),
+      meal:  longestStreak(l => (l.meals?.length||0) > 0),
+    };
+  })();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(profile);
 
@@ -3964,6 +4019,30 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
               </>
             );
           })()}
+        </Card>
+      )}
+
+      {/* Rekord-Streaks */}
+      {(allTimeStreaks.water > 0 || allTimeStreaks.sleep > 0 || allTimeStreaks.meal > 0) && (
+        <Card style={{ marginBottom:12 }}>
+          <Lbl style={{ marginBottom:12 }}>REKORDE · LÄNGSTE STREAKS</Lbl>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12 }}>
+            {[
+              { label:"💧 Wasser ≥8", value:allTimeStreaks.water, color:T.acc },
+              { label:"😴 Schlaf ≥7h", value:allTimeStreaks.sleep, color:T.mid },
+              { label:"🍽 Mahlzeit", value:allTimeStreaks.meal, color:T.gold },
+            ].map(s => (
+              <div key={s.label} style={{ textAlign:"center", padding:"4px 0" }}>
+                <div style={{ fontSize:11, color:T.muted, fontStyle:"italic", fontFamily:T.serif, marginBottom:4 }}>{s.label}</div>
+                <div style={{ fontSize:24, fontFamily:T.mono, color: s.value > 0 ? s.color : T.muted, fontWeight:300 }}>
+                  {s.value}
+                </div>
+                <div style={{ fontSize:9, color:T.muted, fontFamily:T.mono, letterSpacing:1, marginTop:2 }}>
+                  TAG{s.value===1?"":"E"}
+                </div>
+              </div>
+            ))}
+          </div>
         </Card>
       )}
 
