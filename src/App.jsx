@@ -552,7 +552,8 @@ REGELN: Immer Deutsch. 2–4 Sätze. Konkret mit Mengen/Zeiten. Bei Ernährungsf
 function useVoice(onResult) {
   const recRef = useRef(null);
   const cbRef = useRef(onResult);
-  const cancelledRef = useRef(false);
+  // Speichert auch interim-Transkript, damit bei manuellem Stop nichts verloren geht
+  const transcriptRef = useRef("");
   const [listening, setListening] = useState(false);
   const [supported, setSupported] = useState(false);
   useEffect(() => { cbRef.current = onResult; }, [onResult]);
@@ -561,32 +562,39 @@ function useVoice(onResult) {
     if (!SR) return;
     setSupported(true);
     const rec = new SR();
-    rec.lang = "de-DE"; rec.continuous = false; rec.interimResults = false;
+    rec.lang = "de-DE";
+    rec.continuous = true;       // bleibt offen bis stop/abort – wir steuern selbst
+    rec.interimResults = true;   // wir sammeln interim damit auch manueller Stop was hat
+
     rec.onresult = e => {
-      // Wenn User aktiv gestoppt hat, NICHT mehr verarbeiten
-      if (cancelledRef.current) { cancelledRef.current = false; return; }
-      const t = e.results[0][0].transcript;
-      try { rec.stop(); } catch {}
-      setListening(false);
-      if (t) cbRef.current(t);
+      // Komplettes Transkript aus allen results bauen
+      let full = "";
+      for (let i = 0; i < e.results.length; i++) {
+        full += e.results[i][0].transcript;
+      }
+      transcriptRef.current = full.trim();
     };
     rec.onerror = () => { setListening(false); };
-    rec.onend = () => { setListening(false); };
+    // onend feuert sowohl bei Auto-Stop (Pause) als auch bei explizitem stop()
+    rec.onend = () => {
+      setListening(false);
+      const t = transcriptRef.current;
+      transcriptRef.current = "";
+      if (t) cbRef.current(t);
+    };
     recRef.current = rec;
     return () => { try { rec.abort(); } catch {} };
   }, []);
+
   const toggle = useCallback(() => {
     const rec = recRef.current;
     if (!rec) return;
     if (listening) {
-      // User-initiated Stop: abort() killt instant, ohne onresult zu feuern.
-      // cancelledRef sichert ab dass selbst wenn onresult noch feuert, nichts passiert.
-      cancelledRef.current = true;
-      try { rec.abort(); } catch {}
-      try { rec.stop(); } catch {}
+      // User-Stop: stop() finalisiert + onend feuert → was bisher gesagt wurde geht an EYLA
+      try { rec.stop(); } catch { try { rec.abort(); } catch {} }
       setListening(false);
     } else {
-      cancelledRef.current = false;
+      transcriptRef.current = "";
       try { rec.start(); setListening(true); }
       catch { try { rec.abort(); rec.start(); setListening(true); } catch {} }
     }
@@ -2227,6 +2235,7 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
   const [loading, setLoading] = useState(false);
   const [voiceOn, setVoiceOn] = useState(true);  // default on – User wollte das
   const [speaking, setSpeaking] = useState(false);
+  const [voices, setVoices] = useState([]);
   // Kontext-Daten (Plan + Einkaufsliste) für EYLAs Wissen
   const [plan, setPlan] = useState(null);
   const [shopping, setShopping] = useState(null);
@@ -2236,23 +2245,93 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
   const bottomRef = useRef(null);
   const ttsSupported = typeof window !== "undefined" && "speechSynthesis" in window;
 
+  // Voices laden (async, kann initial leer sein – voiceschanged-Event triggert nach)
+  useEffect(() => {
+    if (!ttsSupported) return;
+    const load = () => {
+      const list = window.speechSynthesis.getVoices() || [];
+      setVoices(list);
+    };
+    load();
+    window.speechSynthesis.addEventListener?.("voiceschanged", load);
+    return () => window.speechSynthesis.removeEventListener?.("voiceschanged", load);
+  }, []);
+
+  // iOS-Workaround: SpeechSynthesis pausiert sich nach ~15s manchmal selbst.
+  // Wenn speaking aktiv und paused: resume()
+  useEffect(() => {
+    if (!speaking || !ttsSupported) return;
+    const iv = setInterval(() => {
+      try {
+        if (window.speechSynthesis.paused && window.speechSynthesis.speaking) {
+          window.speechSynthesis.resume();
+        }
+      } catch {}
+    }, 4000);
+    return () => clearInterval(iv);
+  }, [speaking]);
+
   function speak(text) {
     if (!voiceOn || !ttsSupported || !text) return;
     try {
+      // Voll-Reset des Synthesis-State
       window.speechSynthesis.cancel();
+
       const u = new SpeechSynthesisUtterance(text);
       u.lang = "de-DE";
-      u.rate = 1.05;
-      u.pitch = 1;
+      u.rate = 1.0;
+      u.pitch = 1.0;
+      u.volume = 1.0;
+
+      // Beste deutsche Stimme wenn vorhanden
+      const list = voices.length ? voices : (window.speechSynthesis.getVoices() || []);
+      const de = list.find(v => v.lang?.toLowerCase().startsWith("de"))
+              || list.find(v => v.lang?.toLowerCase().includes("de"));
+      if (de) u.voice = de;
+
       u.onstart = () => setSpeaking(true);
-      u.onend = () => setSpeaking(false);
-      u.onerror = () => setSpeaking(false);
-      window.speechSynthesis.speak(u);
-    } catch { setSpeaking(false); }
+      u.onend   = () => setSpeaking(false);
+      u.onerror = (e) => { console.warn("[TTS] error", e); setSpeaking(false); };
+
+      // Kleiner Delay – cancel() braucht manchmal einen Tick auf iOS
+      setTimeout(() => {
+        try {
+          window.speechSynthesis.speak(u);
+          // Manchmal startet onstart nicht – kurzer Fallback
+          setTimeout(() => {
+            if (window.speechSynthesis.speaking) setSpeaking(true);
+          }, 100);
+        } catch (err) {
+          console.warn("[TTS] speak() failed", err);
+        }
+      }, 60);
+    } catch (err) {
+      console.warn("[TTS] outer failed", err);
+      setSpeaking(false);
+    }
   }
   function stopSpeaking() {
     try { window.speechSynthesis.cancel(); } catch {}
     setSpeaking(false);
+  }
+  // Wenn Voice-Toggle eingeschaltet wird: einen leeren Utterance abspielen
+  // damit iOS die Audio-Permission freigibt (User-Gesture-Unlock).
+  function toggleVoice() {
+    const v = !voiceOn;
+    setVoiceOn(v);
+    persist("eyla_chat_voice_v1", v);
+    if (v && ttsSupported) {
+      try {
+        // Lade Voices nochmal explizit
+        setVoices(window.speechSynthesis.getVoices() || []);
+        const unlock = new SpeechSynthesisUtterance(" ");
+        unlock.volume = 0;
+        unlock.rate = 1;
+        window.speechSynthesis.speak(unlock);
+      } catch {}
+    } else {
+      stopSpeaking();
+    }
   }
 
   // Initial: Chat + Kontext laden
@@ -2565,12 +2644,7 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
         <Lbl>EYLA · CHAT</Lbl>
         <div style={{ display:"flex", gap:6 }}>
           {ttsSupported && (
-            <button onClick={()=>{
-              const v = !voiceOn;
-              setVoiceOn(v);
-              persist("eyla_chat_voice_v1", v);
-              if (!v) try { window.speechSynthesis.cancel(); } catch {}
-            }} style={{
+            <button onClick={toggleVoice} style={{
               background: voiceOn ? T.acc+"22" : "transparent",
               border:`1px solid ${voiceOn?T.acc:T.borderS}`, borderRadius:8,
               padding:"4px 10px", color: voiceOn?T.acc:T.muted,
