@@ -2277,28 +2277,37 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
       // Voll-Reset des Synthesis-State
       window.speechSynthesis.cancel();
 
+      // User-Settings aus Profil laden
+      const settings = loadVoiceSettings();
+
       const u = new SpeechSynthesisUtterance(text);
       u.lang = "de-DE";
-      u.rate = 1.15;   // bisschen flotter als default für natürlichen Klang
+      u.rate = settings.rate || 1.15;
       u.pitch = 1.0;
       u.volume = 1.0;
 
-      // Stimmen-Priorität:
-      // 1. Premium iOS-Stimmen (Anna/Helena/Petra haben sehr gute Qualität)
-      // 2. Alles mit "Premium" oder "Enhanced" im Namen
-      // 3. Weibliche deutsche Stimmen
-      // 4. Irgendeine deutsche Stimme
       const list = voices.length ? voices : (window.speechSynthesis.getVoices() || []);
-      const deVoices = list.filter(v => v.lang?.toLowerCase().startsWith("de"));
-      const preferredNames = ["anna", "helena", "petra", "vicki", "katharina", "marlene"];
-      const findByName = (n) => deVoices.find(v => v.name?.toLowerCase().includes(n));
-      const u_voice =
-        preferredNames.map(findByName).find(Boolean) ||
-        deVoices.find(v => /premium|enhanced|natural|neural/i.test(v.name||"")) ||
-        deVoices.find(v => /female|frau/i.test(v.name||"")) ||
-        deVoices[0] ||
-        list.find(v => v.lang?.toLowerCase().includes("de"));
-      if (u_voice) u.voice = u_voice;
+
+      // 1. User-Auswahl wenn gesetzt
+      let chosen = settings.voiceURI ? list.find(v => v.voiceURI === settings.voiceURI) : null;
+
+      // 2. Auto-Pick: Premium-Varianten priorisieren
+      if (!chosen) {
+        const deVoices = list.filter(v => v.lang?.toLowerCase().startsWith("de"));
+        const isQuality = (v) => /premium|enhanced|verbessert|natural|neural/i.test(v.name||"");
+        const preferredNames = ["anna", "helena", "petra", "vicki", "katharina", "marlene"];
+        const findByName = (n, quality) => deVoices.find(v =>
+          v.name?.toLowerCase().includes(n) && (!quality || isQuality(v))
+        );
+        chosen =
+          preferredNames.map(n => findByName(n, true)).find(Boolean) ||  // erst Premium-Variante
+          preferredNames.map(n => findByName(n, false)).find(Boolean) || // dann normal
+          deVoices.find(isQuality) ||
+          deVoices.find(v => /female|frau/i.test(v.name||"")) ||
+          deVoices[0] ||
+          list.find(v => v.lang?.toLowerCase().includes("de"));
+      }
+      if (chosen) u.voice = chosen;
 
       u.onstart = () => setSpeaking(true);
       u.onend   = () => setSpeaking(false);
@@ -3806,6 +3815,115 @@ function ShoppingScreen() {
 }
 
 // ─── PROFIL SCREEN ────────────────────────────────────────────────────────────
+// Sammelt + persistiert Stimme + Tempo. Auch von ChatScreen genutzt.
+function loadVoiceSettings() {
+  try {
+    const raw = localStorage.getItem("eyla_voice_settings_v1");
+    if (!raw) return { voiceURI: null, rate: 1.15 };
+    const parsed = JSON.parse(raw);
+    return { voiceURI: parsed.voiceURI || null, rate: parsed.rate || 1.15 };
+  } catch { return { voiceURI: null, rate: 1.15 }; }
+}
+
+function VoiceSettings() {
+  const ttsSupported = typeof window !== "undefined" && "speechSynthesis" in window;
+  const [voices, setVoices] = useState([]);
+  const [voiceURI, setVoiceURI] = useState(null);
+  const [rate, setRate] = useState(1.15);
+  const [testing, setTesting] = useState(false);
+
+  useEffect(() => {
+    if (!ttsSupported) return;
+    const load = () => setVoices(window.speechSynthesis.getVoices() || []);
+    load();
+    window.speechSynthesis.addEventListener?.("voiceschanged", load);
+    const s = loadVoiceSettings();
+    setVoiceURI(s.voiceURI);
+    setRate(s.rate);
+    return () => window.speechSynthesis.removeEventListener?.("voiceschanged", load);
+  }, []);
+
+  function persistSettings(next) {
+    const merged = { voiceURI, rate, ...next };
+    localStorage.setItem("eyla_voice_settings_v1", JSON.stringify(merged));
+  }
+  function setVoice(uri) { setVoiceURI(uri); persistSettings({ voiceURI: uri }); }
+  function setRateAndSave(r) { setRate(r); persistSettings({ rate: r }); }
+
+  function testVoice() {
+    if (!ttsSupported) return;
+    setTesting(true);
+    try {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance("Ich bin EYLA. So klingt meine Stimme.");
+      u.lang = "de-DE";
+      u.rate = rate;
+      const v = voices.find(x => x.voiceURI === voiceURI);
+      if (v) u.voice = v;
+      u.onend = () => setTesting(false);
+      u.onerror = () => setTesting(false);
+      setTimeout(()=>window.speechSynthesis.speak(u), 50);
+    } catch { setTesting(false); }
+  }
+
+  if (!ttsSupported) return null;
+
+  // Sortiere: Deutsche zuerst, dann nach Qualitäts-Indikator, dann Rest
+  const isQuality = (v) => /premium|enhanced|verbessert|natural|neural/i.test(v.name||"");
+  const sorted = [...voices].sort((a, b) => {
+    const aDe = a.lang?.toLowerCase().startsWith("de");
+    const bDe = b.lang?.toLowerCase().startsWith("de");
+    if (aDe !== bDe) return aDe ? -1 : 1;
+    if (isQuality(a) !== isQuality(b)) return isQuality(a) ? -1 : 1;
+    return (a.name||"").localeCompare(b.name||"");
+  });
+
+  return (
+    <Card style={{ marginBottom:12 }}>
+      <Lbl style={{ marginBottom:10 }}>STIMME · EYLA</Lbl>
+      <div style={{ marginBottom:12 }}>
+        <Lbl style={{ marginBottom:6, fontSize:10 }}>STIMME WÄHLEN ({sorted.length} verfügbar)</Lbl>
+        <select value={voiceURI || ""} onChange={e=>setVoice(e.target.value || null)} style={{
+          width:"100%", background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:8,
+          padding:"9px 12px", color:T.text, fontFamily:T.serif, fontSize:13,
+          outline:"none", boxSizing:"border-box", appearance:"none",
+          backgroundImage:`linear-gradient(45deg, transparent 50%, ${T.muted} 50%), linear-gradient(135deg, ${T.muted} 50%, transparent 50%)`,
+          backgroundPosition:"right 14px top 16px, right 9px top 16px",
+          backgroundSize:"5px 5px, 5px 5px",
+          backgroundRepeat:"no-repeat"
+        }}>
+          <option value="">– Auto (beste verfügbare) –</option>
+          {sorted.map(v => (
+            <option key={v.voiceURI} value={v.voiceURI}>
+              {v.name} · {v.lang}{isQuality(v) ? " ✦" : ""}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div style={{ marginBottom:14 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", marginBottom:6 }}>
+          <Lbl style={{ fontSize:10 }}>TEMPO</Lbl>
+          <span style={{ color:T.muted, fontFamily:T.mono, fontSize:10 }}>{rate.toFixed(2)}x</span>
+        </div>
+        <input type="range" min="0.7" max="1.5" step="0.05" value={rate}
+          onChange={e=>setRateAndSave(parseFloat(e.target.value))}
+          style={{ width:"100%", accentColor:T.acc }}/>
+        <div style={{ display:"flex", justifyContent:"space-between", color:T.muted, fontFamily:T.mono, fontSize:9, marginTop:2 }}>
+          <span>langsam</span><span>normal</span><span>schnell</span>
+        </div>
+      </div>
+      <button onClick={testVoice} disabled={testing} style={{
+        background:T.acc+"18", border:`1px solid ${T.acc}44`, borderRadius:10,
+        padding:"8px 16px", color:T.acc, fontFamily:T.serif, fontSize:12,
+        cursor: testing ? "default" : "pointer", fontStyle:"italic"
+      }}>{testing ? "🔊 Spricht …" : "🔊 Stimme testen"}</button>
+      <p style={{ color:T.muted, fontSize:10, fontStyle:"italic", fontFamily:T.serif, margin:"10px 0 0", lineHeight:1.5 }}>
+        Tipp iPhone: Einstellungen → Bedienungshilfen → VoiceOver → Sprachausgabe → Stimmen → Deutsch → eine „verbessert"-Stimme runterladen. Dann taucht sie hier mit ✦ auf.
+      </p>
+    </Card>
+  );
+}
+
 function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
   // Gewichts-Historie aus allen logs sammeln (gefiltert auf nicht-null)
   const weightHistory = (() => {
@@ -4153,6 +4271,9 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
           })()}
         </Card>
       )}
+
+      {/* Voice-Settings */}
+      <VoiceSettings/>
 
       {/* Rekord-Streaks */}
       {(allTimeStreaks.water > 0 || allTimeStreaks.sleep > 0 || allTimeStreaks.meal > 0) && (
