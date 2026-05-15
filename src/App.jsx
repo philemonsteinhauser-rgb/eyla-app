@@ -2775,28 +2775,36 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
     }
   }, []);
 
+  // Silent-WAV (1 Sample, weniger als 1ms) als DataURL. Nutzen wir für iOS-Unlock.
+  const SILENT_WAV = "data:audio/wav;base64,UklGRiYAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQIAAAAAAA==";
+
   function primeAudio() {
-    // Speech-Synthesis Unlock (leere Utterance)
+    // Speech-Synthesis Unlock
     if (ttsSupported) {
       try {
         const u = new SpeechSynthesisUtterance("");
         u.volume = 0;
         window.speechSynthesis.speak(u);
-        // Sofort canceln damit's nicht "queued" bleibt
         setTimeout(() => { try { window.speechSynthesis.cancel(); } catch {} }, 10);
       } catch {}
     }
-    // Audio-Element Unlock (muted play + sofort pause)
+    // Audio-Element Unlock: echtes silent .wav abspielen damit iOS Vertrauen schenkt
     if (audioRef.current) {
       try {
-        audioRef.current.muted = true;
-        audioRef.current.play().then(() => {
-          audioRef.current.pause();
-          audioRef.current.muted = false;
-        }).catch(() => {
-          audioRef.current.muted = false;
-        });
-      } catch {}
+        audioRef.current.src = SILENT_WAV;
+        audioRef.current.muted = false;
+        audioRef.current.volume = 1;
+        const playP = audioRef.current.play();
+        if (playP && playP.then) {
+          playP.then(() => {
+            // ausspielen lassen, ist ja nur 1 Sample (=instant)
+          }).catch(err => {
+            console.warn("[primeAudio] play() rejected:", err);
+          });
+        }
+      } catch (e) {
+        console.warn("[primeAudio] failed:", e);
+      }
     }
   }
 
