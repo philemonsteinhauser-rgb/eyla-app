@@ -838,6 +838,34 @@ function Onboarding({ onDone }) {
 }
 
 // ─── TODAY SCREEN ─────────────────────────────────────────────────────────────
+// Apple-Watch-Style konzentrische Ringe für Tages-Overview
+function ActivityRings({ water, waterTarget, sleep, sleepTarget, kcal, kcalTarget, workouts }) {
+  const size = 80, stroke = 6, gap = 2;
+  const c = size / 2;
+  const ring = (radius, percent, color) => {
+    const circ = 2 * Math.PI * radius;
+    const p = Math.max(0, Math.min(1, percent));
+    return (
+      <>
+        <circle cx={c} cy={c} r={radius} fill="none" stroke={color+"22"} strokeWidth={stroke}/>
+        <circle cx={c} cy={c} r={radius} fill="none" stroke={color} strokeWidth={stroke}
+          strokeDasharray={circ} strokeDashoffset={circ - p*circ}
+          strokeLinecap="round" transform={`rotate(-90 ${c} ${c})`} />
+      </>
+    );
+  };
+  const r1 = c - stroke/2 - 1;
+  const r2 = r1 - stroke - gap;
+  const r3 = r2 - stroke - gap;
+  return (
+    <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} style={{ flexShrink:0 }}>
+      {ring(r1, water / waterTarget, T.acc)}
+      {ring(r2, sleep / sleepTarget, T.mid)}
+      {ring(r3, kcal / Math.max(1, kcalTarget), T.gold)}
+    </svg>
+  );
+}
+
 function TodayScreen({ profile, log, setLog, logsByDate }) {
   const [mealName, setMealName] = useState("");
   const [mealCal, setMealCal] = useState("");
@@ -1003,11 +1031,19 @@ function TodayScreen({ profile, log, setLog, logsByDate }) {
 
   return (
     <div>
-      <div style={{ marginBottom:22 }}>
-        <Lbl style={{ marginBottom:6 }}>HEUTE · {new Date().toLocaleDateString("de-DE",{weekday:"long",day:"numeric",month:"long"})}</Lbl>
-        <h2 style={{ fontSize:20, fontWeight:300, color:T.text, margin:0 }}>
-          Wie geht's dir, <span style={{ color:T.acc }}>{profile.name.split(" ")[0]}</span>?
-        </h2>
+      <div style={{ marginBottom:22, display:"flex", alignItems:"center", justifyContent:"space-between", gap:14 }}>
+        <div style={{ minWidth:0, flex:1 }}>
+          <Lbl style={{ marginBottom:6 }}>HEUTE · {new Date().toLocaleDateString("de-DE",{weekday:"long",day:"numeric",month:"long"})}</Lbl>
+          <h2 style={{ fontSize:20, fontWeight:300, color:T.text, margin:0 }}>
+            Wie geht's dir, <span style={{ color:T.acc }}>{profile.name.split(" ")[0]}</span>?
+          </h2>
+        </div>
+        <ActivityRings
+          water={log.water||0} waterTarget={8}
+          sleep={parseFloat(String(log.sleep||"0").replace("+",""))||0} sleepTarget={7}
+          kcal={eaten} kcalTarget={targetKcal}
+          workouts={(log.workouts||[]).reduce((s,w)=>s+(w.duration||0),0)}
+        />
       </div>
 
       {/* Energie & Schlaf */}
@@ -2478,6 +2514,8 @@ function PlanScreen({ profile }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [loaded, setLoaded] = useState(false);
+  // Swap-Modus: welche Mahlzeit gerade ersetzt wird (id "dayIdx:slot")
+  const [swappingKey, setSwappingKey] = useState(null);
 
   // Plan beim Mount aus localStorage laden – sonst geht er bei Tab-Wechsel verloren
   useEffect(() => {
@@ -2630,6 +2668,49 @@ TIPP: [Konkreter Hinweis für diesen Tag – Timing, Zubereitung, Variation. Nic
     setLoading(false);
   }
 
+  // Tauscht eine einzelne Mahlzeit gegen Claude-Vorschlag
+  async function swapMeal(dayIdx, slot, customWish = "") {
+    const key = `${dayIdx}:${slot}`;
+    setSwappingKey(key);
+    try {
+      const day = days[dayIdx];
+      const slotDe = { breakfast:"Frühstück", lunch:"Mittag", dinner:"Abend", snack:"Snack" }[slot];
+      const currentMeal = day[slot] || "—";
+      const other = ["breakfast","lunch","dinner","snack"]
+        .filter(s => s !== slot && day[s] && day[s] !== "—" && day[s] !== "–")
+        .map(s => `${({breakfast:"Frühstück",lunch:"Mittag",dinner:"Abend",snack:"Snack"})[s]}: ${day[s]}`)
+        .join("; ");
+
+      const ct = calorieTarget(profile);
+      const mt = macroTarget(profile);
+      const wishText = customWish ? `Wunsch: ${customWish}. ` : "";
+
+      const userMsg = `Ich möchte die Mahlzeit für ${slotDe} am ${day.day} ersetzen.\nAktuell: ${currentMeal}\nDer Rest des Tages bleibt: ${other||"–"}\nVorlieben: ${profile.preferences?.join(", ")||"k.A."}\nIntoleranzen: ${profile.intolerances?.join(", ")||"keine"}\nTagesziel ~${ct.target}kcal, Protein-Tag ~${mt.protein}g.\n${wishText}\n\nGib mir genau EINE neue Mahlzeit für diesen Slot. Format strikt: 'Mahlzeit-Beschreibung (~XXX kcal)'. Keine Erklärung, kein Markdown, kein Listenpunkt.`;
+
+      const res = await fetch("/api/chat", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          model:"claude-sonnet-4-5",
+          max_tokens:200,
+          system:"Du ersetzt einzelne Mahlzeiten in einem 7-Tage-Plan. Antworte mit GENAU EINER Zeile in dem Format: '<Mahlzeit> (~<kcal> kcal)'. Kein Markdown. Keine Erklärung. Wenn Wunsch genannt, beachten.",
+          messages:[{ role:"user", content: userMsg }]
+        })
+      });
+      const data = await res.json();
+      const newMeal = (data.content?.find(b=>b.type==="text")?.text||"")
+        .replace(/^[\s*#_>-]+/, "")
+        .replace(/[*_#]/g, "")
+        .trim();
+      if (!newMeal) throw new Error("Kein Vorschlag");
+
+      setDays(prev => prev.map((d, i) => i === dayIdx ? { ...d, [slot]: newMeal } : d));
+    } catch(e) {
+      setError("Tausch fehlgeschlagen: " + (e.message||e));
+      setTimeout(()=>setError(null), 3000);
+    }
+    setSwappingKey(null);
+  }
+
   const icons = { breakfast:"☀️", lunch:"🌿", dinner:"🌙", snack:"✦" };
   const labels = { breakfast:"Frühstück", lunch:"Mittag", dinner:"Abend", snack:"Snack" };
 
@@ -2669,15 +2750,39 @@ TIPP: [Konkreter Hinweis für diesen Tag – Timing, Zubereitung, Variation. Nic
             {days.map((day, i) => (
               <Card key={i}>
                 <Lbl color={T.acc} style={{ marginBottom:12 }}>{day.day.toUpperCase()}</Lbl>
-                {["breakfast","lunch","dinner","snack"].map(m => (
-                  <div key={m} style={{ marginBottom:9 }}>
-                    <div style={{ display:"flex", gap:6, alignItems:"baseline" }}>
-                      <span style={{ fontSize:11 }}>{icons[m]}</span>
-                      <Lbl style={{ fontSize:10 }}>{labels[m]}</Lbl>
+                {["breakfast","lunch","dinner","snack"].map(m => {
+                  const swapKey = `${i}:${m}`;
+                  const isSwapping = swappingKey === swapKey;
+                  const isEmpty = !day[m] || day[m] === "—" || day[m] === "–";
+                  return (
+                    <div key={m} style={{ marginBottom:9 }}>
+                      <div style={{ display:"flex", gap:6, alignItems:"center", justifyContent:"space-between" }}>
+                        <div style={{ display:"flex", gap:6, alignItems:"baseline" }}>
+                          <span style={{ fontSize:11 }}>{icons[m]}</span>
+                          <Lbl style={{ fontSize:10 }}>{labels[m]}</Lbl>
+                        </div>
+                        {!isEmpty && (
+                          <button
+                            onClick={()=>swapMeal(i, m)}
+                            disabled={isSwapping}
+                            title="Vorschlag tauschen"
+                            style={{
+                              background:"transparent", border:"none", color:T.muted,
+                              cursor: isSwapping ? "default" : "pointer", padding:"2px 4px",
+                              fontFamily:T.mono, fontSize:11, opacity: isSwapping ? 1 : 0.5,
+                              transition:"opacity .15s"
+                            }}
+                            onMouseEnter={e=>{ if(!isSwapping) e.currentTarget.style.opacity="1"; e.currentTarget.style.color = T.acc; }}
+                            onMouseLeave={e=>{ if(!isSwapping) e.currentTarget.style.opacity="0.5"; e.currentTarget.style.color = T.muted; }}
+                          >{isSwapping ? "…" : "↻"}</button>
+                        )}
+                      </div>
+                      <div style={{ color: isSwapping ? T.acc : T.mid, fontSize:12, paddingLeft:18, fontStyle:"italic", fontFamily:T.serif, transition:"color .2s" }}>
+                        {isSwapping ? "Suche Alternative …" : day[m]}
+                      </div>
                     </div>
-                    <div style={{ color:T.mid, fontSize:12, paddingLeft:18, fontStyle:"italic", fontFamily:T.serif }}>{day[m]}</div>
-                  </div>
-                ))}
+                  );
+                })}
                 {day.tip && day.tip !== "–" && (
                   <div style={{ marginTop:10, padding:"8px 12px", background:T.acc+"0A", borderRadius:8, borderLeft:"2px solid "+T.acc }}>
                     <Lbl color={T.acc} style={{ marginBottom:3 }}>EYLA</Lbl>
