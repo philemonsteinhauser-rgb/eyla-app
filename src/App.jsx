@@ -917,6 +917,53 @@ function Onboarding({ onDone }) {
 }
 
 // ─── TODAY SCREEN ─────────────────────────────────────────────────────────────
+// Mini-Konfetti-Effekt – kurz, sparsam, pure CSS
+function Confetti({ show, onDone }) {
+  useEffect(() => {
+    if (!show) return;
+    const t = setTimeout(() => onDone?.(), 2400);
+    return () => clearTimeout(t);
+  }, [show, onDone]);
+  if (!show) return null;
+  const colors = [T.acc, T.gold, T.green, T.rose, T.mid, T.goldL];
+  const pieces = Array.from({length:50}, (_, i) => ({
+    id: i,
+    color: colors[i % colors.length],
+    left: Math.random()*100,
+    duration: 1.4 + Math.random()*1.2,
+    delay: Math.random()*0.4,
+    rot: -180 + Math.random()*360,
+    drift: -30 + Math.random()*60,
+  }));
+  return (
+    <div style={{ position:"fixed", inset:0, pointerEvents:"none", zIndex:999, overflow:"hidden" }}>
+      <style>{`
+        @keyframes confettiFall {
+          0%   { transform: translate3d(0, -20px, 0) rotate(0deg); opacity:1; }
+          100% { transform: translate3d(var(--drift), 110vh, 0) rotate(var(--rot)); opacity:0; }
+        }
+      `}</style>
+      {pieces.map(p => (
+        <div key={p.id} style={{
+          position:"absolute", top:0,
+          left:`${p.left}%`,
+          width:7, height:11,
+          background: p.color,
+          borderRadius:1,
+          animation:`confettiFall ${p.duration}s ${p.delay}s cubic-bezier(.4,0,.2,1) forwards`,
+          ["--drift"]: `${p.drift}vw`,
+          ["--rot"]: `${p.rot}deg`,
+        }}/>
+      ))}
+    </div>
+  );
+}
+
+// Haptic-Feedback Helper (works on Android, no-op auf iOS Safari – kein Problem)
+function haptic(ms = 20) {
+  try { navigator.vibrate?.(ms); } catch {}
+}
+
 // Apple-Watch-Style konzentrische Ringe für Tages-Overview
 // 4 Ringe: Wasser (außen), Schlaf, Kalorien, Bewegung (innen)
 function ActivityRings({ water, waterTarget, sleep, sleepTarget, kcal, kcalTarget, workouts, workoutTarget = 60 }) {
@@ -965,6 +1012,28 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate }) {
   useEffect(() => {
     retrieve("eyla_favorites_v1", []).then(f => setFavorites(Array.isArray(f) ? f : []));
   }, []);
+
+  // Konfetti-Trigger: wenn Wasser-Ziel oder Kcal-Ziel erstmalig erreicht
+  const [konfetti, setKonfetti] = useState(false);
+  const prevWaterRef = useRef(log.water);
+  const prevKcalReachedRef = useRef(false);
+  useEffect(() => {
+    if (prevWaterRef.current < 8 && log.water >= 8) {
+      setKonfetti(true);
+      haptic(60);
+    }
+    prevWaterRef.current = log.water;
+  }, [log.water]);
+  useEffect(() => {
+    const totalKcal = log.meals.reduce((s,m)=>s+(m.calories||0),0);
+    const target = calorieTarget(profile).target;
+    const reached = totalKcal >= target;
+    if (!prevKcalReachedRef.current && reached) {
+      setKonfetti(true);
+      haptic(60);
+    }
+    prevKcalReachedRef.current = reached;
+  }, [log.meals, profile]);
 
   // Datum-Navigator: User kann auch andere Tage nachtragen
   const [tagDate, setTagDate] = useState(()=>new Date());
@@ -1131,6 +1200,7 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate }) {
 
   return (
     <div>
+      <Confetti show={konfetti} onDone={()=>setKonfetti(false)}/>
       <div style={{ marginBottom:14, display:"flex", alignItems:"center", justifyContent:"space-between", gap:14 }}>
         <div style={{ minWidth:0, flex:1 }}>
           <Lbl style={{ marginBottom:6 }}>
@@ -5399,7 +5469,7 @@ function AppContent() {
 
       {/* Content */}
       <div style={{
-        maxWidth:760, margin:"0 auto", position:"relative", zIndex:2,
+        maxWidth:920, margin:"0 auto", position:"relative", zIndex:2,
         paddingTop: 22,
         paddingLeft: "calc(18px + env(safe-area-inset-left, 0px))",
         paddingRight: "calc(18px + env(safe-area-inset-right, 0px))",
