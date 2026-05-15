@@ -914,8 +914,9 @@ function Onboarding({ onDone }) {
 
 // ─── TODAY SCREEN ─────────────────────────────────────────────────────────────
 // Apple-Watch-Style konzentrische Ringe für Tages-Overview
-function ActivityRings({ water, waterTarget, sleep, sleepTarget, kcal, kcalTarget, workouts }) {
-  const size = 80, stroke = 6, gap = 2;
+// 4 Ringe: Wasser (außen), Schlaf, Kalorien, Bewegung (innen)
+function ActivityRings({ water, waterTarget, sleep, sleepTarget, kcal, kcalTarget, workouts, workoutTarget = 60 }) {
+  const size = 84, stroke = 5, gap = 1.5;
   const c = size / 2;
   const ring = (radius, percent, color) => {
     const circ = 2 * Math.PI * radius;
@@ -932,11 +933,13 @@ function ActivityRings({ water, waterTarget, sleep, sleepTarget, kcal, kcalTarge
   const r1 = c - stroke/2 - 1;
   const r2 = r1 - stroke - gap;
   const r3 = r2 - stroke - gap;
+  const r4 = r3 - stroke - gap;
   return (
     <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} style={{ flexShrink:0 }}>
       {ring(r1, water / waterTarget, T.acc)}
       {ring(r2, sleep / sleepTarget, T.mid)}
       {ring(r3, kcal / Math.max(1, kcalTarget), T.gold)}
+      {ring(r4, (workouts||0) / workoutTarget, T.green)}
     </svg>
   );
 }
@@ -2390,17 +2393,20 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
         });
         console.log("[speak] /api/tts response:", res.status, res.ok);
         if (res.ok) {
-          // Bestehendes Audio stoppen
-          if (audioRef.current) { try { audioRef.current.pause(); audioRef.current.src = ""; } catch {} }
+          // Browser-Speech stoppen falls aktiv
           try { window.speechSynthesis.cancel(); } catch {}
           const blob = await res.blob();
           const url = URL.createObjectURL(blob);
-          const audio = new Audio(url);
+          // WICHTIG: gleiches Audio-Element wiederverwenden (Gesture-Trust bleibt erhalten)
+          const audio = audioRef.current || new Audio();
+          audioRef.current = audio;
+          try { audio.pause(); } catch {}
+          audio.src = url;
+          audio.muted = false;
           audio.playbackRate = settings.rate || 1.15;
           audio.onplay = () => { console.log("[speak] ElevenLabs audio onplay"); setSpeaking(true); };
           audio.onended = () => { setSpeaking(false); URL.revokeObjectURL(url); };
           audio.onerror = (e) => { console.warn("[speak] audio error", e); setSpeaking(false); URL.revokeObjectURL(url); };
-          audioRef.current = audio;
           await audio.play();
           return;
         }
@@ -2470,9 +2476,9 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
   }
   function stopSpeaking() {
     try { window.speechSynthesis.cancel(); } catch {}
+    // Audio nur pausieren, nicht zerstören – Gesture-Trust bleibt erhalten
     if (audioRef.current) {
-      try { audioRef.current.pause(); audioRef.current.src = ""; } catch {}
-      audioRef.current = null;
+      try { audioRef.current.pause(); audioRef.current.currentTime = 0; } catch {}
     }
     setSpeaking(false);
   }
@@ -2493,6 +2499,42 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
       } catch {}
     } else {
       stopSpeaking();
+    }
+  }
+
+  // Audio-Element einmal pro Session erstellen + bei erster User-Interaktion entsperren.
+  // iOS Safari blockt audio.play() später wenn der Call nicht direkt aus einem User-Gesture
+  // kommt (Fetch-Roundtrip > ~1s reicht oft). Trick: ein wiederverwendetes Audio-Element
+  // das beim Click muted angespielt wird → behält danach Gesture-Trust dauerhaft.
+  useEffect(() => {
+    if (!audioRef.current) {
+      audioRef.current = new Audio();
+      audioRef.current.preload = "auto";
+    }
+  }, []);
+
+  function primeAudio() {
+    // Speech-Synthesis Unlock (leere Utterance)
+    if (ttsSupported) {
+      try {
+        const u = new SpeechSynthesisUtterance("");
+        u.volume = 0;
+        window.speechSynthesis.speak(u);
+        // Sofort canceln damit's nicht "queued" bleibt
+        setTimeout(() => { try { window.speechSynthesis.cancel(); } catch {} }, 10);
+      } catch {}
+    }
+    // Audio-Element Unlock (muted play + sofort pause)
+    if (audioRef.current) {
+      try {
+        audioRef.current.muted = true;
+        audioRef.current.play().then(() => {
+          audioRef.current.pause();
+          audioRef.current.muted = false;
+        }).catch(() => {
+          audioRef.current.muted = false;
+        });
+      } catch {}
     }
   }
 
@@ -2709,6 +2751,10 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
     const t = text||input.trim();
     if ((!t && !chatPhoto) || loading) return;
     setInput("");
+
+    // IOS Audio-Unlock: SOFORT im User-Gesture-Kontext primen,
+    // damit der spätere audio.play() nach dem Fetch nicht blockiert wird.
+    if (voiceOn) primeAudio();
 
     // Wenn Foto angehängt: User-Message wird ein Content-Array mit Bild + Text
     const photo = chatPhoto;
