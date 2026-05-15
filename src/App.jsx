@@ -2236,6 +2236,7 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
   const [voiceOn, setVoiceOn] = useState(true);  // default on – User wollte das
   const [speaking, setSpeaking] = useState(false);
   const [voices, setVoices] = useState([]);
+  const audioRef = useRef(null);  // für ElevenLabs Audio-Element
   // Kontext-Daten (Plan + Einkaufsliste) für EYLAs Wissen
   const [plan, setPlan] = useState(null);
   const [shopping, setShopping] = useState(null);
@@ -2271,14 +2272,43 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
     return () => clearInterval(iv);
   }, [speaking]);
 
-  function speak(text) {
-    if (!voiceOn || !ttsSupported || !text) return;
-    try {
-      // Voll-Reset des Synthesis-State
-      window.speechSynthesis.cancel();
+  async function speak(text) {
+    if (!voiceOn || !text) return;
+    const settings = loadVoiceSettings();
 
-      // User-Settings aus Profil laden
-      const settings = loadVoiceSettings();
+    // 1. ElevenLabs probieren wenn aktiviert + Voice-ID vorhanden
+    if (settings.useElevenLabs && settings.elevenLabsVoiceId) {
+      try {
+        const res = await fetch("/api/tts", {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ text, voiceId: settings.elevenLabsVoiceId })
+        });
+        if (res.ok) {
+          // Bestehendes Audio stoppen
+          if (audioRef.current) { try { audioRef.current.pause(); audioRef.current.src = ""; } catch {} }
+          try { window.speechSynthesis.cancel(); } catch {}
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          audio.playbackRate = settings.rate || 1.15;
+          audio.onplay = () => setSpeaking(true);
+          audio.onended = () => { setSpeaking(false); URL.revokeObjectURL(url); };
+          audio.onerror = () => { setSpeaking(false); URL.revokeObjectURL(url); };
+          audioRef.current = audio;
+          await audio.play();
+          return;
+        }
+        // Bei Fehler: fallback auf Browser-TTS
+        console.warn("[TTS] ElevenLabs failed, fallback to browser");
+      } catch (e) {
+        console.warn("[TTS] ElevenLabs error", e);
+      }
+    }
+
+    // 2. Browser-TTS (Fallback / Default)
+    if (!ttsSupported) return;
+    try {
+      window.speechSynthesis.cancel();
 
       const u = new SpeechSynthesisUtterance(text);
       u.lang = "de-DE";
@@ -2332,6 +2362,10 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
   }
   function stopSpeaking() {
     try { window.speechSynthesis.cancel(); } catch {}
+    if (audioRef.current) {
+      try { audioRef.current.pause(); audioRef.current.src = ""; } catch {}
+      audioRef.current = null;
+    }
     setSpeaking(false);
   }
   // Wenn Voice-Toggle eingeschaltet wird: einen leeren Utterance abspielen
@@ -3819,18 +3853,37 @@ function ShoppingScreen() {
 function loadVoiceSettings() {
   try {
     const raw = localStorage.getItem("eyla_voice_settings_v1");
-    if (!raw) return { voiceURI: null, rate: 1.15 };
+    if (!raw) return { voiceURI: null, rate: 1.15, elevenLabsVoiceId: null, useElevenLabs: false };
     const parsed = JSON.parse(raw);
-    return { voiceURI: parsed.voiceURI || null, rate: parsed.rate || 1.15 };
-  } catch { return { voiceURI: null, rate: 1.15 }; }
+    return {
+      voiceURI: parsed.voiceURI || null,
+      rate: parsed.rate || 1.15,
+      elevenLabsVoiceId: parsed.elevenLabsVoiceId || null,
+      useElevenLabs: !!parsed.useElevenLabs,
+    };
+  } catch { return { voiceURI: null, rate: 1.15, elevenLabsVoiceId: null, useElevenLabs: false }; }
 }
+
+// ElevenLabs pre-built Voices (multilingual, sprechen deutsch ordentlich)
+const ELEVENLABS_PRESETS = [
+  { id: "EXAVITQu4vr4xnSDxMaL", name: "Sarah",     desc: "weiblich, klar, jung" },
+  { id: "XB0fDUnXU5powFXDhCwa", name: "Charlotte", desc: "weiblich, ruhig, warm" },
+  { id: "pFZP5JQG7iQjIQuC4Bku", name: "Lily",      desc: "weiblich, freundlich" },
+  { id: "XrExE9yKIg1WjnnlVkGX", name: "Matilda",   desc: "weiblich, vertraut" },
+  { id: "9BWtsMINqrJLrRacOk9x", name: "Aria",      desc: "weiblich, informativ" },
+  { id: "21m00Tcm4TlvDq8ikWAM", name: "Rachel",    desc: "weiblich, neutral" },
+];
 
 function VoiceSettings() {
   const ttsSupported = typeof window !== "undefined" && "speechSynthesis" in window;
   const [voices, setVoices] = useState([]);
   const [voiceURI, setVoiceURI] = useState(null);
   const [rate, setRate] = useState(1.15);
+  const [useElevenLabs, setUseElevenLabs] = useState(false);
+  const [elevenLabsVoiceId, setElevenLabsVoiceId] = useState("EXAVITQu4vr4xnSDxMaL");
   const [testing, setTesting] = useState(false);
+  const [testError, setTestError] = useState(null);
+  const audioRef = useRef(null);
 
   useEffect(() => {
     if (!ttsSupported) return;
@@ -3840,22 +3893,61 @@ function VoiceSettings() {
     const s = loadVoiceSettings();
     setVoiceURI(s.voiceURI);
     setRate(s.rate);
+    setUseElevenLabs(s.useElevenLabs);
+    if (s.elevenLabsVoiceId) setElevenLabsVoiceId(s.elevenLabsVoiceId);
     return () => window.speechSynthesis.removeEventListener?.("voiceschanged", load);
   }, []);
 
   function persistSettings(next) {
-    const merged = { voiceURI, rate, ...next };
+    const merged = { voiceURI, rate, useElevenLabs, elevenLabsVoiceId, ...next };
     localStorage.setItem("eyla_voice_settings_v1", JSON.stringify(merged));
   }
   function setVoice(uri) { setVoiceURI(uri); persistSettings({ voiceURI: uri }); }
   function setRateAndSave(r) { setRate(r); persistSettings({ rate: r }); }
+  function setElToggle(v) { setUseElevenLabs(v); persistSettings({ useElevenLabs: v }); }
+  function setElId(id) { setElevenLabsVoiceId(id); persistSettings({ elevenLabsVoiceId: id }); }
 
-  function testVoice() {
-    if (!ttsSupported) return;
+  async function testVoice() {
     setTesting(true);
+    setTestError(null);
+    const sampleText = "Ich bin EYLA. So klingt meine Stimme.";
+
+    // 1. ElevenLabs probieren wenn aktiviert
+    if (useElevenLabs && elevenLabsVoiceId) {
+      try {
+        const res = await fetch("/api/tts", {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ text: sampleText, voiceId: elevenLabsVoiceId })
+        });
+        if (res.ok) {
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          if (audioRef.current) { try { audioRef.current.pause(); } catch {} }
+          const audio = new Audio(url);
+          audio.playbackRate = rate;
+          audio.onended = () => { setTesting(false); URL.revokeObjectURL(url); };
+          audio.onerror = () => { setTesting(false); setTestError("Konnte Audio nicht abspielen"); URL.revokeObjectURL(url); };
+          audioRef.current = audio;
+          await audio.play();
+          return;
+        } else {
+          const errData = await res.json().catch(()=>({}));
+          setTestError(errData.error || "ElevenLabs nicht erreichbar – probier Browser-Stimme");
+          setTesting(false);
+          return;
+        }
+      } catch (e) {
+        setTestError("Netzwerk-Fehler: " + (e.message||e));
+        setTesting(false);
+        return;
+      }
+    }
+
+    // 2. Browser-TTS
+    if (!ttsSupported) { setTesting(false); return; }
     try {
       window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance("Ich bin EYLA. So klingt meine Stimme.");
+      const u = new SpeechSynthesisUtterance(sampleText);
       u.lang = "de-DE";
       u.rate = rate;
       const v = voices.find(x => x.voiceURI === voiceURI);
@@ -3865,8 +3957,6 @@ function VoiceSettings() {
       setTimeout(()=>window.speechSynthesis.speak(u), 50);
     } catch { setTesting(false); }
   }
-
-  if (!ttsSupported) return null;
 
   // Sortiere: Deutsche zuerst, dann nach Qualitäts-Indikator, dann Rest
   const isQuality = (v) => /premium|enhanced|verbessert|natural|neural/i.test(v.name||"");
@@ -3878,28 +3968,82 @@ function VoiceSettings() {
     return (a.name||"").localeCompare(b.name||"");
   });
 
+  const selectStyle = {
+    width:"100%", background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:8,
+    padding:"9px 12px", color:T.text, fontFamily:T.serif, fontSize:13,
+    outline:"none", boxSizing:"border-box", appearance:"none",
+    backgroundImage:`linear-gradient(45deg, transparent 50%, ${T.muted} 50%), linear-gradient(135deg, ${T.muted} 50%, transparent 50%)`,
+    backgroundPosition:"right 14px top 16px, right 9px top 16px",
+    backgroundSize:"5px 5px, 5px 5px",
+    backgroundRepeat:"no-repeat"
+  };
+
   return (
     <Card style={{ marginBottom:12 }}>
       <Lbl style={{ marginBottom:10 }}>STIMME · EYLA</Lbl>
-      <div style={{ marginBottom:12 }}>
-        <Lbl style={{ marginBottom:6, fontSize:10 }}>STIMME WÄHLEN ({sorted.length} verfügbar)</Lbl>
-        <select value={voiceURI || ""} onChange={e=>setVoice(e.target.value || null)} style={{
-          width:"100%", background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:8,
-          padding:"9px 12px", color:T.text, fontFamily:T.serif, fontSize:13,
-          outline:"none", boxSizing:"border-box", appearance:"none",
-          backgroundImage:`linear-gradient(45deg, transparent 50%, ${T.muted} 50%), linear-gradient(135deg, ${T.muted} 50%, transparent 50%)`,
-          backgroundPosition:"right 14px top 16px, right 9px top 16px",
-          backgroundSize:"5px 5px, 5px 5px",
-          backgroundRepeat:"no-repeat"
-        }}>
-          <option value="">– Auto (beste verfügbare) –</option>
-          {sorted.map(v => (
-            <option key={v.voiceURI} value={v.voiceURI}>
-              {v.name} · {v.lang}{isQuality(v) ? " ✦" : ""}
-            </option>
-          ))}
-        </select>
+
+      {/* Modus-Switch */}
+      <div style={{ display:"flex", gap:6, marginBottom:14 }}>
+        <button onClick={()=>setElToggle(false)} style={{
+          flex:1, padding:"8px 10px", borderRadius:8,
+          background: !useElevenLabs ? T.acc+"22" : "transparent",
+          border:`1px solid ${!useElevenLabs ? T.acc : T.borderS}`,
+          color: !useElevenLabs ? T.text : T.muted,
+          fontFamily:T.serif, fontSize:12, cursor:"pointer",
+          fontStyle: !useElevenLabs ? "normal" : "italic"
+        }}>System-Stimme</button>
+        <button onClick={()=>setElToggle(true)} style={{
+          flex:1, padding:"8px 10px", borderRadius:8,
+          background: useElevenLabs ? T.gold+"22" : "transparent",
+          border:`1px solid ${useElevenLabs ? T.gold : T.borderS}`,
+          color: useElevenLabs ? T.text : T.muted,
+          fontFamily:T.serif, fontSize:12, cursor:"pointer",
+          fontStyle: useElevenLabs ? "normal" : "italic"
+        }}>✦ ElevenLabs</button>
       </div>
+
+      {!useElevenLabs ? (
+        <>
+          {ttsSupported && (
+            <div style={{ marginBottom:12 }}>
+              <Lbl style={{ marginBottom:6, fontSize:10 }}>STIMME ({sorted.length} verfügbar)</Lbl>
+              <select value={voiceURI || ""} onChange={e=>setVoice(e.target.value || null)} style={selectStyle}>
+                <option value="">– Auto (beste verfügbare) –</option>
+                {sorted.map(v => (
+                  <option key={v.voiceURI} value={v.voiceURI}>
+                    {v.name} · {v.lang}{isQuality(v) ? " ✦" : ""}
+                  </option>
+                ))}
+              </select>
+              <p style={{ color:T.muted, fontSize:10, fontStyle:"italic", fontFamily:T.serif, margin:"6px 0 0", lineHeight:1.5 }}>
+                iPhone: Einstellungen → Bedienungshilfen → VoiceOver → Sprachausgabe → Stimmen → Deutsch → „verbessert"-Stimme laden.
+              </p>
+            </div>
+          )}
+        </>
+      ) : (
+        <div style={{ marginBottom:12 }}>
+          <Lbl style={{ marginBottom:6, fontSize:10 }}>ELEVENLABS-STIMME</Lbl>
+          <select value={elevenLabsVoiceId} onChange={e=>setElId(e.target.value)} style={selectStyle}>
+            {ELEVENLABS_PRESETS.map(v => (
+              <option key={v.id} value={v.id}>{v.name} · {v.desc}</option>
+            ))}
+            <option value="__custom__">Eigene (Voice-ID unten)</option>
+          </select>
+          {elevenLabsVoiceId === "__custom__" || !ELEVENLABS_PRESETS.find(p => p.id === elevenLabsVoiceId) ? (
+            <input
+              value={elevenLabsVoiceId === "__custom__" ? "" : elevenLabsVoiceId}
+              onChange={e=>setElId(e.target.value.trim())}
+              placeholder="Voice-ID einfügen (z.B. aus elevenlabs.io)"
+              style={{ ...selectStyle, marginTop:8, appearance:"auto", backgroundImage:"none", fontFamily:T.mono, fontSize:12 }}
+            />
+          ) : null}
+          <p style={{ color:T.muted, fontSize:10, fontStyle:"italic", fontFamily:T.serif, margin:"6px 0 0", lineHeight:1.5 }}>
+            Klone deine eigene Stimme auf <span style={{ color:T.gold }}>elevenlabs.io</span> (30s Sample reicht). Voice-ID kopieren → hier rein.
+          </p>
+        </div>
+      )}
+
       <div style={{ marginBottom:14 }}>
         <div style={{ display:"flex", justifyContent:"space-between", marginBottom:6 }}>
           <Lbl style={{ fontSize:10 }}>TEMPO</Lbl>
@@ -3907,19 +4051,24 @@ function VoiceSettings() {
         </div>
         <input type="range" min="0.7" max="1.5" step="0.05" value={rate}
           onChange={e=>setRateAndSave(parseFloat(e.target.value))}
-          style={{ width:"100%", accentColor:T.acc }}/>
+          style={{ width:"100%", accentColor: useElevenLabs ? T.gold : T.acc }}/>
         <div style={{ display:"flex", justifyContent:"space-between", color:T.muted, fontFamily:T.mono, fontSize:9, marginTop:2 }}>
           <span>langsam</span><span>normal</span><span>schnell</span>
         </div>
       </div>
+
       <button onClick={testVoice} disabled={testing} style={{
-        background:T.acc+"18", border:`1px solid ${T.acc}44`, borderRadius:10,
-        padding:"8px 16px", color:T.acc, fontFamily:T.serif, fontSize:12,
+        background: (useElevenLabs ? T.gold : T.acc)+"18",
+        border:`1px solid ${(useElevenLabs ? T.gold : T.acc)}44`, borderRadius:10,
+        padding:"8px 16px", color: useElevenLabs ? T.gold : T.acc,
+        fontFamily:T.serif, fontSize:12,
         cursor: testing ? "default" : "pointer", fontStyle:"italic"
       }}>{testing ? "🔊 Spricht …" : "🔊 Stimme testen"}</button>
-      <p style={{ color:T.muted, fontSize:10, fontStyle:"italic", fontFamily:T.serif, margin:"10px 0 0", lineHeight:1.5 }}>
-        Tipp iPhone: Einstellungen → Bedienungshilfen → VoiceOver → Sprachausgabe → Stimmen → Deutsch → eine „verbessert"-Stimme runterladen. Dann taucht sie hier mit ✦ auf.
-      </p>
+      {testError && (
+        <p style={{ color:T.red, fontSize:11, fontStyle:"italic", margin:"8px 0 0", fontFamily:T.serif }}>
+          {testError}
+        </p>
+      )}
     </Card>
   );
 }
