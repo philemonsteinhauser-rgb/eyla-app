@@ -3983,23 +3983,53 @@ function VoiceSettings() {
   const [voiceURI, setVoiceURI] = useState(null);
   const [rate, setRate] = useState(1.15);
   const [useElevenLabs, setUseElevenLabs] = useState(false);
-  const [elevenLabsVoiceId, setElevenLabsVoiceId] = useState("EXAVITQu4vr4xnSDxMaL");
+  const [elevenLabsVoiceId, setElevenLabsVoiceId] = useState("");
+  const [elVoices, setElVoices] = useState([]);  // echte ElevenLabs-Voices vom Account
+  const [elVoicesLoading, setElVoicesLoading] = useState(false);
+  const [elVoicesError, setElVoicesError] = useState(null);
   const [testing, setTesting] = useState(false);
   const [testError, setTestError] = useState(null);
   const audioRef = useRef(null);
 
   useEffect(() => {
-    if (!ttsSupported) return;
-    const load = () => setVoices(window.speechSynthesis.getVoices() || []);
-    load();
-    window.speechSynthesis.addEventListener?.("voiceschanged", load);
+    if (ttsSupported) {
+      const load = () => setVoices(window.speechSynthesis.getVoices() || []);
+      load();
+      window.speechSynthesis.addEventListener?.("voiceschanged", load);
+    }
     const s = loadVoiceSettings();
     setVoiceURI(s.voiceURI);
     setRate(s.rate);
     setUseElevenLabs(s.useElevenLabs);
     if (s.elevenLabsVoiceId) setElevenLabsVoiceId(s.elevenLabsVoiceId);
-    return () => window.speechSynthesis.removeEventListener?.("voiceschanged", load);
+    return () => {
+      if (ttsSupported) window.speechSynthesis.removeEventListener?.("voiceschanged", () => {});
+    };
   }, []);
+
+  // ElevenLabs-Voices nachladen sobald aktiviert
+  useEffect(() => {
+    if (!useElevenLabs || elVoices.length > 0) return;
+    setElVoicesLoading(true);
+    setElVoicesError(null);
+    fetch("/api/voices")
+      .then(r => r.json().then(d => ({ ok: r.ok, status: r.status, data: d })))
+      .then(({ ok, status, data }) => {
+        if (!ok) {
+          setElVoicesError(data?.error || `Status ${status}`);
+          return;
+        }
+        const list = data.voices || [];
+        setElVoices(list);
+        // Wenn aktuelle Voice-ID nicht in der Liste: erste verfügbare wählen
+        if (list.length > 0 && !list.find(v => v.voice_id === elevenLabsVoiceId)) {
+          setElevenLabsVoiceId(list[0].voice_id);
+          persistSettings({ elevenLabsVoiceId: list[0].voice_id });
+        }
+      })
+      .catch(e => setElVoicesError(String(e?.message || e)))
+      .finally(() => setElVoicesLoading(false));
+  }, [useElevenLabs]);
 
   function persistSettings(next) {
     const merged = { voiceURI, rate, useElevenLabs, elevenLabsVoiceId, ...next };
@@ -4126,23 +4156,44 @@ function VoiceSettings() {
         </>
       ) : (
         <div style={{ marginBottom:12 }}>
-          <Lbl style={{ marginBottom:6, fontSize:10 }}>ELEVENLABS-STIMME</Lbl>
+          <Lbl style={{ marginBottom:6, fontSize:10 }}>
+            ELEVENLABS-STIMME{elVoicesLoading ? " · LÄDT …" : elVoices.length > 0 ? ` · ${elVoices.length} VERFÜGBAR` : ""}
+          </Lbl>
+          {elVoicesError && (
+            <p style={{ color:T.red, fontSize:11, fontStyle:"italic", fontFamily:T.serif, margin:"0 0 6px" }}>
+              {elVoicesError}
+            </p>
+          )}
           <select value={elevenLabsVoiceId} onChange={e=>setElId(e.target.value)} style={selectStyle}>
-            {ELEVENLABS_PRESETS.map(v => (
-              <option key={v.id} value={v.id}>{v.name} · {v.desc}</option>
-            ))}
-            <option value="__custom__">Eigene (Voice-ID unten)</option>
+            {elVoices.length > 0 ? (
+              <>
+                {/* Eigene/Geklonte Stimmen oben */}
+                {elVoices.filter(v => v.category === "cloned" || v.category === "generated" || v.category === "professional").length > 0 && (
+                  <optgroup label="✦ Deine eigenen">
+                    {elVoices.filter(v => v.category === "cloned" || v.category === "generated" || v.category === "professional").map(v => (
+                      <option key={v.voice_id} value={v.voice_id}>{v.name}{v.labels?.gender ? ` · ${v.labels.gender}` : ""}</option>
+                    ))}
+                  </optgroup>
+                )}
+                <optgroup label="ElevenLabs Library">
+                  {elVoices.filter(v => v.category !== "cloned" && v.category !== "generated" && v.category !== "professional").map(v => (
+                    <option key={v.voice_id} value={v.voice_id}>
+                      {v.name}{v.labels?.gender ? ` · ${v.labels.gender}` : ""}{v.labels?.accent ? ` (${v.labels.accent})` : ""}
+                    </option>
+                  ))}
+                </optgroup>
+              </>
+            ) : !elVoicesLoading ? (
+              // Fallback wenn nichts geladen (z.B. API-Key nicht gesetzt)
+              <>
+                {ELEVENLABS_PRESETS.map(v => (
+                  <option key={v.id} value={v.id}>{v.name} · {v.desc}</option>
+                ))}
+              </>
+            ) : null}
           </select>
-          {elevenLabsVoiceId === "__custom__" || !ELEVENLABS_PRESETS.find(p => p.id === elevenLabsVoiceId) ? (
-            <input
-              value={elevenLabsVoiceId === "__custom__" ? "" : elevenLabsVoiceId}
-              onChange={e=>setElId(e.target.value.trim())}
-              placeholder="Voice-ID einfügen (z.B. aus elevenlabs.io)"
-              style={{ ...selectStyle, marginTop:8, appearance:"auto", backgroundImage:"none", fontFamily:T.mono, fontSize:12 }}
-            />
-          ) : null}
           <p style={{ color:T.muted, fontSize:10, fontStyle:"italic", fontFamily:T.serif, margin:"6px 0 0", lineHeight:1.5 }}>
-            Klone deine eigene Stimme auf <span style={{ color:T.gold }}>elevenlabs.io</span> (30s Sample reicht). Voice-ID kopieren → hier rein.
+            Klone deine eigene Stimme auf <span style={{ color:T.gold }}>elevenlabs.io</span> (30s Sample reicht). Erscheint automatisch oben unter „Deine eigenen".
           </p>
         </div>
       )}
