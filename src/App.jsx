@@ -1013,19 +1013,34 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate }) {
     retrieve("eyla_favorites_v1", []).then(f => setFavorites(Array.isArray(f) ? f : []));
   }, []);
 
-  // Konfetti-Trigger: wenn Wasser-Ziel oder Kcal-Ziel erstmalig erreicht
+  // Konfetti-State (Effekt-Trigger wird weiter unten gesetzt nachdem `log` existiert)
   const [konfetti, setKonfetti] = useState(false);
-  const prevWaterRef = useRef(log.water);
+  const prevWaterRef = useRef(0);
   const prevKcalReachedRef = useRef(false);
+
+  // Datum-Navigator: User kann auch andere Tage nachtragen
+  const [tagDate, setTagDate] = useState(()=>new Date());
+  const tagKey = tagDate.toDateString();
+  const todayKey = new Date().toDateString();
+  const isToday = tagKey === todayKey;
+  const isPast = tagKey < todayKey;
+  const log = logsByDate?.[tagKey] || { meals:[], water:0, energy:"", sleep:"", workouts:[], weight:null, habits:{}, date:tagKey };
+  // setLog für den gerade gewählten Tag
+  const setLog = useCallback((updater) => setLogRaw(updater, tagKey), [setLogRaw, tagKey]);
+  function prevDay() { const d = new Date(tagDate); d.setDate(d.getDate()-1); setTagDate(d); }
+  function nextDay() { const d = new Date(tagDate); d.setDate(d.getDate()+1); setTagDate(d); }
+  function goToday() { setTagDate(new Date()); }
+
+  // Konfetti-Trigger: wenn Wasser-Ziel oder Kcal-Ziel erstmalig erreicht
   useEffect(() => {
-    if (prevWaterRef.current < 8 && log.water >= 8) {
+    if (prevWaterRef.current < 8 && (log.water||0) >= 8) {
       setKonfetti(true);
       haptic(60);
     }
-    prevWaterRef.current = log.water;
+    prevWaterRef.current = log.water||0;
   }, [log.water]);
   useEffect(() => {
-    const totalKcal = log.meals.reduce((s,m)=>s+(m.calories||0),0);
+    const totalKcal = (log.meals||[]).reduce((s,m)=>s+(m.calories||0),0);
     const target = calorieTarget(profile).target;
     const reached = totalKcal >= target;
     if (!prevKcalReachedRef.current && reached) {
@@ -1034,19 +1049,6 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate }) {
     }
     prevKcalReachedRef.current = reached;
   }, [log.meals, profile]);
-
-  // Datum-Navigator: User kann auch andere Tage nachtragen
-  const [tagDate, setTagDate] = useState(()=>new Date());
-  const tagKey = tagDate.toDateString();
-  const todayKey = new Date().toDateString();
-  const isToday = tagKey === todayKey;
-  const isPast = tagKey < todayKey;
-  const log = logsByDate?.[tagKey] || { meals:[], water:0, energy:"", sleep:"", workouts:[], weight:null, date:tagKey };
-  // setLog für den gerade gewählten Tag
-  const setLog = useCallback((updater) => setLogRaw(updater, tagKey), [setLogRaw, tagKey]);
-  function prevDay() { const d = new Date(tagDate); d.setDate(d.getDate()-1); setTagDate(d); }
-  function nextDay() { const d = new Date(tagDate); d.setDate(d.getDate()+1); setTagDate(d); }
-  function goToday() { setTagDate(new Date()); }
 
   const eaten = log.meals.reduce((s,m)=>s+(m.calories||0),0);
   const eatenP = log.meals.reduce((s,m)=>s+(m.protein||0),0);
