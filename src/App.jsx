@@ -2376,16 +2376,19 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
   }, [speaking]);
 
   async function speak(text) {
-    if (!voiceOn || !text) return;
+    if (!voiceOn || !text) { console.log("[speak] skip: voiceOn=", voiceOn, "textLen=", text?.length); return; }
     const settings = loadVoiceSettings();
+    console.log("[speak] settings:", settings, "textLen:", text.length);
 
     // 1. ElevenLabs probieren wenn aktiviert + Voice-ID vorhanden
     if (settings.useElevenLabs && settings.elevenLabsVoiceId) {
+      console.log("[speak] using ElevenLabs voiceId:", settings.elevenLabsVoiceId);
       try {
         const res = await fetch("/api/tts", {
           method:"POST", headers:{"Content-Type":"application/json"},
           body: JSON.stringify({ text, voiceId: settings.elevenLabsVoiceId })
         });
+        console.log("[speak] /api/tts response:", res.status, res.ok);
         if (res.ok) {
           // Bestehendes Audio stoppen
           if (audioRef.current) { try { audioRef.current.pause(); audioRef.current.src = ""; } catch {} }
@@ -2394,18 +2397,20 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
           const url = URL.createObjectURL(blob);
           const audio = new Audio(url);
           audio.playbackRate = settings.rate || 1.15;
-          audio.onplay = () => setSpeaking(true);
+          audio.onplay = () => { console.log("[speak] ElevenLabs audio onplay"); setSpeaking(true); };
           audio.onended = () => { setSpeaking(false); URL.revokeObjectURL(url); };
-          audio.onerror = () => { setSpeaking(false); URL.revokeObjectURL(url); };
+          audio.onerror = (e) => { console.warn("[speak] audio error", e); setSpeaking(false); URL.revokeObjectURL(url); };
           audioRef.current = audio;
           await audio.play();
           return;
         }
-        // Bei Fehler: fallback auf Browser-TTS
-        console.warn("[TTS] ElevenLabs failed, fallback to browser");
+        const errText = await res.text();
+        console.warn("[TTS] ElevenLabs failed:", res.status, errText);
       } catch (e) {
         console.warn("[TTS] ElevenLabs error", e);
       }
+    } else {
+      console.log("[speak] ElevenLabs not used. useElevenLabs:", settings.useElevenLabs, "voiceId:", settings.elevenLabsVoiceId);
     }
 
     // 2. Browser-TTS (Fallback / Default)
@@ -4032,8 +4037,11 @@ function VoiceSettings() {
   }, [useElevenLabs]);
 
   function persistSettings(next) {
-    const merged = { voiceURI, rate, useElevenLabs, elevenLabsVoiceId, ...next };
+    // Frisch aus localStorage lesen + mergen – vermeidet Closure-Staleness
+    const current = loadVoiceSettings();
+    const merged = { ...current, ...next };
     localStorage.setItem("eyla_voice_settings_v1", JSON.stringify(merged));
+    console.log("[VoiceSettings] persisted:", merged);
   }
   function setVoice(uri) { setVoiceURI(uri); persistSettings({ voiceURI: uri }); }
   function setRateAndSave(r) { setRate(r); persistSettings({ rate: r }); }
