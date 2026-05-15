@@ -127,12 +127,22 @@ async function syncDown() {
 }
 
 // Pulls cloud data and writes into localStorage if cloud has data.
-// Cloud wins über lokal (last-write-wins, server-Side hat aktuellste).
+// Spezial-Schutz für Chat: wenn local mehr Nachrichten hat als Cloud,
+// behalten wir local. Schützt vor Verlust wenn Cloud-Sync hinterher hängt.
 async function pullCloudIntoLocal() {
   const cloud = await syncDown();
   if (!cloud) return false;
   for (const k of SYNC_KEYS) {
     if (cloud[k] !== undefined && cloud[k] !== null) {
+      // Chat: nur überschreiben wenn Cloud mehr/gleich viele Messages hat
+      if (k === "eyla_chat_v1") {
+        try {
+          const localArr = JSON.parse(localStorage.getItem(k) || "[]");
+          if (Array.isArray(localArr) && Array.isArray(cloud[k]) && localArr.length > cloud[k].length) {
+            continue; // local ist länger → behalten
+          }
+        } catch {}
+      }
       try { localStorage.setItem(k, JSON.stringify(cloud[k])); } catch {}
     }
   }
@@ -542,6 +552,7 @@ REGELN: Immer Deutsch. 2–4 Sätze. Konkret mit Mengen/Zeiten. Bei Ernährungsf
 function useVoice(onResult) {
   const recRef = useRef(null);
   const cbRef = useRef(onResult);
+  const cancelledRef = useRef(false);
   const [listening, setListening] = useState(false);
   const [supported, setSupported] = useState(false);
   useEffect(() => { cbRef.current = onResult; }, [onResult]);
@@ -551,24 +562,34 @@ function useVoice(onResult) {
     setSupported(true);
     const rec = new SR();
     rec.lang = "de-DE"; rec.continuous = false; rec.interimResults = false;
-    // onresult: Ergebnis da → SOFORT Mikrofon freigeben via abort(),
-    // erst danach Callback ausführen damit nachgelagerte Verarbeitung das Mic
-    // nicht mehr blockiert.
     rec.onresult = e => {
+      // Wenn User aktiv gestoppt hat, NICHT mehr verarbeiten
+      if (cancelledRef.current) { cancelledRef.current = false; return; }
       const t = e.results[0][0].transcript;
-      try { rec.abort(); } catch {}
+      try { rec.stop(); } catch {}
       setListening(false);
       if (t) cbRef.current(t);
     };
-    rec.onerror = () => { try { rec.abort(); } catch {} setListening(false); };
-    rec.onend = () => setListening(false);
+    rec.onerror = () => { setListening(false); };
+    rec.onend = () => { setListening(false); };
     recRef.current = rec;
     return () => { try { rec.abort(); } catch {} };
   }, []);
   const toggle = useCallback(() => {
-    if (!recRef.current) return;
-    if (listening) { try { recRef.current.abort(); } catch {} setListening(false); }
-    else { try { recRef.current.start(); setListening(true); } catch { try { recRef.current.abort(); recRef.current.start(); setListening(true); } catch {} } }
+    const rec = recRef.current;
+    if (!rec) return;
+    if (listening) {
+      // User-initiated Stop: abort() killt instant, ohne onresult zu feuern.
+      // cancelledRef sichert ab dass selbst wenn onresult noch feuert, nichts passiert.
+      cancelledRef.current = true;
+      try { rec.abort(); } catch {}
+      try { rec.stop(); } catch {}
+      setListening(false);
+    } else {
+      cancelledRef.current = false;
+      try { rec.start(); setListening(true); }
+      catch { try { rec.abort(); rec.start(); setListening(true); } catch {} }
+    }
   }, [listening]);
   return { listening, supported, toggle };
 }
@@ -2204,7 +2225,8 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
   const [loaded, setLoaded] = useState(false);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [voiceOn, setVoiceOn] = useState(false);
+  const [voiceOn, setVoiceOn] = useState(true);  // default on – User wollte das
+  const [speaking, setSpeaking] = useState(false);
   // Kontext-Daten (Plan + Einkaufsliste) für EYLAs Wissen
   const [plan, setPlan] = useState(null);
   const [shopping, setShopping] = useState(null);
@@ -2222,8 +2244,15 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
       u.lang = "de-DE";
       u.rate = 1.05;
       u.pitch = 1;
+      u.onstart = () => setSpeaking(true);
+      u.onend = () => setSpeaking(false);
+      u.onerror = () => setSpeaking(false);
       window.speechSynthesis.speak(u);
-    } catch {}
+    } catch { setSpeaking(false); }
+  }
+  function stopSpeaking() {
+    try { window.speechSynthesis.cancel(); } catch {}
+    setSpeaking(false);
   }
 
   // Initial: Chat + Kontext laden
@@ -2233,9 +2262,10 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
         retrieve("eyla_chat_v1", []),
         retrieve("eyla_shopping_v1", null),
         retrieve("eyla_plan_v1", null),
-        retrieve("eyla_chat_voice_v1", false),
+        retrieve("eyla_chat_voice_v1", null),
       ]);
-      setVoiceOn(!!vOn);
+      // Default ON wenn nichts gespeichert
+      setVoiceOn(vOn === null ? true : !!vOn);
       if (savedMsgs && savedMsgs.length > 0) {
         setMessages(savedMsgs);
       } else {
@@ -2564,6 +2594,23 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
           <div style={{ width:7,height:7,borderRadius:"50%",background:T.green,animation:"blink 1s infinite" }}/>
           <span style={{ color:T.green,fontFamily:T.mono,fontSize:10,letterSpacing:1, flex:1 }}>EYLA HÖRT ZU – sprich jetzt</span>
           <span style={{ color:T.muted, fontFamily:T.serif, fontSize:11, fontStyle:"italic" }}>tippen zum stoppen</span>
+        </button>
+      )}
+
+      {speaking && (
+        <button onClick={stopSpeaking} style={{ width:"100%", display:"flex",alignItems:"center",gap:8,padding:"8px 16px",
+          background:T.acc+"11",border:`1px solid ${T.acc}33`,borderRadius:10,marginBottom:12,
+          cursor:"pointer", textAlign:"left" }}>
+          <div style={{ display:"flex", gap:2, alignItems:"flex-end", height:10 }}>
+            {[0,1,2,3].map(i => (
+              <div key={i} style={{ width:2, background:T.acc, borderRadius:1,
+                animation:`vSpeak ${.6+(i%3)*.15}s ease-in-out infinite alternate`,
+                animationDelay:`${(i*.1).toFixed(2)}s` }}/>
+            ))}
+            <style>{`@keyframes vSpeak{from{height:3px}to{height:10px}}`}</style>
+          </div>
+          <span style={{ color:T.acc, fontFamily:T.mono, fontSize:10, letterSpacing:1, flex:1, marginLeft:4 }}>EYLA SPRICHT</span>
+          <span style={{ color:T.muted, fontFamily:T.serif, fontSize:11, fontStyle:"italic" }}>tippen zum stummschalten</span>
         </button>
       )}
 
