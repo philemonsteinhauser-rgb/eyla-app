@@ -201,6 +201,9 @@ const DEFAULT_PROFILE = {
   goalType: "halten",     // "halten" | "abnehmen" | "aufbauen"
   targetWeight: "",       // kg (nur bei abnehmen/aufbauen relevant)
   targetWeeks: "",        // Wochen bis Zielgewicht
+  // Haushalt für Plan + Liste
+  householdSize: 1,       // wie viele Personen mitessen
+  householdNote: "",      // freier Text – z.B. "Partner vegetarisch", "2 Kinder"
 };
 
 // Makronährstoff-Ziele aus Kalorien + Diät-Typ. Protein angemessen für Aktivität,
@@ -502,7 +505,22 @@ function buildPrompt(profile, log, events, weekHistory = [], plan = null, shoppi
     ? `${eaten - ct.target} kcal über Ziel`
     : `noch ${restKcal} kcal bis Ziel`;
 
+  // Zeitkontext: EYLA muss Datum/Uhrzeit/Wochentag wissen für sinnvolle Vorschläge
+  const now = new Date();
+  const zeitKontext = now.toLocaleString("de-DE", {
+    weekday:"long", year:"numeric", month:"long", day:"numeric",
+    hour:"2-digit", minute:"2-digit"
+  });
+  const persons = parseInt(profile.householdSize)||1;
+  const haushaltStr = persons === 1
+    ? "Du kochst nur für dich."
+    : `Du kochst für ${persons} Personen.${profile.householdNote?` Besonderheit: ${profile.householdNote}.`:""}`;
+
   return `Du bist EYLA – synthetische Begleiterin von ${profile.name}. Du kennst Körper, Tag und Küche.
+
+JETZT: ${zeitKontext}
+
+HAUSHALT: ${haushaltStr}
 
 CHARAKTER: Präzise, direkt, warm aber nicht weich. Du weißt was heute ansteht und was der Körper braucht. Du sagst was Sache ist – mit Lösung. Kein Motivationsposter. Trocken-humorvoll wenn passend.
 
@@ -717,7 +735,7 @@ function VoiceBtn({ toggle, listening, supported }) {
 // ─── ONBOARDING ───────────────────────────────────────────────────────────────
 function Onboarding({ onDone }) {
   const [step, setStep] = useState(0);
-  const [p, setP] = useState({ name:"", sex:"", age:"", weight:"", height:"", goal:[], activity:"", preferences:"", intolerances:"", apps:[], goalType:"halten", targetWeight:"", targetWeeks:"" });
+  const [p, setP] = useState({ name:"", sex:"", age:"", weight:"", height:"", goal:[], activity:"", preferences:"", intolerances:"", apps:[], goalType:"halten", targetWeight:"", targetWeeks:"", householdSize:1, householdNote:"" });
   const set = (k,v) => setP(prev=>({...prev,[k]:v}));
   const iStyle = { width:"100%", background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:10,
     padding:"12px 16px", color:T.text, fontSize:14, fontFamily:T.serif, outline:"none",
@@ -854,6 +872,37 @@ function Onboarding({ onDone }) {
             <input value={p[k]} onChange={e=>set(k,e.target.value)} placeholder={ph} style={iStyle}/>
           </div>
         ))}
+      </div>
+    )},
+    { title:"Du kochst für …", sub:"EYLA passt Portionen daran an.", content:(
+      <div>
+        <Lbl style={{ marginBottom:12 }}>Wie viele essen mit?</Lbl>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:8, marginBottom:16 }}>
+          {[
+            { n:1, label:"Nur ich" },
+            { n:2, label:"Paar" },
+            { n:3, label:"Familie" },
+            { n:4, label:"Großfamilie" },
+          ].map(o => {
+            const sel = (parseInt(p.householdSize)||1) === o.n;
+            return (
+              <button key={o.n} onClick={()=>set("householdSize", o.n)} style={{
+                background:sel?T.acc+"22":"transparent",
+                border:`1px solid ${sel?T.acc:T.borderS}`, borderRadius:12,
+                padding:"14px 6px", color:sel?T.text:T.muted,
+                fontFamily:T.serif, fontSize:12, cursor:"pointer",
+                fontStyle:sel?"normal":"italic",
+                display:"flex", flexDirection:"column", alignItems:"center", gap:4
+              }}>
+                <span style={{ fontFamily:T.mono, fontSize:18 }}>{o.n}{o.n===4?"+":""}</span>
+                <span style={{ fontSize:11 }}>{o.label}</span>
+              </button>
+            );
+          })}
+        </div>
+        <Lbl style={{ marginBottom:8 }}>Notiz (optional)</Lbl>
+        <input value={p.householdNote||""} onChange={e=>set("householdNote",e.target.value)}
+          placeholder='z.B. "Partner vegetarisch", "2 Kinder unter 10"' style={iStyle}/>
       </div>
     )},
     { title:"Deine Apps.", sub:"Optional – was nutzt du?", content:(
@@ -3700,7 +3749,12 @@ TIPP: [Konkreter Hinweis für diesen Tag – Timing, Zubereitung, Variation. Nic
 
 [wiederhole für Dienstag bis Sonntag]`;
 
-      const userPrompt = `Profil: ${profile.name||"Phil"}, ${sexLabel}, ${profile.age||35}J, ${profile.weight||79}kg, ${profile.height||183}cm. Aktivität: ${profile.activity||"5x Woche Beweglichkeit"}. Vorlieben: ${profile.preferences?.join(", ")||"wenig Fleisch, proteinreich, mediterran"}. ${intolSatz} ${zielKontext} Erstelle den 7-Tage-Plan.`;
+      const persons = parseInt(profile.householdSize)||1;
+      const personsSatz = persons === 1
+        ? "Koche nur für mich – Portion 1."
+        : `Koche für ${persons} Personen.${profile.householdNote?` Besonderheit: ${profile.householdNote}.`:""} Plan-Mengen für ${persons} Personen, kcal-Angaben pro Portion (also pro Person).`;
+
+      const userPrompt = `Profil: ${profile.name||"Phil"}, ${sexLabel}, ${profile.age||35}J, ${profile.weight||79}kg, ${profile.height||183}cm. Aktivität: ${profile.activity||"5x Woche Beweglichkeit"}. Vorlieben: ${profile.preferences?.join(", ")||"wenig Fleisch, proteinreich, mediterran"}. ${intolSatz} ${zielKontext} ${personsSatz} Erstelle den 7-Tage-Plan.`;
 
       const res = await fetch("/api/chat", {
         method: "POST",
@@ -5198,6 +5252,37 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
               })()}
             </p>
           )}
+        </Card>
+
+        <Card style={{ marginBottom:12 }}>
+          <Lbl style={{ marginBottom:10 }}>HAUSHALT</Lbl>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:6, marginBottom:10 }}>
+            {[
+              { n:1, label:"Nur ich" },
+              { n:2, label:"Paar" },
+              { n:3, label:"Familie" },
+              { n:4, label:"Großfamilie" },
+            ].map(o => {
+              const sel = (parseInt(draft.householdSize)||1) === o.n;
+              return (
+                <button key={o.n} onClick={()=>set("householdSize", o.n)} style={{
+                  background: sel ? T.acc+"22" : "transparent",
+                  border:`1px solid ${sel ? T.acc : T.borderS}`,
+                  borderRadius:10, padding:"10px 4px",
+                  color: sel ? T.text : T.muted,
+                  fontFamily:T.serif, fontSize:11, cursor:"pointer",
+                  fontStyle: sel ? "normal" : "italic",
+                  display:"flex", flexDirection:"column", alignItems:"center", gap:3
+                }}>
+                  <span style={{ fontFamily:T.mono, fontSize:16 }}>{o.n}{o.n === 4 ? "+" : ""}</span>
+                  <span style={{ fontSize:10 }}>{o.label}</span>
+                </button>
+              );
+            })}
+          </div>
+          <input value={draft.householdNote||""} onChange={e=>set("householdNote",e.target.value)}
+            placeholder='Notiz (z.B. "Partner vegetarisch", "2 Kinder unter 10")'
+            style={inputStyle}/>
         </Card>
 
         <Card style={{ marginBottom:12 }}>
