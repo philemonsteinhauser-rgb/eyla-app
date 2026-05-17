@@ -7596,6 +7596,9 @@ function IntegrationsCard() {
       <p style={{ color:T.muted, fontSize:10, fontStyle:"italic", fontFamily:T.serif, margin:"12px 0 0", lineHeight:1.5 }}>
         Tokens liegen verschlüsselt im EYLA-Cloud-Speicher (Upstash). Du kannst jederzeit trennen — Tokens werden dann auch bei Google revoked.
       </p>
+      <p style={{ color:T.muted, fontSize:10, fontStyle:"italic", fontFamily:T.serif, margin:"6px 0 0", lineHeight:1.5 }}>
+        Setup-Anleitung (Google Cloud / Strava): siehe <code style={{ fontFamily:T.mono, fontSize:10, color:T.acc }}>INTEGRATIONS.md</code> im Repo.
+      </p>
     </Card>
   );
 }
