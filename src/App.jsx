@@ -1371,6 +1371,8 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [] }) {
   // Todos im Heute-Screen sichtbar machen (Live-Sync via storage + custom event)
   const [todos, setTodos] = useState([]);
   const [localEvents, setLocalEvents] = useState([]);
+  // Strava: einmaliger Auto-Sync pro Tag
+  const stravaSyncedRef = useRef(false);
   useEffect(() => {
     setTodos(loadTodos());
     retrieve("eyla_local_events_v2", []).then(e => setLocalEvents(Array.isArray(e) ? e : []));
@@ -1452,6 +1454,35 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [] }) {
     }
     prevKcalReachedRef.current = reached;
   }, [log.meals, profile]);
+
+  // Strava Auto-Sync (einmal pro Mount): hole heute's Activities, füge fehlende zu log.workouts
+  useEffect(() => {
+    if (!isToday || stravaSyncedRef.current) return;
+    (async () => {
+      const { ok, data } = await fetchJSON("/api/strava/status");
+      if (!ok || !data?.connected) return;
+      stravaSyncedRef.current = true;
+      const startOfDay = new Date(); startOfDay.setHours(0,0,0,0);
+      const activities = await fetchStravaActivities(startOfDay);
+      if (!activities.length) return;
+      // Dedup gegen vorhandene log.workouts (per stravaId)
+      const existingIds = new Set((log.workouts||[]).map(w => w.stravaId).filter(Boolean));
+      const newOnes = activities
+        .filter(a => a.date === isoDateKey(new Date()))
+        .filter(a => !existingIds.has(a.id));
+      if (newOnes.length === 0) return;
+      setLog(l => ({...l, workouts: [...(l.workouts||[]), ...newOnes.map(a => ({
+        type: a.type,
+        duration: a.duration || a.durationMoving,
+        intensity: a.avgHeartRate > 150 ? "hart" : a.avgHeartRate > 130 ? "mittel" : "leicht",
+        stravaId: a.id,
+        distance: a.distance,
+        calories: a.calories,
+        avgHeartRate: a.avgHeartRate,
+        time: a.startTime || new Date().toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"}),
+      }))]}));
+    })().catch(()=>{});
+  }, [isToday]);
 
   // Konfetti wenn der letzte Heute-Todo abgehakt wird (cleaner Subtrigger)
   useEffect(() => {
@@ -7338,8 +7369,20 @@ function useIntegrationStatus(provider) {
 function connectGoogle() {
   const code = getEylaCode();
   if (!code) { alert("Erst mit Access-Code einloggen."); return; }
-  // Vollredirect — Google kann nicht in iframe geladen werden
   window.location.href = `/api/google/auth?code=${encodeURIComponent(code)}`;
+}
+
+function connectStrava() {
+  const code = getEylaCode();
+  if (!code) { alert("Erst mit Access-Code einloggen."); return; }
+  window.location.href = `/api/strava/auth?code=${encodeURIComponent(code)}`;
+}
+
+async function fetchStravaActivities(after) {
+  const params = after ? `?after=${encodeURIComponent(after.toISOString())}` : "";
+  const { ok, data } = await fetchJSON(`/api/strava/activities${params}`);
+  if (!ok) return [];
+  return data?.activities || [];
 }
 
 async function disconnectProvider(provider) {
@@ -7364,7 +7407,7 @@ async function createGoogleEvent({ title, date, time, duration }) {
 
 function IntegrationsCard() {
   const google = useIntegrationStatus("google");
-  // Strava + Gmail: Platzhalter bis Backend dafür da ist
+  const strava = useIntegrationStatus("strava");
   const [postOAuthMsg, setPostOAuthMsg] = useState(null);
 
   // Check URL-Params nach OAuth Callback
@@ -7398,7 +7441,16 @@ function IntegrationsCard() {
       onConnect: connectGoogle,
       onDisconnect: async () => { await disconnectProvider("google"); google.refresh(); },
     },
-    { id:"strava",  label:"Strava",  hint:"Workouts importieren (Distanz, Dauer, Puls).", icon:"🏃", color:T.green,  status:{ connected:false, loading:false, comingSoon:true } },
+    {
+      id: "strava",
+      label: "Strava",
+      hint: "Workouts importieren (Distanz, Dauer, Puls, Kalorien).",
+      icon: "🏃",
+      color: T.green,
+      status: strava,
+      onConnect: connectStrava,
+      onDisconnect: async () => { await disconnectProvider("strava"); strava.refresh(); },
+    },
     { id:"gmail",   label:"Gmail",   hint:"EYLA fasst neue Mails zusammen, extrahiert Todos & Termine.", icon:"✉",  color:T.gold,   status:{ connected:false, loading:false, comingSoon:true } },
   ];
 
