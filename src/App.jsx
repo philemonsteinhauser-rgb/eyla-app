@@ -4043,6 +4043,7 @@ function ShoppingScreen() {
   const [addingTo, setAddingTo] = useState(null); // aisle-index oder null
   const [newName, setNewName] = useState("");
   const [newMenge, setNewMenge] = useState("");
+  const [planHint, setPlanHint] = useState(false);  // Banner: "Plan-Items fehlen"
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState(null);
   // Receipt-Foto-State
@@ -4121,6 +4122,20 @@ function ShoppingScreen() {
     }
     setGenerating(false);
   }
+
+  // Plan-Hint Check: gibt es einen Plan + hat die Liste KEINE plan-Items?
+  useEffect(() => {
+    if (!loaded || !data.storeId) return;
+    retrieve("eyla_plan_v1", null).then(plan => {
+      if (!plan || !Array.isArray(plan.days) || plan.days.length === 0) {
+        setPlanHint(false);
+        return;
+      }
+      // Hat die aktuelle Liste irgendwelche "plan"-Items? Wenn ja: kein Hint.
+      const hasPlanItems = data.aisles.some(a => a.items.some(it => it.quelle === "plan"));
+      setPlanHint(!hasPlanItems);
+    });
+  }, [loaded, data.aisles, data.storeId]);
 
   useEffect(() => {
     retrieve("eyla_shopping_v1", null).then(s => {
@@ -4497,6 +4512,27 @@ function ShoppingScreen() {
           <p style={{ color:T.red, fontSize:11, fontStyle:"italic", margin:"6px 0 0", fontFamily:T.serif }}>
             {genError}
           </p>
+        )}
+        {/* Plan-Hint Banner */}
+        {planHint && !generating && (
+          <div style={{ marginTop:10, padding:"8px 12px",
+            background:T.acc+"10", border:`1px solid ${T.acc}33`, borderRadius:10,
+            display:"flex", alignItems:"center", gap:10,
+            animation:"fadeUp .3s ease both"
+          }}>
+            <span style={{ color:T.acc, fontSize:14 }}>✦</span>
+            <span style={{ flex:1, color:T.mid, fontSize:12, fontFamily:T.serif, fontStyle:"italic" }}>
+              EYLA-Tipp: dein Plan ist noch nicht in der Liste. Übernehmen?
+            </span>
+            <button onClick={()=>{ setPlanHint(false); generateFromPlan(); }} style={{
+              background:T.acc+"22", border:`1px solid ${T.acc}55`, borderRadius:8,
+              padding:"5px 12px", color:T.acc, fontFamily:T.mono, fontSize:10,
+              letterSpacing:1, cursor:"pointer"
+            }}>JA</button>
+            <button onClick={()=>setPlanHint(false)} style={{
+              background:"none", border:"none", color:T.muted, fontSize:14, padding:"0 4px", cursor:"pointer"
+            }}>×</button>
+          </div>
         )}
         {receiptError && (
           <p style={{ color:T.red, fontSize:11, fontStyle:"italic", margin:"6px 0 0", fontFamily:T.serif }}>
