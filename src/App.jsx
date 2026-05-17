@@ -2767,6 +2767,28 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
   const [newDur, setNewDur] = useState("");
   const [newRec, setNewRec] = useState("");  // ""|"daily"|"weekly"
   const [localEvents, setLocalEvents] = useState([]);
+  // Google-Calendar-Events (wenn verbunden)
+  const [googleEvents, setGoogleEvents] = useState([]);
+  const [googleConnected, setGoogleConnected] = useState(false);
+  useEffect(() => {
+    (async () => {
+      const { ok, data } = await fetchJSON("/api/google/status");
+      const isConn = !!(ok && data?.connected);
+      setGoogleConnected(isConn);
+      if (isConn) {
+        const from = new Date(); from.setHours(0,0,0,0); from.setDate(from.getDate()-1);
+        const to = new Date(); to.setDate(to.getDate()+90);
+        setGoogleEvents(await fetchGoogleEvents(from, to));
+      }
+    })();
+  }, []);
+  // Re-fetch wenn localEvents geändert werden (Pull-to-Refresh kann der User per Refresh-Button anstoßen)
+  async function refreshGoogle() {
+    if (!googleConnected) return;
+    const from = new Date(); from.setHours(0,0,0,0); from.setDate(from.getDate()-1);
+    const to = new Date(); to.setDate(to.getDate()+90);
+    setGoogleEvents(await fetchGoogleEvents(from, to));
+  }
   const [showAdd, setShowAdd] = useState(false);
   const [selectedDate, setSelectedDate] = useState(()=>new Date());
   // Inline-Edit-Mode für Termine
@@ -2914,7 +2936,8 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
 
   const eventsForSelected = [
     ...(isToday ? events.map(e=>({...e,local:false,date:todayKey})) : []),
-    ...localEvents.filter(matchesRecurrence)
+    ...localEvents.filter(matchesRecurrence),
+    ...googleEvents.filter(e => e.date === selectedKey).map(e => ({...e, local:false, google:true}))
   ].sort((a,b)=>(a.time||"99:99").localeCompare(b.time||"99:99"));
 
   const nowH = new Date().getHours();
@@ -2947,7 +2970,8 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
             const isTodayPill = dKey === dTodayK;
             // Anzahl Events an dem Tag (lokale + recurring)
             const dWeekday = d.getDay();
-            const count = localEvents.filter(e => {
+            const gCount = googleEvents.filter(e => e.date === dKey).length;
+            const count = gCount + localEvents.filter(e => {
               const evDateStr = e.date || dTodayK;
               if (evDateStr === dKey) return true;
               if (!e.recurrence) return false;
@@ -7049,7 +7073,10 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
 
       <VoiceSettings/>
 
-      {profile.apps?.length>0&&<Card style={{ marginBottom:12 }}><Lbl style={{ marginBottom:10 }}>VERBUNDENE APPS</Lbl><div style={{ display:"flex",flexWrap:"wrap",gap:7 }}>{profile.apps.map((a,i)=><div key={i} style={{ display:"flex",alignItems:"center",gap:6,background:T.bg2,border:`1px solid ${T.borderS}`,borderRadius:8,padding:"5px 12px" }}><div style={{ width:5,height:5,borderRadius:"50%",background:T.green,boxShadow:`0 0 5px ${T.green}` }}/><span style={{ color:T.mid,fontFamily:T.mono,fontSize:10 }}>{a}</span></div>)}</div></Card>}
+      {/* Verbundene Apps – Connect/Disconnect für externe Dienste */}
+      <IntegrationsCard/>
+
+      {profile.apps?.length>0&&<Card style={{ marginBottom:12 }}><Lbl style={{ marginBottom:10 }}>VERBUNDENE APPS (alt)</Lbl><div style={{ display:"flex",flexWrap:"wrap",gap:7 }}>{profile.apps.map((a,i)=><div key={i} style={{ display:"flex",alignItems:"center",gap:6,background:T.bg2,border:`1px solid ${T.borderS}`,borderRadius:8,padding:"5px 12px" }}><div style={{ width:5,height:5,borderRadius:"50%",background:T.green,boxShadow:`0 0 5px ${T.green}` }}/><span style={{ color:T.mid,fontFamily:T.mono,fontSize:10 }}>{a}</span></div>)}</div></Card>}
 
       {/* DATEN – Sektion (hinter EYLA, damit Backup nahe Reset) */}
       <div style={{ fontFamily:T.mono, fontSize:9, color:T.muted, letterSpacing:2, margin:"22px 4px 10px", display:"flex", alignItems:"center", gap:8 }}>
@@ -7273,6 +7300,170 @@ export default function App() {
   }
 
   return <AppContent/>;
+}
+
+// ─── INTEGRATIONS (Google Calendar / Strava / Gmail) ─────────────────────────
+// Connect-State pro Provider. Tokens liegen im Backend (Upstash via /api/<provider>/status).
+// Wir cachen nur den Connect-Status im React-State.
+
+function getEylaCode() {
+  try { return JSON.parse(localStorage.getItem("eyla_access_code_v1") || "null"); } catch { return null; }
+}
+
+async function fetchJSON(url, opts={}) {
+  const code = getEylaCode();
+  const headers = { ...(opts.headers||{}) };
+  if (code) headers["x-eyla-code"] = code;
+  if (opts.body && !(opts.body instanceof FormData)) headers["Content-Type"] = "application/json";
+  const r = await fetch(url, { ...opts, headers });
+  let j = null;
+  try { j = await r.json(); } catch {}
+  return { ok: r.ok, status: r.status, data: j };
+}
+
+function useIntegrationStatus(provider) {
+  const [status, setStatus] = useState({ loading:true, connected:false });
+  const refresh = useCallback(async () => {
+    const code = getEylaCode();
+    if (!code) { setStatus({ loading:false, connected:false, noCode:true }); return; }
+    setStatus(s => ({...s, loading:true}));
+    const { ok, data } = await fetchJSON(`/api/${provider}/status`);
+    if (ok && data) setStatus({ loading:false, ...data });
+    else setStatus({ loading:false, connected:false });
+  }, [provider]);
+  useEffect(() => { refresh(); }, [refresh]);
+  return { ...status, refresh };
+}
+
+function connectGoogle() {
+  const code = getEylaCode();
+  if (!code) { alert("Erst mit Access-Code einloggen."); return; }
+  // Vollredirect — Google kann nicht in iframe geladen werden
+  window.location.href = `/api/google/auth?code=${encodeURIComponent(code)}`;
+}
+
+async function disconnectProvider(provider) {
+  await fetchJSON(`/api/${provider}/disconnect`, { method:"POST" });
+}
+
+async function fetchGoogleEvents(fromDate, toDate) {
+  const from = fromDate.toISOString();
+  const to = toDate.toISOString();
+  const { ok, data } = await fetchJSON(`/api/google/events?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+  if (!ok) return [];
+  return data?.events || [];
+}
+
+async function createGoogleEvent({ title, date, time, duration }) {
+  const { ok, data } = await fetchJSON(`/api/google/events`, {
+    method: "POST",
+    body: JSON.stringify({ title, date, time, duration }),
+  });
+  return { ok, data };
+}
+
+function IntegrationsCard() {
+  const google = useIntegrationStatus("google");
+  // Strava + Gmail: Platzhalter bis Backend dafür da ist
+  const [postOAuthMsg, setPostOAuthMsg] = useState(null);
+
+  // Check URL-Params nach OAuth Callback
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get("app_connected");
+    const error = params.get("app_error");
+    if (connected) {
+      setPostOAuthMsg({ type:"success", text: `${connected} verbunden ✓` });
+      google.refresh();
+      // URL bereinigen
+      window.history.replaceState({}, "", window.location.pathname);
+    } else if (error) {
+      setPostOAuthMsg({ type:"error", text: `Verbindung fehlgeschlagen: ${error}` });
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+    if (connected || error) {
+      const t = setTimeout(()=>setPostOAuthMsg(null), 4000);
+      return () => clearTimeout(t);
+    }
+  }, []);
+
+  const providers = [
+    {
+      id: "google",
+      label: "Google Calendar",
+      hint: "Termine sehen + erstellen direkt in deinem Google-Kalender.",
+      icon: "🗓",
+      color: T.acc,
+      status: google,
+      onConnect: connectGoogle,
+      onDisconnect: async () => { await disconnectProvider("google"); google.refresh(); },
+    },
+    { id:"strava",  label:"Strava",  hint:"Workouts importieren (Distanz, Dauer, Puls).", icon:"🏃", color:T.green,  status:{ connected:false, loading:false, comingSoon:true } },
+    { id:"gmail",   label:"Gmail",   hint:"EYLA fasst neue Mails zusammen, extrahiert Todos & Termine.", icon:"✉",  color:T.gold,   status:{ connected:false, loading:false, comingSoon:true } },
+  ];
+
+  return (
+    <Card style={{ marginBottom:12 }}>
+      <Lbl style={{ marginBottom:10 }}>VERBUNDENE APPS</Lbl>
+      {postOAuthMsg && (
+        <div style={{
+          padding:"8px 12px", borderRadius:8, marginBottom:12,
+          background: postOAuthMsg.type==="success" ? T.green+"22" : T.red+"22",
+          border: `1px solid ${postOAuthMsg.type==="success" ? T.green : T.red}55`,
+          color: postOAuthMsg.type==="success" ? T.green : T.red,
+          fontSize:12, fontFamily:T.serif
+        }}>
+          {postOAuthMsg.text}
+        </div>
+      )}
+      {providers.map(p => (
+        <div key={p.id} style={{
+          display:"flex", alignItems:"center", gap:12, padding:"10px 0",
+          borderBottom:`1px solid ${T.border}`
+        }}>
+          <div style={{
+            width:38, height:38, borderRadius:10, background: p.color+"18",
+            border:`1px solid ${p.color}44`, display:"flex", alignItems:"center",
+            justifyContent:"center", fontSize:18, flexShrink:0
+          }}>{p.icon}</div>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+              <span style={{ color:T.text, fontSize:13, fontFamily:T.serif }}>{p.label}</span>
+              {p.status.connected && (
+                <span style={{ background:T.green+"22", border:`1px solid ${T.green}55`, borderRadius:10, padding:"1px 8px", fontSize:9, color:T.green, fontFamily:T.mono, letterSpacing:1 }}>VERBUNDEN</span>
+              )}
+              {p.status.comingSoon && (
+                <span style={{ background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:10, padding:"1px 8px", fontSize:9, color:T.muted, fontFamily:T.mono, letterSpacing:1 }}>BALD</span>
+              )}
+            </div>
+            <div style={{ color:T.muted, fontSize:11, fontStyle:"italic", fontFamily:T.serif, marginTop:2 }}>
+              {p.status.connected && p.status.email ? p.status.email : p.hint}
+            </div>
+          </div>
+          {p.status.comingSoon ? (
+            <span style={{ color:T.muted, fontFamily:T.mono, fontSize:10, fontStyle:"italic" }}>—</span>
+          ) : p.status.loading ? (
+            <span style={{ color:T.muted, fontFamily:T.mono, fontSize:10 }}>…</span>
+          ) : p.status.connected ? (
+            <button onClick={p.onDisconnect} style={{
+              background:"transparent", border:`1px solid ${T.red}33`, borderRadius:8,
+              padding:"5px 10px", color:T.red+"AA", fontFamily:T.mono, fontSize:10,
+              cursor:"pointer", letterSpacing:1
+            }}>TRENNEN</button>
+          ) : (
+            <button onClick={p.onConnect} style={{
+              background:p.color+"22", border:`1px solid ${p.color}66`, borderRadius:8,
+              padding:"5px 12px", color:p.color, fontFamily:T.mono, fontSize:10,
+              cursor:"pointer", letterSpacing:1
+            }}>VERBINDEN</button>
+          )}
+        </div>
+      ))}
+      <p style={{ color:T.muted, fontSize:10, fontStyle:"italic", fontFamily:T.serif, margin:"12px 0 0", lineHeight:1.5 }}>
+        Tokens liegen verschlüsselt im EYLA-Cloud-Speicher (Upstash). Du kannst jederzeit trennen — Tokens werden dann auch bei Google revoked.
+      </p>
+    </Card>
+  );
 }
 
 // ─── REMINDERS ────────────────────────────────────────────────────────────────
