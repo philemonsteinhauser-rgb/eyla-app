@@ -964,6 +964,40 @@ function haptic(ms = 20) {
   try { navigator.vibrate?.(ms); } catch {}
 }
 
+// Smart-Hint: ein kontextabhängiger EYLA-Satz oben in Heute, basierend auf
+// Tageszeit + Datenlücken + Plan. Wechselt im Lauf des Tages.
+function smartHintFor(log, profile, plan) {
+  const hour = new Date().getHours();
+  const eaten = (log.meals||[]).reduce((s,m)=>s+(m.calories||0),0);
+  const water = log.water || 0;
+  const hasWorkout = (log.workouts||[]).length > 0;
+  const todayWeekday = ["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"][new Date().getDay()];
+  const todayPlan = plan?.days?.find(d => d.day && d.day.toLowerCase().includes(todayWeekday.toLowerCase()));
+
+  // Priorität 1: Plan-Bezug zur Tageszeit
+  if (todayPlan) {
+    if (hour >= 7 && hour <= 10 && (log.meals||[]).length === 0 && todayPlan.breakfast && todayPlan.breakfast !== "—") {
+      return `Plan-Frühstück heute: ${todayPlan.breakfast.split("(")[0].trim()}.`;
+    }
+    if (hour >= 11 && hour <= 14 && eaten < 600 && todayPlan.lunch && todayPlan.lunch !== "—") {
+      return `Mittag fällig. Im Plan: ${todayPlan.lunch.split("(")[0].trim()}.`;
+    }
+    if (hour >= 17 && hour <= 20 && todayPlan.dinner && todayPlan.dinner !== "—") {
+      return `Heute Abend laut Plan: ${todayPlan.dinner.split("(")[0].trim()}.`;
+    }
+  }
+  // Priorität 2: Wasser-Lücke
+  if (hour >= 14 && water < 4) return `Schon ${hour} Uhr und erst ${water} Gläser Wasser. Schluck einen.`;
+  if (hour >= 11 && water < 2) return `Vergiss das Wasser nicht – noch nichts heute.`;
+  // Priorität 3: Training
+  if (hour >= 17 && !hasWorkout && new Date().getDay() !== 0) return `Heute noch keine Bewegung. Auch 20 Min Spazieren zählen.`;
+  // Priorität 4: Abend-Reflexion
+  if (hour >= 21 && !log.note) return `Schon spät. Kurz aufschreiben wie der Tag war?`;
+  // Priorität 5: Morgens neutral
+  if (hour < 9) return `Guten Morgen. ${profile.name?.split(" ")[0] || ""}.`;
+  return null;
+}
+
 // Apple-Watch-Style konzentrische Ringe für Tages-Overview
 // 4 Ringe: Wasser (außen), Schlaf, Kalorien, Bewegung (innen)
 function ActivityRings({ water, waterTarget, sleep, sleepTarget, kcal, kcalTarget, workouts, workoutTarget = 60 }) {
@@ -1007,10 +1041,12 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate }) {
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState(null);
   const fileInputRef = useRef(null);
-  // Favoriten aus PlanScreen
+  // Favoriten + Plan-Daten für Smart-Hints
   const [favorites, setFavorites] = useState([]);
+  const [plan, setPlan] = useState(null);
   useEffect(() => {
     retrieve("eyla_favorites_v1", []).then(f => setFavorites(Array.isArray(f) ? f : []));
+    retrieve("eyla_plan_v1", null).then(p => setPlan(p));
   }, []);
 
   // Konfetti-State (Effekt-Trigger wird weiter unten gesetzt nachdem `log` existiert)
@@ -1200,9 +1236,23 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate }) {
 
   const energyOpts = ["💤 Erschöpft","😴 Müde","😐 Ok","😊 Gut","⚡ Energiegeladen"];
 
+  const hint = isToday ? smartHintFor(log, profile, plan) : null;
+
   return (
     <div>
       <Confetti show={konfetti} onDone={()=>setKonfetti(false)}/>
+      {/* Smart-Hint von EYLA */}
+      {hint && (
+        <div style={{
+          marginBottom:14, padding:"8px 14px",
+          background: T.acc+"08", border:`1px solid ${T.acc}22`, borderRadius:10,
+          display:"flex", alignItems:"center", gap:8,
+          animation:"fadeUp .3s ease both"
+        }}>
+          <span style={{ color:T.acc, fontSize:12 }}>✦</span>
+          <span style={{ color:T.mid, fontSize:12, fontStyle:"italic", fontFamily:T.serif, flex:1 }}>{hint}</span>
+        </div>
+      )}
       <div style={{ marginBottom:14, display:"flex", alignItems:"center", justifyContent:"space-between", gap:14 }}>
         <div style={{ minWidth:0, flex:1 }}>
           <Lbl style={{ marginBottom:6 }}>
@@ -2254,7 +2304,17 @@ function WeekScreen({ logsByDate, profile }) {
 
   useEffect(() => {
     retrieve("eyla_week_insight_v1", null).then(saved => {
-      if (saved && saved.hash === weekHash) setInsight(saved.text);
+      if (saved && saved.hash === weekHash) {
+        setInsight(saved.text);
+      } else {
+        // Auto-Generierung wenn keine Daten oder älter als 6h
+        const ageMs = saved ? (Date.now() - new Date(saved.createdAt||0).getTime()) : Infinity;
+        if (ageMs > 6 * 60 * 60 * 1000 && Object.keys(logsByDate||{}).length > 0) {
+          // Verzögert generieren – User soll Tab erst sehen können
+          const t = setTimeout(() => generateInsight(), 400);
+          return () => clearTimeout(t);
+        }
+      }
     });
   }, [weekHash]);
 
@@ -3001,14 +3061,38 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
   const onVoice = useCallback((text)=>send(text),[]);
   const { listening, supported, toggle } = useVoice(onVoice);
 
-  const SUGG = [
-    "Was würde mir jetzt gut tun?",
-    "Analysiere meinen Tag",
-    "Was esse ich vor dem nächsten Termin?",
-    "Genug Wasser heute?",
-    "Abendessen-Idee?",
-    "Bin ich auf Kurs?",
-  ];
+  // Dynamische Suggestions basierend auf Tageszeit + Datenlage
+  const SUGG = (() => {
+    const hour = new Date().getHours();
+    const eaten = log.meals.reduce((s,m)=>s+(m.calories||0),0);
+    const water = log.water || 0;
+    const hasWorkout = (log.workouts||[]).length > 0;
+    const hasSleep = !!log.sleep;
+    const out = [];
+
+    // Tageszeit-spezifisch
+    if (hour >= 6 && hour < 11) {
+      out.push("Was sollte ich heute frühstücken?");
+      if (!hasSleep) out.push("Schlaf war 7h, wie wirkt sich das aus?");
+    } else if (hour >= 11 && hour < 15) {
+      out.push("Mittag-Idee passend zum Plan?");
+    } else if (hour >= 15 && hour < 18) {
+      out.push("Was esse ich vor dem nächsten Termin?");
+    } else if (hour >= 18 && hour < 22) {
+      out.push("Abendessen-Idee?");
+      if (!hasWorkout) out.push("Schaff ich heute noch Training?");
+    } else {
+      out.push("Wie war mein Tag?");
+    }
+
+    // Daten-Lücken-basiert
+    if (water < 4 && hour > 11) out.push("Mahn mich – ich trink zu wenig.");
+    if (eaten > 0) out.push("Bin ich auf Kurs heute?");
+    out.push("Analysiere meinen Tag");
+    if (!hasWorkout && new Date().getDay() !== 0) out.push("Brauch ich heute Bewegung?");
+
+    return out.slice(0, 6);
+  })();
 
   function clearChat() {
     if (!confirm("Chat wirklich löschen? Alle Nachrichten weg.")) return;
