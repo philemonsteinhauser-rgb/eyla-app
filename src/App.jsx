@@ -614,6 +614,10 @@ AKTIONEN: Du hast Tools um direkt im Leben des Users Sachen zu tun:
 - add_todo, complete_todo, remove_todo, set_todo_priority → Aufgaben verwalten
 - read_recent_emails → Gmail-Inbox lesen ("was kam heute rein?")
 - sync_strava_today → letzte Strava-Activities ziehen
+- find_free_slot → Lücke im Kalender finden ("wann hab ich 90min Zeit für Yoga?")
+- move_event → Termin verschieben ("schieb meinen 10-Uhr-Call auf 11")
+- delete_event → Termin löschen
+- daily_briefing → Tages-Brief mit Terminen, Todos, freien Slots ("wie sieht heute aus?")
 Wenn der User sagt "trag X ein" / "ich hab Y gegessen" / "noch 0.5L Wasser" / "Termin morgen 14 Uhr Sport" / "Eier auf die Liste" / "ich muss noch Mama anrufen" / "was kam in der mail?" / "sync mein training" – nutze die Tools direkt. Kurz bestätigen, nicht ausschweifen. Wenn unklar: nachfragen statt raten.
 
 WICHTIGE REGEL für add_meal: Zahlen vom User wie "200g", "500ml", "2 Scheiben" sind MENGEN, NIEMALS Kalorien!
@@ -2418,6 +2422,225 @@ function MealRow({ meal, onEdit, onDelete, onDuplicate }) {
   );
 }
 
+// ─── SMART-CALENDAR HELPERS ───────────────────────────────────────────────────
+// Smart-Duration aus Titel ableiten – sodass EYLA und User nicht jedes Mal
+// die Dauer eintragen müssen wenn klar ist worum es geht.
+function smartDurationFromTitle(title) {
+  const t = String(title||"").toLowerCase();
+  // Quick patterns
+  if (/\b(call|meeting|standup|sync|kurz|short|quick|1on1|11)\b/.test(t)) return 30;
+  if (/\b(kaffee|coffee|tea|tee)\b/.test(t)) return 30;
+  if (/\b(lunch|essen|mittag|dinner|abendessen|brunch|fr[uü]hst[uü]ck|breakfast)\b/.test(t)) return 60;
+  if (/\b(yoga|stretching|beweglichkeit|mobility)\b/.test(t)) return 60;
+  if (/\b(sport|workout|training|gym|run|laufen|cardio|kraft|schwimmen)\b/.test(t)) return 60;
+  if (/\b(deep|focus|fokus|coding|programming|writing|schreiben)\b/.test(t)) return 90;
+  if (/\b(workshop|seminar|kurs|vortrag|talk)\b/.test(t)) return 120;
+  if (/\b(arzt|doktor|therapie|massage|friseur)\b/.test(t)) return 45;
+  return 60; // Default
+}
+
+// Travel-Time/Vorbereitung aus Titel ableiten (z.B. Termin außer Haus brauchen Fahrt)
+function smartTravelFromTitle(title) {
+  const t = String(title||"").toLowerCase();
+  if (/\b(arzt|doktor|friseur|massage|therapie|treffen|außer|haus|stadt|büro|office)\b/.test(t)) return 20;
+  if (/\b(lunch|essen|dinner|abendessen) (mit|with)\b/.test(t)) return 15;
+  return 0;
+}
+
+// Konflikt-Detection: prüft ob ein neuer Termin mit existierenden überlappt
+function detectConflicts(newEv, allEvents) {
+  if (!newEv.time || !newEv.duration) return [];
+  const [h, m] = newEv.time.split(":").map(n => parseInt(n)||0);
+  const newStart = h*60 + m;
+  const newEnd = newStart + parseInt(newEv.duration);
+  return allEvents.filter(ev => {
+    if (!ev.time || !ev.date) return false;
+    if (ev.date !== newEv.date) return false;
+    if (ev.id === newEv.id) return false; // gleicher Termin
+    const [eh, em] = ev.time.split(":").map(n => parseInt(n)||0);
+    const evStart = eh*60 + em;
+    const evEnd = evStart + (parseInt(ev.duration)||60);
+    return newStart < evEnd && newEnd > evStart;
+  });
+}
+
+// Free-Slot-Detection: findet freie Lücken zwischen Terminen für einen Tag
+// rangeStart/End in Minuten (z.B. 6*60 bis 22*60). Min-Length in Minuten.
+function findFreeSlots(events, dayKey, rangeStart = 7*60, rangeEnd = 22*60, minLen = 30) {
+  const dayEvents = events
+    .filter(e => e.date === dayKey && e.time)
+    .map(e => {
+      const [h, m] = e.time.split(":").map(n => parseInt(n)||0);
+      const start = h*60 + m;
+      const dur = parseInt(e.duration) || 60;
+      return { start, end: start + dur };
+    })
+    .sort((a, b) => a.start - b.start);
+
+  const slots = [];
+  let cursor = rangeStart;
+  for (const ev of dayEvents) {
+    if (ev.start > cursor && ev.start - cursor >= minLen) {
+      slots.push({ start: cursor, end: ev.start, duration: ev.start - cursor });
+    }
+    cursor = Math.max(cursor, ev.end);
+  }
+  if (rangeEnd > cursor && rangeEnd - cursor >= minLen) {
+    slots.push({ start: cursor, end: rangeEnd, duration: rangeEnd - cursor });
+  }
+  return slots;
+}
+function minToHHMM(min) {
+  const h = Math.floor(min/60);
+  const m = min % 60;
+  return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
+}
+
+// Day-Timeline – visuelle vertikale Zeitleiste eines Tages
+// Stunden 6-22 default. Termine als positionierte Blöcke. Jetzt-Linie wenn heute.
+function DayTimeline({ events, dayKey, isToday, onSlotClick, onEventClick, freeSlots = [], conflictsById = {} }) {
+  const HOUR_START = 6;
+  const HOUR_END = 23;
+  const HOUR_HEIGHT = 38; // px pro Stunde
+  const TOTAL_HEIGHT = (HOUR_END - HOUR_START) * HOUR_HEIGHT;
+  const nowMin = new Date().getHours()*60 + new Date().getMinutes();
+  const nowY = (nowMin - HOUR_START*60) * (HOUR_HEIGHT/60);
+  const showNowLine = isToday && nowY >= 0 && nowY <= TOTAL_HEIGHT;
+
+  // Events mit Zeit für diesen Tag filtern + positionieren
+  const positioned = events
+    .filter(e => e.date === dayKey && e.time)
+    .map(e => {
+      const [h, m] = e.time.split(":").map(n => parseInt(n)||0);
+      const startMin = h*60 + m;
+      const dur = parseInt(e.duration) || 60;
+      const top = (startMin - HOUR_START*60) * (HOUR_HEIGHT/60);
+      const height = Math.max(22, dur * (HOUR_HEIGHT/60));
+      const travel = parseInt(e.travelTime) || 0;
+      const travelHeight = travel > 0 ? travel * (HOUR_HEIGHT/60) : 0;
+      const travelTop = top - travelHeight;
+      return { ev:e, top, height, travelTop, travelHeight, startMin };
+    })
+    .filter(p => p.top + p.height >= 0 && p.top <= TOTAL_HEIGHT);
+
+  // Stunden-Labels
+  const hours = [];
+  for (let h = HOUR_START; h <= HOUR_END; h++) hours.push(h);
+
+  return (
+    <div style={{
+      position:"relative", height: TOTAL_HEIGHT, marginLeft:38, marginRight:4,
+      borderLeft:`1px solid ${T.borderS}`,
+    }}>
+      {/* Hour-Grid + Labels */}
+      {hours.map(h => {
+        const y = (h - HOUR_START) * HOUR_HEIGHT;
+        return (
+          <Fragment key={h}>
+            <div style={{
+              position:"absolute", left:-38, top: y - 6,
+              fontFamily:T.mono, fontSize:9, color:T.muted, width:34,
+              textAlign:"right", paddingRight:6, letterSpacing:.5
+            }}>{String(h).padStart(2,"0")}</div>
+            <div style={{
+              position:"absolute", left:0, right:0, top:y, height:1,
+              background: h%6===0 ? T.borderS : T.border, opacity: h%6===0 ? .7 : .35
+            }}/>
+          </Fragment>
+        );
+      })}
+
+      {/* Free Slots subtil markieren */}
+      {freeSlots.map((slot, i) => {
+        const top = (slot.start - HOUR_START*60) * (HOUR_HEIGHT/60);
+        const height = slot.duration * (HOUR_HEIGHT/60);
+        if (height < 24) return null;
+        return (
+          <button key={`slot-${i}`} onClick={()=>onSlotClick?.(slot)} style={{
+            position:"absolute", left:6, right:6, top, height,
+            background: `repeating-linear-gradient(45deg, transparent 0 6px, ${T.acc}06 6px 12px)`,
+            border:`1px dashed ${T.acc}33`, borderRadius:6, cursor:"pointer",
+            padding:"4px 8px", textAlign:"left", overflow:"hidden",
+            display:"flex", alignItems:"center", gap:6
+          }}
+          title={`${minToHHMM(slot.start)} – ${minToHHMM(slot.end)} · ${slot.duration}min frei`}>
+            <span style={{ fontFamily:T.mono, fontSize:9, color:T.acc+"AA", opacity:.7 }}>
+              {slot.duration >= 60 ? `${Math.floor(slot.duration/60)}h${slot.duration%60?` ${slot.duration%60}m`:''}` : `${slot.duration}min`} frei
+            </span>
+          </button>
+        );
+      })}
+
+      {/* Termine */}
+      {positioned.map(({ ev, top, height, travelTop, travelHeight }) => {
+        const isGoogle = ev.google || ev.source === "google";
+        const isLocal = ev.local || !ev.source;
+        const baseCol = isGoogle ? T.acc : T.gold;
+        const hasConflict = !!conflictsById[ev.id];
+        return (
+          <Fragment key={ev.id || `${ev.title}-${ev.time}`}>
+            {/* Travel-Time (schraffiert davor) */}
+            {travelHeight > 0 && (
+              <div style={{
+                position:"absolute", left:6, right:6, top:travelTop, height:travelHeight,
+                background: `repeating-linear-gradient(45deg, ${baseCol}11 0 4px, transparent 4px 8px)`,
+                borderRadius:6, pointerEvents:"none"
+              }} title={`Vorbereitung/Fahrt ${ev.travelTime}min`}/>
+            )}
+            <button onClick={()=>onEventClick?.(ev)} style={{
+              position:"absolute", left:6, right:6, top, height: Math.max(22, height),
+              background: baseCol+"22",
+              border:`1px solid ${hasConflict ? T.red : baseCol+"99"}`,
+              borderLeft: `3px solid ${hasConflict ? T.red : baseCol}`,
+              borderRadius:6, padding:"3px 8px", cursor:"pointer",
+              display:"flex", flexDirection:"column", alignItems:"flex-start", justifyContent:"center",
+              overflow:"hidden", textAlign:"left"
+            }}>
+              <div style={{
+                fontFamily:T.serif, fontSize:12, color:T.text, fontWeight:500,
+                width:"100%", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"
+              }}>{ev.title}</div>
+              {height >= 36 && (
+                <div style={{ fontFamily:T.mono, fontSize:9, color:T.muted, marginTop:2, display:"flex", gap:6, alignItems:"center" }}>
+                  <span>{ev.time}{ev.duration?` · ${ev.duration}min`:""}</span>
+                  {isGoogle && <span style={{ color:T.acc, opacity:.7 }}>· Google</span>}
+                </div>
+              )}
+            </button>
+          </Fragment>
+        );
+      })}
+
+      {/* Jetzt-Linie */}
+      {showNowLine && (
+        <div style={{ position:"absolute", left:-44, right:0, top:nowY, pointerEvents:"none", zIndex:5 }}>
+          <div style={{ position:"absolute", left:40, right:0, height:2, background:T.red, opacity:.85, boxShadow:`0 0 6px ${T.red}` }}/>
+          <div style={{
+            position:"absolute", left:34, top:-4,
+            width:10, height:10, borderRadius:"50%", background:T.red,
+            boxShadow:`0 0 8px ${T.red}`
+          }}/>
+          <div style={{
+            position:"absolute", left:0, top:-7,
+            fontFamily:T.mono, fontSize:9, color:T.red, fontWeight:700, letterSpacing:.5,
+            background:T.bg, padding:"1px 3px", borderRadius:3
+          }}>{minToHHMM(nowMin)}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Termin-Templates für One-Tap-Add
+const EVENT_TEMPLATES = [
+  { id:"workout",  label:"Workout",  icon:"🏋", duration:60, defaultTime:"18:00" },
+  { id:"call",     label:"Call",     icon:"📞", duration:30, defaultTime:"" },
+  { id:"deep",     label:"Deep Work",icon:"🧠", duration:90, defaultTime:"09:00" },
+  { id:"lunch",    label:"Lunch",    icon:"🍽", duration:60, defaultTime:"12:30" },
+  { id:"yoga",     label:"Yoga",     icon:"🧘", duration:60, defaultTime:"" },
+  { id:"friseur",  label:"Friseur",  icon:"✂",  duration:45, defaultTime:"" },
+];
+
 // ─── KALENDER SCREEN ──────────────────────────────────────────────────────────
 // ISO Date Key "YYYY-MM-DD" für Kalender-Speicherung
 function isoDateKey(d) {
@@ -3114,7 +3337,15 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
           <div style={{ borderTop:`1px solid ${T.border}`, paddingTop:12, marginBottom:10 }}>
             <Lbl color={T.gold} style={{ marginBottom:10 }}>Oder manuell</Lbl>
           </div>
-          <input value={newTitle} onChange={e=>setNewTitle(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addEvent()}
+          <input value={newTitle} onChange={e=>{
+              const v = e.target.value;
+              setNewTitle(v);
+              // Smart-Duration auto-vorschlagen wenn Dauer noch leer
+              if (!newDur || newDur === "60") {
+                const dur = smartDurationFromTitle(v);
+                if (dur && dur !== 60) setNewDur(String(dur));
+              }
+            }} onKeyDown={e=>e.key==="Enter"&&addEvent()}
             placeholder="Was?" autoFocus
             style={{ width:"100%", background:T.bg2,border:`1px solid ${T.borderS}`,borderRadius:8,padding:"9px 12px",color:T.text,fontFamily:T.serif,fontSize:13,fontStyle:"italic",outline:"none", boxSizing:"border-box", marginBottom:8 }}/>
           <div style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr 1fr", gap:8, marginBottom:10 }}>
@@ -3155,7 +3386,89 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
         </Card>
       )}
 
-      {/* Zeitstrahl */}
+      {/* SMART DAY-TIMELINE – visuelle Übersicht für den ausgewählten Tag */}
+      {(() => {
+        // Konflikte berechnen
+        const conflictsById = {};
+        for (const ev of eventsForSelected) {
+          if (!ev.time) continue;
+          const conflicts = detectConflicts(ev, eventsForSelected);
+          if (conflicts.length > 0) conflictsById[ev.id] = conflicts;
+        }
+        // Free-Slots berechnen (für Tag, 7-22, min 30min)
+        const slots = findFreeSlots(eventsForSelected, selectedKey, 7*60, 22*60, 45);
+        // Top-3 längste Slots
+        const topSlots = [...slots].sort((a,b)=>b.duration-a.duration).slice(0, 3);
+        const hasConflicts = Object.keys(conflictsById).length > 0;
+        return (
+          <Card style={{ marginBottom:12 }}>
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
+              <Lbl>{isToday ? "HEUTE" : "TAG"} · TIMELINE</Lbl>
+              <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+                {hasConflicts && (
+                  <span style={{ background:T.red+"22", border:`1px solid ${T.red}55`, borderRadius:10, padding:"1px 8px", fontSize:9, color:T.red, fontFamily:T.mono, letterSpacing:1 }}>
+                    {Object.keys(conflictsById).length} KONFLIKT{Object.keys(conflictsById).length>1?"E":""}
+                  </span>
+                )}
+                {googleConnected && (
+                  <button onClick={refreshGoogle} title="Google neu laden" style={{
+                    background:"transparent", border:`1px solid ${T.acc}33`, borderRadius:8,
+                    padding:"2px 8px", color:T.acc+"AA", fontFamily:T.mono, fontSize:9,
+                    cursor:"pointer", letterSpacing:1
+                  }}>↻ G</button>
+                )}
+              </div>
+            </div>
+            {topSlots.length > 0 && (
+              <div style={{ marginBottom:10, padding:"6px 10px", background:T.acc+"08", border:`1px solid ${T.acc}22`, borderRadius:8, display:"flex", flexWrap:"wrap", gap:6, alignItems:"center" }}>
+                <span style={{ fontFamily:T.mono, fontSize:9, color:T.acc, letterSpacing:1.5 }}>✦ FREI:</span>
+                {topSlots.map((s, i) => (
+                  <span key={i} style={{ fontFamily:T.mono, fontSize:10, color:T.mid }}>
+                    {minToHHMM(s.start)}–{minToHHMM(s.end)} <span style={{ color:T.muted }}>({s.duration>=60 ? `${Math.floor(s.duration/60)}h${s.duration%60?` ${s.duration%60}m`:""}` : `${s.duration}m`})</span>
+                  </span>
+                ))}
+              </div>
+            )}
+            <DayTimeline
+              events={eventsForSelected}
+              dayKey={selectedKey}
+              isToday={isToday}
+              freeSlots={slots}
+              conflictsById={conflictsById}
+              onSlotClick={(slot) => {
+                setNewTime(minToHHMM(slot.start));
+                setNewDur(String(Math.min(slot.duration, 60)));
+                setShowAdd(true);
+              }}
+              onEventClick={(ev) => { if (ev.local) startEdit(ev); }}
+            />
+          </Card>
+        );
+      })()}
+
+      {/* Quick-Templates für One-Tap-Add */}
+      <Card style={{ marginBottom:12 }}>
+        <Lbl style={{ marginBottom:8 }}>QUICK-ADD</Lbl>
+        <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+          {EVENT_TEMPLATES.map(tpl => (
+            <button key={tpl.id} onClick={()=>{
+              setNewTitle(tpl.label);
+              setNewDur(String(tpl.duration));
+              if (tpl.defaultTime) setNewTime(tpl.defaultTime);
+              setShowAdd(true);
+            }} style={{
+              background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:18,
+              padding:"5px 12px", color:T.mid, fontFamily:T.serif, fontSize:12,
+              cursor:"pointer", display:"flex", alignItems:"center", gap:5,
+              fontStyle:"italic"
+            }}>
+              <span>{tpl.icon}</span>{tpl.label}
+            </button>
+          ))}
+        </div>
+      </Card>
+
+      {/* Legacy Stunden-Liste (Termine zum Editieren) */}
       <Card style={{ padding:"16px 0", overflow:"hidden" }}>
         {eventsLoading && isToday && (
           <div style={{ textAlign:"center", padding:"20px 0" }}>
@@ -3834,6 +4147,47 @@ const EYLA_TOOLS = [
     input_schema: { type: "object", properties: {} }
   },
   {
+    name: "find_free_slot",
+    description: "Findet freie Lücken im Kalender für einen Tag (oder über mehrere Tage). Antwortet mit Zeiten in HH:MM. Nutzen wenn User sagt 'wann hab ich Zeit für X', 'plan mir 90min ein', 'wann ist Platz für Yoga'.",
+    input_schema: {
+      type: "object",
+      properties: {
+        date: { type: "string", description: "YYYY-MM-DD (default heute)" },
+        duration: { type: "number", description: "Mindestdauer in Minuten (z.B. 60)" },
+        preferAfter: { type: "string", description: "Frühestens HH:MM (optional)" },
+        preferBefore: { type: "string", description: "Spätestens HH:MM (optional)" }
+      },
+      required: ["duration"]
+    }
+  },
+  {
+    name: "move_event",
+    description: "Verschiebe einen Termin auf eine andere Zeit/Tag. Sucht Termin per Teilstring im Titel.",
+    input_schema: {
+      type: "object",
+      properties: {
+        match: { type: "string", description: "Teilstring im Termin-Titel" },
+        newTime: { type: "string", description: "Neue Uhrzeit HH:MM (optional)" },
+        newDate: { type: "string", description: "Neues Datum YYYY-MM-DD (optional)" }
+      },
+      required: ["match"]
+    }
+  },
+  {
+    name: "delete_event",
+    description: "Lösche einen Termin. Sucht per Teilstring im Titel. Vorsicht – fragt nicht nach.",
+    input_schema: {
+      type: "object",
+      properties: { match: { type: "string", description: "Teilstring im Titel" } },
+      required: ["match"]
+    }
+  },
+  {
+    name: "daily_briefing",
+    description: "Generiere einen Tages-Brief: was steht heute an (Termine + Todos + Plan + freie Slots). Nutzen wenn User sagt 'wie sieht heute aus', 'gib mir nen Überblick', 'tagesbrief', 'wie ist mein Tag'.",
+    input_schema: { type: "object", properties: {} }
+  },
+  {
     name: "add_event",
     description: "Trag einen Termin in den Kalender ein. Wenn kein Datum angegeben wird, ist es heute.",
     input_schema: {
@@ -4360,6 +4714,89 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
             return `• ${from}: ${subj}${m.isUnread ? " (ungelesen)" : ""}`;
           });
           return `📧 ${data.messages.length} Mails:\n${lines.join("\n")}`;
+        }
+        case "find_free_slot": {
+          const dateKey = String(input.date || isoDateKey(new Date()));
+          const duration = parseInt(input.duration) || 60;
+          const evs = await retrieve("eyla_local_events_v2", []) || [];
+          // Optional: Google-Events dazu wenn verbunden
+          let allEv = evs.filter(e => e.date === dateKey);
+          try {
+            const st = await fetchJSON("/api/google/status");
+            if (st.ok && st.data?.connected) {
+              const from = new Date(`${dateKey}T00:00:00`);
+              const to = new Date(`${dateKey}T23:59:59`);
+              const gEv = await fetchGoogleEvents(from, to);
+              allEv = [...allEv, ...gEv];
+            }
+          } catch {}
+          // Range aus preferAfter/Before
+          const parseHHMM = s => { const [h, m] = String(s||"").split(":").map(n=>parseInt(n)||0); return h*60+m; };
+          const rangeStart = input.preferAfter ? parseHHMM(input.preferAfter) : 7*60;
+          const rangeEnd = input.preferBefore ? parseHHMM(input.preferBefore) : 22*60;
+          const slots = findFreeSlots(allEv, dateKey, rangeStart, rangeEnd, duration).filter(s => s.duration >= duration);
+          if (slots.length === 0) return `Keine ${duration}min-Lücke an ${dateKey}${input.preferAfter || input.preferBefore ? ` zwischen ${minToHHMM(rangeStart)}-${minToHHMM(rangeEnd)}` : ""}.`;
+          const lines = slots.slice(0, 5).map(s => `• ${minToHHMM(s.start)}–${minToHHMM(s.end)} (${s.duration}min)`);
+          return `Freie Slots ≥${duration}min:\n${lines.join("\n")}`;
+        }
+        case "move_event": {
+          const q = String(input.match||"").toLowerCase();
+          if (!q) return "move_event: match fehlt";
+          const arr = await retrieve("eyla_local_events_v2", []) || [];
+          const idx = arr.findIndex(e => String(e.title||"").toLowerCase().includes(q));
+          if (idx < 0) return `Kein Termin mit "${input.match}" gefunden (in lokalen Events).`;
+          const updated = { ...arr[idx] };
+          if (input.newTime) updated.time = String(input.newTime);
+          if (input.newDate) updated.date = String(input.newDate);
+          arr[idx] = updated;
+          await persist("eyla_local_events_v2", arr);
+          window.dispatchEvent(new Event("eyla_events_changed"));
+          return `↻ "${updated.title}" verschoben auf ${updated.date} ${updated.time||""}`.trim();
+        }
+        case "delete_event": {
+          const q = String(input.match||"").toLowerCase();
+          if (!q) return "delete_event: match fehlt";
+          const arr = await retrieve("eyla_local_events_v2", []) || [];
+          const idx = arr.findIndex(e => String(e.title||"").toLowerCase().includes(q));
+          if (idx < 0) return `Kein Termin mit "${input.match}" gefunden.`;
+          const removed = arr[idx].title;
+          arr.splice(idx, 1);
+          await persist("eyla_local_events_v2", arr);
+          window.dispatchEvent(new Event("eyla_events_changed"));
+          return `🗑 Termin gelöscht: "${removed}"`;
+        }
+        case "daily_briefing": {
+          const todayK = isoDateKey(new Date());
+          const evs = await retrieve("eyla_local_events_v2", []) || [];
+          const todayEvs = evs.filter(e => e.date === todayK).sort((a,b)=>(a.time||"99").localeCompare(b.time||"99"));
+          // Google falls verbunden
+          try {
+            const st = await fetchJSON("/api/google/status");
+            if (st.ok && st.data?.connected) {
+              const from = new Date(`${todayK}T00:00:00`);
+              const to = new Date(`${todayK}T23:59:59`);
+              const gEv = await fetchGoogleEvents(from, to);
+              todayEvs.push(...gEv);
+              todayEvs.sort((a,b)=>(a.time||"99").localeCompare(b.time||"99"));
+            }
+          } catch {}
+          // Todos heute
+          let openTodos = [];
+          try {
+            const allTodos = JSON.parse(localStorage.getItem("eyla_todos_v1")||"[]");
+            openTodos = allTodos.filter(t => t.status==="open" && (t.priority||"today")==="today");
+          } catch {}
+          // Slots
+          const slots = findFreeSlots(todayEvs, todayK, 7*60, 22*60, 60);
+          const topSlot = [...slots].sort((a,b)=>b.duration-a.duration)[0];
+          // Briefing
+          const parts = [];
+          parts.push(`Heute ${new Date().toLocaleDateString("de-DE",{weekday:"long",day:"numeric",month:"long"})}:`);
+          if (todayEvs.length === 0) parts.push("Keine Termine.");
+          else parts.push(`${todayEvs.length} Termin${todayEvs.length>1?"e":""}: ${todayEvs.map(e=>`${e.time?e.time+" ":""}${e.title}`).slice(0,6).join(" · ")}`);
+          if (openTodos.length > 0) parts.push(`${openTodos.length} Todo${openTodos.length>1?"s":""}: ${openTodos.map(t=>t.text).slice(0,4).join(" · ")}`);
+          if (topSlot) parts.push(`Größter freier Slot: ${minToHHMM(topSlot.start)}–${minToHHMM(topSlot.end)} (${topSlot.duration>=60?`${Math.floor(topSlot.duration/60)}h${topSlot.duration%60?` ${topSlot.duration%60}m`:''}`:`${topSlot.duration}m`})`);
+          return parts.join("\n");
         }
         case "sync_strava_today": {
           const { ok, data } = await fetchJSON("/api/strava/status");
