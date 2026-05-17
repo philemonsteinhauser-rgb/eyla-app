@@ -3816,6 +3816,22 @@ const EYLA_TOOLS = [
     }
   },
   {
+    name: "read_recent_emails",
+    description: "Liest die letzten ungelesenen Mails aus Gmail (falls verbunden). Gut für 'Was kam heute rein?' oder 'Hab ich was wichtiges in der Inbox?'. Standardmäßig die letzten 10 ungelesenen.",
+    input_schema: {
+      type: "object",
+      properties: {
+        max: { type: "number", description: "Max Anzahl (1-30, default 10)" },
+        query: { type: "string", description: "Gmail-Suchquery (default 'in:inbox is:unread'). Beispiele: 'from:max@x.de', 'subject:Rechnung', 'newer_than:2d'." }
+      }
+    }
+  },
+  {
+    name: "sync_strava_today",
+    description: "Holt aktuelle Strava-Aktivitäten von heute und fügt sie zum Tageslog hinzu. Sagt User 'sync mein training' oder 'hab grad gelaufen' und Strava ist verbunden.",
+    input_schema: { type: "object", properties: {} }
+  },
+  {
     name: "add_event",
     description: "Trag einen Termin in den Kalender ein. Wenn kein Datum angegeben wird, ist es heute.",
     input_schema: {
@@ -4330,6 +4346,36 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
           const bucketLabel = priority==="today"?"Heute":priority==="week"?"Diese Woche":"Später";
           return `↻ "${arr[idx].text}" → ${bucketLabel}`;
         }
+        case "read_recent_emails": {
+          const max = Math.min(30, parseInt(input.max) || 10);
+          const query = String(input.query || "in:inbox is:unread");
+          const data = await fetchGmailRecent({ query, max });
+          if (data.error === "not_connected") return "Gmail nicht verbunden. Im Profil unter 'Verbundene Apps' Google verbinden.";
+          if (!data.messages || data.messages.length === 0) return `Keine Mails für '${query}'.`;
+          const lines = data.messages.slice(0, max).map(m => {
+            const from = m.from.replace(/<.*?>/, "").trim().slice(0, 40);
+            const subj = m.subject.slice(0, 60);
+            return `• ${from}: ${subj}${m.isUnread ? " (ungelesen)" : ""}`;
+          });
+          return `📧 ${data.messages.length} Mails:\n${lines.join("\n")}`;
+        }
+        case "sync_strava_today": {
+          const { ok, data } = await fetchJSON("/api/strava/status");
+          if (!ok || !data?.connected) return "Strava nicht verbunden. Im Profil unter 'Verbundene Apps' Strava verbinden.";
+          const startOfDay = new Date(); startOfDay.setHours(0,0,0,0);
+          const activities = await fetchStravaActivities(startOfDay);
+          const todayK = (new Date()).toDateString();
+          const existingIds = new Set((log.workouts||[]).map(w => w.stravaId).filter(Boolean));
+          const newOnes = activities.filter(a => a.date === isoDateKey(new Date()) && !existingIds.has(a.id));
+          if (newOnes.length === 0) return "Keine neuen Strava-Aktivitäten von heute.";
+          setLog(l => ({...l, workouts: [...(l.workouts||[]), ...newOnes.map(a => ({
+            type: a.type, duration: a.duration||a.durationMoving,
+            stravaId: a.id, distance: a.distance, calories: a.calories,
+            avgHeartRate: a.avgHeartRate,
+            time: a.startTime || new Date().toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"}),
+          }))]}));
+          return `🏃 ${newOnes.length} Strava-${newOnes.length===1?"Aktivität":"Aktivitäten"} synchronisiert: ${newOnes.map(a=>`${a.type} ${a.duration}min`).join(", ")}`;
+        }
         case "add_event": {
           const todayK = isoDateKey(new Date());
           const arr = await retrieve("eyla_local_events_v2", []) || [];
@@ -4342,7 +4388,22 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
             local: true
           };
           await persist("eyla_local_events_v2", [...arr, newEv]);
-          return `Termin: ${input.title}${input.time?` um ${input.time}`:""}${input.date && input.date !== todayK?` (${input.date})`:""}`;
+          window.dispatchEvent(new Event("eyla_events_changed"));
+          // Wenn Google verbunden: auch dort anlegen (kein Block-Fail wenn down)
+          let googleSuffix = "";
+          try {
+            const statusRes = await fetchJSON("/api/google/status");
+            if (statusRes.ok && statusRes.data?.connected) {
+              const created = await createGoogleEvent({
+                title: input.title,
+                date: input.date || todayK,
+                time: input.time || "",
+                duration: parseInt(input.duration) || 60,
+              });
+              if (created.ok) googleSuffix = " (+ Google)";
+            }
+          } catch {}
+          return `Termin: ${input.title}${input.time?` um ${input.time}`:""}${input.date && input.date !== todayK?` (${input.date})`:""}${googleSuffix}`;
         }
         case "add_shopping_item": {
           const sh = await retrieve("eyla_shopping_v1", null);
@@ -7385,6 +7446,14 @@ async function fetchStravaActivities(after) {
   return data?.activities || [];
 }
 
+// Gmail nutzt den gleichen Google-Token wie Calendar
+async function fetchGmailRecent({ query = "in:inbox is:unread", max = 10 } = {}) {
+  const params = new URLSearchParams({ query, max: String(max) });
+  const { ok, data } = await fetchJSON(`/api/google/gmail?${params}`);
+  if (!ok) return { messages: [], error: data?.error };
+  return data;
+}
+
 async function disconnectProvider(provider) {
   await fetchJSON(`/api/${provider}/disconnect`, { method:"POST" });
 }
@@ -7451,7 +7520,18 @@ function IntegrationsCard() {
       onConnect: connectStrava,
       onDisconnect: async () => { await disconnectProvider("strava"); strava.refresh(); },
     },
-    { id:"gmail",   label:"Gmail",   hint:"EYLA fasst neue Mails zusammen, extrahiert Todos & Termine.", icon:"✉",  color:T.gold,   status:{ connected:false, loading:false, comingSoon:true } },
+    {
+      id: "gmail",
+      label: "Gmail",
+      hint: google.connected
+        ? "Verbunden via Google. Frag EYLA: 'was kam heute rein?'"
+        : "Erst Google Calendar verbinden – Gmail nutzt den gleichen Login.",
+      icon: "✉",
+      color: T.gold,
+      status: { connected: google.connected, loading: google.loading, viaGoogle: true, email: google.email },
+      onConnect: connectGoogle,  // gleicher Flow
+      onDisconnect: async () => { await disconnectProvider("google"); google.refresh(); },
+    },
   ];
 
   return (
