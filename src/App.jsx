@@ -480,7 +480,7 @@ function buildPrompt(profile, log, events, weekHistory = [], plan = null, shoppi
     ? weekHistory.map((d, i) => {
         const label = i === 0 ? "Heute" : i === 1 ? "Gestern" : new Date(d.date).toLocaleDateString("de-DE",{weekday:"short",day:"numeric",month:"short"});
         const parts = [];
-        parts.push(`💧${d.water}/8`);
+        parts.push(`💧${(d.water*.25).toFixed(2)}L`);
         parts.push(`😴${d.sleep||"–"}h`);
         parts.push(`🍽${d.kcal}kcal`);
         if (d.mood) parts.push(d.mood);
@@ -537,7 +537,7 @@ ERNÄHRUNGSZIEL: ${zielStr}
 HEUTE:
 - Gegessen: ${eaten} kcal (${restStr}) – ${log.meals.map(m=>m.name).join(", ")||"noch nichts"}
 - Makros: P ${log.meals.reduce((s,m)=>s+(m.protein||0),0)}g / C ${log.meals.reduce((s,m)=>s+(m.carbs||0),0)}g / F ${log.meals.reduce((s,m)=>s+(m.fat||0),0)}g (Ziel: P ${macroTarget(profile).protein}g / C ${macroTarget(profile).carbs}g / F ${macroTarget(profile).fat}g)
-- Wasser: ${log.water} Gläser (${(log.water*.25).toFixed(1)}L)
+- Wasser: ${(log.water*.25).toFixed(2)}L (${log.water > 0 ? `${log.water} × 0.25L` : "noch nichts"})
 - Energie: ${log.energy||"k.A."} | Schlaf: ${log.sleep||"k.A."}h
 - Training: ${(log.workouts||[]).length > 0 ? log.workouts.map(w=>`${w.type} ${w.duration}min`).join(", ") : "noch nicht"}
 - Gewohnheiten: ${(profile.habits||[]).length === 0 ? "–" : (profile.habits||[]).map(h => {
@@ -565,7 +565,14 @@ AKTIONEN: Du hast Tools um direkt im Tagebuch des Users Sachen zu tun:
 - add_meal, set_water/add_water, set_sleep, set_energy → Tageslog pflegen
 - add_event → Termin in den Kalender
 - add_shopping_item, check_shopping_item → Einkaufsliste pflegen
-Wenn der User sagt "trag X ein" / "ich hab Y gegessen" / "noch 2 Gläser Wasser" / "Termin morgen 14 Uhr Sport" / "Eier auf die Liste" – nutze die Tools direkt. Kurz bestätigen, nicht ausschweifen. Wenn unklar: nachfragen statt raten.
+Wenn der User sagt "trag X ein" / "ich hab Y gegessen" / "noch 0.5L Wasser" / "Termin morgen 14 Uhr Sport" / "Eier auf die Liste" – nutze die Tools direkt. Kurz bestätigen, nicht ausschweifen. Wenn unklar: nachfragen statt raten.
+
+WICHTIGE REGEL für add_meal: Zahlen vom User wie "200g", "500ml", "2 Scheiben" sind MENGEN, NIEMALS Kalorien!
+Beispiele:
+- "200g Steak" → name:"200g Steak", amount:"200g", calories:~500 (geschätzt, nicht 200!)
+- "1 Apfel" → name:"1 Apfel", amount:"1 Stück", calories:~80
+- "500ml Saft" → name:"500ml Saft", amount:"500ml", calories:~220
+Kalorien immer realistisch SCHÄTZEN basierend auf Lebensmittel × Menge. Lieber gute Schätzung als 0.
 
 REGELN: Immer Deutsch. 2–4 Sätze. Konkret mit Mengen/Zeiten. Bei Ernährungsfragen Tagesziel + Rest-kcal einbeziehen. Wenn jemand übers Ziel ist: kein Drama, am nächsten Tag flexibel ausgleichen. Termine einbeziehen wenn sinnvoll. Letzte 7 Tage nur wenn Trend relevant. Nie "Als KI". Nie "ich sehe/kenne deinen Kalender".`;
 }
@@ -1036,7 +1043,7 @@ function smartHintFor(log, profile, plan) {
     }
   }
   // Priorität 2: Wasser-Lücke
-  if (hour >= 14 && water < 4) return `Schon ${hour} Uhr und erst ${water} Gläser Wasser. Schluck einen.`;
+  if (hour >= 14 && water < 4) return `Schon ${hour} Uhr und erst ${(water*.25).toFixed(2)}L Wasser. Schluck noch was.`;
   if (hour >= 11 && water < 2) return `Vergiss das Wasser nicht – noch nichts heute.`;
   // Priorität 3: Training
   if (hour >= 17 && !hasWorkout && new Date().getDay() !== 0) return `Heute noch keine Bewegung. Auch 20 Min Spazieren zählen.`;
@@ -1372,8 +1379,9 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate }) {
       <div style={{ display:"grid", gridTemplateColumns:"1.5fr 1fr", gap:12, marginBottom:12 }}>
         <Card style={{ padding:"14px 16px" }}>
           <Lbl style={{ marginBottom:5 }}>Wasser</Lbl>
-          <div style={{ fontSize:22, fontWeight:300, color:T.text, marginBottom:8 }}>{log.water}
-            <span style={{ fontSize:11, color:T.muted, marginLeft:6 }}>{(log.water*.25).toFixed(1)}L</span>
+          <div style={{ fontSize:22, fontWeight:300, color:T.text, marginBottom:8 }}>
+            {(log.water*.25).toFixed(2)}<span style={{ fontSize:13, color:T.muted, marginLeft:3 }}>L</span>
+            <span style={{ fontSize:10, color:T.muted, marginLeft:8, fontFamily:T.mono }}>von 2L</span>
           </div>
           <div style={{ display:"flex", gap:8, alignItems:"center" }}>
             <button onClick={()=>setLog(l=>({...l,water:Math.max(0,l.water-1)}))} style={{ width:30,height:30,borderRadius:"50%",background:T.bg2,border:`1px solid ${T.borderS}`,color:T.muted,fontSize:16,cursor:"pointer" }}>−</button>
@@ -2378,7 +2386,7 @@ function WeekScreen({ logsByDate, profile }) {
         const kcal = l.meals?.reduce((s,m)=>s+(m.calories||0),0) || 0;
         const wo = (l.workouts||[]).map(w=>`${w.type}${w.duration?` ${w.duration}min`:""}`).join(", ");
         const parts = [];
-        if (l.water) parts.push(`💧${l.water}`);
+        if (l.water) parts.push(`💧${(l.water*.25).toFixed(2)}L`);
         if (l.sleep) parts.push(`😴${l.sleep}h`);
         if (kcal) parts.push(`🍽${kcal}`);
         if (l.energy) parts.push(l.energy);
@@ -2566,7 +2574,7 @@ function WeekScreen({ logsByDate, profile }) {
           <Lbl style={{ marginBottom:10 }}>STREAKS</Lbl>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10 }}>
             {[
-              { label:"💧 Wasser ≥8", value:waterStreak, color:T.acc },
+              { label:"💧 Wasser ≥2L", value:waterStreak, color:T.acc },
               { label:"😴 Schlaf ≥7h", value:sleepStreak, color:T.mid },
               { label:"🍽 Mahlzeit", value:mealStreak, color:T.gold },
             ].map(s => (
@@ -2588,7 +2596,7 @@ function WeekScreen({ logsByDate, profile }) {
           <div>
             <div style={{ fontSize:11, color:T.muted, marginBottom:4 }}>💧 Wasser</div>
             <div style={{ fontSize:22, fontWeight:300, color:T.text, fontFamily:T.mono }}>
-              {avgWater}<span style={{ fontSize:11, color:T.muted, marginLeft:4 }}>/8</span>
+              {(avgWater*.25).toFixed(2)}<span style={{ fontSize:11, color:T.muted, marginLeft:4 }}>L</span>
             </div>
           </div>
           <div>
@@ -2666,7 +2674,7 @@ function WeekScreen({ logsByDate, profile }) {
                 ) : (
                   <div style={{ display:"flex", gap:12, alignItems:"center", flexWrap:"wrap", justifyContent:"flex-end" }}>
                     <div style={{ fontFamily:T.mono, fontSize:11, color:T.acc }}>
-                      💧 {l.water||0}<span style={{ color:T.muted }}>/8</span>
+                      💧 {((l.water||0)*.25).toFixed(2)}<span style={{ color:T.muted }}>L</span>
                     </div>
                     <div style={{ fontFamily:T.mono, fontSize:11, color:T.mid }}>
                       😴 {l.sleep||"–"}<span style={{ color:T.muted }}>h</span>
@@ -2704,12 +2712,19 @@ function WeekScreen({ logsByDate, profile }) {
 const EYLA_TOOLS = [
   {
     name: "add_meal",
-    description: "Trag eine Mahlzeit in den heutigen Tageslog ein. Verwende dies wenn der User sagt was er gegessen hat oder plant zu essen. Wenn möglich auch Makronährstoffe schätzen.",
+    description: "Trag eine Mahlzeit in den heutigen Tageslog ein. " +
+      "WICHTIG zur Zahlen-Interpretation: Wenn der User eine Zahl mit Einheit angibt " +
+      "(z.B. '200g Steak', '500ml Saft', '2 Scheiben Brot', '1 Apfel'), ist das die MENGE – " +
+      "NIEMALS in 'calories' eintragen! Die Menge gehört in 'amount' und in den 'name'. " +
+      "Kalorien IMMER selbst schätzen basierend auf Lebensmittel + Menge " +
+      "(z.B. 200g Rindersteak ≈ 500 kcal, nicht 200 kcal!). " +
+      "Bei reinen Mengenangaben ohne Klarheit: lieber realistisch schätzen als 0 nehmen.",
     input_schema: {
       type: "object",
       properties: {
-        name: { type: "string", description: "Kurzer Name der Mahlzeit" },
-        calories: { type: "number", description: "Geschätzte Kalorien als Zahl" },
+        name: { type: "string", description: "Mahlzeit inkl. Menge wenn bekannt, z.B. '200g Steak', '1 Apfel', 'Müsli mit Milch'" },
+        amount: { type: "string", description: "Mengenangabe wenn vorhanden, z.B. '200g', '500ml', '2 Stück', '1 Portion'" },
+        calories: { type: "number", description: "GESCHÄTZTE Kalorien (kcal) – NICHT die Menge! Z.B. 200g Steak ≈ 500 kcal." },
         protein: { type: "number", description: "Protein in g (geschätzt)" },
         carbs:   { type: "number", description: "Kohlenhydrate in g (geschätzt)" },
         fat:     { type: "number", description: "Fett in g (geschätzt)" }
@@ -2719,19 +2734,19 @@ const EYLA_TOOLS = [
   },
   {
     name: "set_water",
-    description: "Setze die Anzahl der heute getrunkenen Wassergläser absolut (je 250ml, max 12).",
+    description: "Setze die heute getrunkene Wasser-Menge in 0.25L-Einheiten (1 = 0.25L, 4 = 1L, max 12 = 3L).",
     input_schema: {
       type: "object",
-      properties: { glasses: { type: "number" } },
-      required: ["glasses"]
+      properties: { units: { type: "number", description: "Anzahl 0.25L-Einheiten" } },
+      required: ["units"]
     }
   },
   {
     name: "add_water",
-    description: "Erhöhe oder verringere die Wassergläser um delta (z.B. +2 wenn der User sagt 'hab zwei Gläser getrunken').",
+    description: "Addiere oder subtrahiere Wasser in 0.25L-Einheiten (z.B. +2 für 0.5L mehr, oder Liter direkt umrechnen).",
     input_schema: {
       type: "object",
-      properties: { delta: { type: "number" } },
+      properties: { delta: { type: "number", description: "Anzahl 0.25L-Einheiten (positiv oder negativ)" } },
       required: ["delta"]
     }
   },
@@ -3163,9 +3178,15 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
           const p = parseInt(input.protein) || 0;
           const c = parseInt(input.carbs) || 0;
           const f = parseInt(input.fat) || 0;
+          // Wenn Menge separat geliefert wurde und nicht schon im Namen steckt → reinhängen
+          const rawName = String(input.name||"").trim();
+          const amount = String(input.amount||"").trim();
+          const nameHasAmount = amount && rawName.toLowerCase().includes(amount.toLowerCase().replace(/\s+/g,""));
+          const fullName = (amount && !nameHasAmount) ? `${amount} ${rawName}` : rawName;
           setLog(l => ({...l, meals: [...l.meals, {
             id: Date.now(),
-            name: input.name,
+            name: fullName,
+            amount: amount || undefined,
             calories: cal,
             protein: p,
             carbs: c,
@@ -3173,17 +3194,17 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
             time: new Date().toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})
           }]}));
           const macroStr = (p||c||f) ? ` P${p} C${c} F${f}` : "";
-          return `Mahlzeit eingetragen: ${input.name}${cal>0?` (${cal} kcal)`:""}${macroStr}`;
+          return `Mahlzeit eingetragen: ${fullName}${cal>0?` (${cal} kcal)`:""}${macroStr}`;
         }
         case "set_water": {
-          const g = Math.max(0, Math.min(12, parseInt(input.glasses)||0));
-          setLog(l => ({...l, water: g}));
-          return `Wasser gesetzt auf ${g} Gläser`;
+          const u = Math.max(0, Math.min(12, parseInt(input.units ?? input.glasses)||0));
+          setLog(l => ({...l, water: u}));
+          return `Wasser gesetzt auf ${(u*.25).toFixed(2)}L`;
         }
         case "add_water": {
           const delta = parseInt(input.delta)||0;
           setLog(l => ({...l, water: Math.max(0, Math.min(12, (l.water||0) + delta))}));
-          return `Wasser ${delta>=0?"+":""}${delta} Gläser`;
+          return `Wasser ${delta>=0?"+":""}${(delta*.25).toFixed(2)}L`;
         }
         case "set_sleep": {
           setLog(l => ({...l, sleep: String(input.hours)}));
@@ -5368,14 +5389,87 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
           cursor:"pointer", letterSpacing:1, flexShrink:0
         }}>✎ BEARBEITEN</button>
       </div>
+      {/* ÜBER MICH – Sektion */}
+      <div style={{ fontFamily:T.mono, fontSize:9, color:T.muted, letterSpacing:2, margin:"4px 4px 10px", display:"flex", alignItems:"center", gap:8 }}>
+        <span>ÜBER MICH</span>
+        <div style={{ flex:1, height:1, background:T.borderS, opacity:.5 }}/>
+      </div>
+
       <Card style={{ marginBottom:12 }}>
         <Lbl style={{ marginBottom:14 }}>KÖRPERDATEN</Lbl>
         <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:14 }}>
-          {[["Alter",`${profile.age}J`],["Gewicht",`${profile.weight}kg`],["Größe",`${profile.height}cm`],["Aktivität",profile.activity||"–"]].map(([k,v])=>(
+          {[
+            ["Geschlecht", profile.sex==="m"?"♂ Mann":profile.sex==="f"?"♀ Frau":profile.sex==="d"?"⚧ Divers":"–"],
+            ["Alter",`${profile.age||"–"}J`],
+            ["Gewicht",`${profile.weight||"–"}kg`],
+            ["Größe",`${profile.height||"–"}cm`],
+            ["Aktivität",profile.activity||"–"]
+          ].map(([k,v])=>(
             <div key={k}><Lbl style={{ marginBottom:3,fontSize:10 }}>{k}</Lbl><div style={{ color:T.text,fontSize:14 }}>{v}</div></div>
           ))}
         </div>
       </Card>
+
+      {/* HAUSHALT – fehlt bisher in View-Mode! */}
+      <Card style={{ marginBottom:12 }}>
+        <Lbl style={{ marginBottom:14 }}>HAUSHALT</Lbl>
+        <div style={{ display:"flex", alignItems:"center", gap:14 }}>
+          <div style={{
+            width:46, height:46, borderRadius:"50%", background:T.acc+"18",
+            border:`1px solid ${T.acc}44`, display:"flex", alignItems:"center",
+            justifyContent:"center", fontFamily:T.mono, fontSize:17, color:T.acc, flexShrink:0
+          }}>
+            {(parseInt(profile.householdSize)||1)}{parseInt(profile.householdSize)>=4?"+":""}
+          </div>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ color:T.text, fontSize:14, fontFamily:T.serif }}>
+              {(()=>{const n=parseInt(profile.householdSize)||1; return n===1?"Nur ich":n===2?"Paar":n===3?"Familie":"Großfamilie";})()}
+            </div>
+            {profile.householdNote ? (
+              <div style={{ color:T.muted, fontSize:11, fontStyle:"italic", fontFamily:T.serif, marginTop:3, lineHeight:1.5 }}>
+                {profile.householdNote}
+              </div>
+            ) : (
+              <div style={{ color:T.muted, fontSize:10, fontFamily:T.mono, marginTop:3, opacity:.6 }}>
+                tippe BEARBEITEN für Notizen
+              </div>
+            )}
+          </div>
+        </div>
+      </Card>
+
+      {/* KÜCHE – Vorlieben + Intoleranzen kombiniert */}
+      {((profile.preferences?.length>0) || (profile.intolerances?.length>0)) && (
+        <Card style={{ marginBottom:12 }}>
+          <Lbl style={{ marginBottom:14 }}>KÜCHE</Lbl>
+          {profile.preferences?.length>0 && (
+            <div style={{ marginBottom: profile.intolerances?.length>0 ? 14 : 0 }}>
+              <Lbl style={{ marginBottom:6, fontSize:10 }}>VORLIEBEN</Lbl>
+              <div style={{ display:"flex",flexWrap:"wrap",gap:6 }}>
+                {profile.preferences.map((p,i)=>(
+                  <span key={i} style={{ background:T.acc+"18",border:`1px solid ${T.acc}33`,borderRadius:18,padding:"3px 12px",fontSize:11,color:T.acc,fontFamily:T.mono }}>{p}</span>
+                ))}
+              </div>
+            </div>
+          )}
+          {profile.intolerances?.length>0 && (
+            <div>
+              <Lbl style={{ marginBottom:6, fontSize:10 }}>INTOLERANZEN</Lbl>
+              <div style={{ display:"flex",flexWrap:"wrap",gap:6 }}>
+                {profile.intolerances.map((p,i)=>(
+                  <span key={i} style={{ background:T.gold+"18",border:`1px solid ${T.gold}33`,borderRadius:18,padding:"3px 12px",fontSize:11,color:T.gold,fontFamily:T.mono }}>{p}</span>
+                ))}
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* ZIEL & KALORIEN – Sektion */}
+      <div style={{ fontFamily:T.mono, fontSize:9, color:T.muted, letterSpacing:2, margin:"22px 4px 10px", display:"flex", alignItems:"center", gap:8 }}>
+        <span>ZIEL & KALORIEN</span>
+        <div style={{ flex:1, height:1, background:T.borderS, opacity:.5 }}/>
+      </div>
       {/* Gewichts-Ziel + Kalorien-Target */}
       {(() => {
         const ct = calorieTarget(profile);
@@ -5473,8 +5567,11 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
         </Card>
       )}
 
-      {/* Voice-Settings */}
-      <VoiceSettings/>
+      {/* TRACKING – Sektion */}
+      <div style={{ fontFamily:T.mono, fontSize:9, color:T.muted, letterSpacing:2, margin:"22px 4px 10px", display:"flex", alignItems:"center", gap:8 }}>
+        <span>TRACKING</span>
+        <div style={{ flex:1, height:1, background:T.borderS, opacity:.5 }}/>
+      </div>
 
       {/* Habits-Editor */}
       <HabitsEditor profile={profile} onUpdate={onUpdate}/>
@@ -5497,8 +5594,10 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
               <div style={{ fontSize:9, color:T.muted, fontFamily:T.mono, letterSpacing:1, marginTop:2 }}>WORKOUTS</div>
             </div>
             <div style={{ textAlign:"center" }}>
-              <div style={{ fontSize:20, color:T.acc, fontFamily:T.mono, fontWeight:300 }}>{stats.totalWater}</div>
-              <div style={{ fontSize:9, color:T.muted, fontFamily:T.mono, letterSpacing:1, marginTop:2 }}>GLÄSER</div>
+              <div style={{ fontSize:20, color:T.acc, fontFamily:T.mono, fontWeight:300 }}>
+                {(stats.totalWater*.25).toFixed(0)}<span style={{ fontSize:11, color:T.muted, marginLeft:1 }}>L</span>
+              </div>
+              <div style={{ fontSize:9, color:T.muted, fontFamily:T.mono, letterSpacing:1, marginTop:2 }}>WASSER</div>
             </div>
           </div>
           {stats.totalMinutes > 0 && (
@@ -5515,7 +5614,7 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
           <Lbl style={{ marginBottom:12 }}>REKORDE · LÄNGSTE STREAKS</Lbl>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12 }}>
             {[
-              { label:"💧 Wasser ≥8", value:allTimeStreaks.water, color:T.acc },
+              { label:"💧 Wasser ≥2L", value:allTimeStreaks.water, color:T.acc },
               { label:"😴 Schlaf ≥7h", value:allTimeStreaks.sleep, color:T.mid },
               { label:"🍽 Mahlzeit", value:allTimeStreaks.meal, color:T.gold },
             ].map(s => (
@@ -5533,12 +5632,26 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
         </Card>
       )}
 
-      {profile.preferences?.length>0&&<Card style={{ marginBottom:12 }}><Lbl style={{ marginBottom:10 }}>VORLIEBEN</Lbl><div style={{ display:"flex",flexWrap:"wrap",gap:7 }}>{profile.preferences.map((p,i)=><span key={i} style={{ background:T.acc+"18",border:`1px solid ${T.acc}33`,borderRadius:20,padding:"3px 12px",fontSize:11,color:T.acc,fontFamily:T.mono }}>{p}</span>)}</div></Card>}
-      {profile.intolerances?.length>0&&<Card style={{ marginBottom:12 }}><Lbl style={{ marginBottom:10 }}>INTOLERANZEN</Lbl><div style={{ display:"flex",flexWrap:"wrap",gap:7 }}>{profile.intolerances.map((p,i)=><span key={i} style={{ background:T.gold+"18",border:`1px solid ${T.gold}33`,borderRadius:20,padding:"3px 12px",fontSize:11,color:T.gold,fontFamily:T.mono }}>{p}</span>)}</div></Card>}
-      {profile.apps?.length>0&&<Card style={{ marginBottom:20 }}><Lbl style={{ marginBottom:10 }}>VERBUNDENE APPS</Lbl><div style={{ display:"flex",flexWrap:"wrap",gap:7 }}>{profile.apps.map((a,i)=><div key={i} style={{ display:"flex",alignItems:"center",gap:6,background:T.bg2,border:`1px solid ${T.borderS}`,borderRadius:8,padding:"5px 12px" }}><div style={{ width:5,height:5,borderRadius:"50%",background:T.green,boxShadow:`0 0 5px ${T.green}` }}/><span style={{ color:T.mid,fontFamily:T.mono,fontSize:10 }}>{a}</span></div>)}</div></Card>}
+      {/* EINSTELLUNGEN – Sektion */}
+      <div style={{ fontFamily:T.mono, fontSize:9, color:T.muted, letterSpacing:2, margin:"22px 4px 10px", display:"flex", alignItems:"center", gap:8 }}>
+        <span>EINSTELLUNGEN</span>
+        <div style={{ flex:1, height:1, background:T.borderS, opacity:.5 }}/>
+      </div>
+
+      {/* Voice-Settings */}
+      <VoiceSettings/>
+
+      {profile.apps?.length>0&&<Card style={{ marginBottom:12 }}><Lbl style={{ marginBottom:10 }}>VERBUNDENE APPS</Lbl><div style={{ display:"flex",flexWrap:"wrap",gap:7 }}>{profile.apps.map((a,i)=><div key={i} style={{ display:"flex",alignItems:"center",gap:6,background:T.bg2,border:`1px solid ${T.borderS}`,borderRadius:8,padding:"5px 12px" }}><div style={{ width:5,height:5,borderRadius:"50%",background:T.green,boxShadow:`0 0 5px ${T.green}` }}/><span style={{ color:T.mid,fontFamily:T.mono,fontSize:10 }}>{a}</span></div>)}</div></Card>}
+
+      {/* DATEN – Sektion */}
+      <div style={{ fontFamily:T.mono, fontSize:9, color:T.muted, letterSpacing:2, margin:"22px 4px 10px", display:"flex", alignItems:"center", gap:8 }}>
+        <span>DATEN</span>
+        <div style={{ flex:1, height:1, background:T.borderS, opacity:.5 }}/>
+      </div>
+
       {/* Daten: Export / Import / Reset */}
       <Card style={{ marginBottom:12 }}>
-        <Lbl style={{ marginBottom:10 }}>DATEN</Lbl>
+        <Lbl style={{ marginBottom:10 }}>BACKUP</Lbl>
         <p style={{ color:T.muted, fontSize:11, fontStyle:"italic", fontFamily:T.serif, margin:"0 0 14px", lineHeight:1.6 }}>
           Sicherheits-Backup als JSON. Wenn was schiefgeht oder du auf ein anderes Gerät willst – Datei reichen, fertig.
         </p>
@@ -5760,6 +5873,7 @@ function AppContent() {
   const [screen, setScreen] = useState("tag");
   const [tagSub, setTagSub] = useState("heute");      // heute | kalender
   const [essenSub, setEssenSub] = useState("plan");   // plan | liste
+  const [heuteDate, setHeuteDate] = useState(()=>new Date());  // Datum für TodayScreen, lift für Cross-Screen-Navigation
   const [events, setEvents] = useState([]);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [ready, setReady] = useState(false);
@@ -5913,7 +6027,7 @@ function AppContent() {
         </div>
         <div style={{ display:"flex",gap:6,alignItems:"center" }}>
           {events.length>0&&<span style={{ background:T.gold+"18",border:`1px solid ${T.gold}33`,borderRadius:20,padding:"3px 10px",fontSize:10,color:T.gold,fontFamily:T.mono }}>▦ {events.length}</span>}
-          {log.water>0&&<span style={{ background:T.acc+"18",border:`1px solid ${T.acc}33`,borderRadius:20,padding:"3px 10px",fontSize:10,color:T.acc,fontFamily:T.mono }}>💧 {log.water}</span>}
+          {log.water>0&&<span style={{ background:T.acc+"18",border:`1px solid ${T.acc}33`,borderRadius:20,padding:"3px 10px",fontSize:10,color:T.acc,fontFamily:T.mono }}>💧 {(log.water*.25).toFixed(2)}L</span>}
           {/* Sync-Indikator (nur wenn was zu zeigen ist) */}
           {syncState.status !== "idle" && (
             <span title={
