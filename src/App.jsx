@@ -993,22 +993,218 @@ function Onboarding({ onDone }) {
 
 // ─── TODAY SCREEN ─────────────────────────────────────────────────────────────
 // Mini-Konfetti-Effekt – kurz, sparsam, pure CSS
-function Confetti({ show, onDone }) {
+// ── Perfect-Day Modal – wenn alle Tagesziele erreicht ──────────────────────
+// Zeigt Stats + Share-Bild zum Teilen via navigator.share() oder Download.
+function PerfectDayModal({ profile, log, tagKey, onClose }) {
+  const canvasRef = useRef(null);
+  const [shareUrl, setShareUrl] = useState(null);
+  const [sharing, setSharing] = useState(false);
+
+  const sleepNum = parseFloat(String(log.sleep||"0").replace("+","")) || 0;
+  const totalKcal = (log.meals||[]).reduce((s,m)=>s+(m.calories||0),0);
+  const waterL = ((log.water||0) * 0.25).toFixed(2);
+  const workoutMin = (log.workouts||[]).reduce((s,w)=>s+(w.duration||0),0);
+  const firstName = (profile.name||"").split(" ")[0];
+  const today = new Date(tagKey).toLocaleDateString("de-DE", { day:"2-digit", month:"long", year:"numeric" });
+
+  // Share-Bild zeichnen
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const W = 1080, H = 1080;
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext("2d");
+    // Hintergrund-Gradient
+    const grad = ctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, "#0d0e10");
+    grad.addColorStop(1, "#1a1c20");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+    // Soft radial glow
+    const g2 = ctx.createRadialGradient(W/2, H*0.3, 0, W/2, H*0.3, W*0.7);
+    g2.addColorStop(0, "rgba(176, 156, 122, 0.18)");
+    g2.addColorStop(1, "rgba(176, 156, 122, 0)");
+    ctx.fillStyle = g2;
+    ctx.fillRect(0, 0, W, H);
+    // Top "EYLA" Wordmark
+    ctx.fillStyle = "#e8e6e1";
+    ctx.font = "300 56px Georgia, serif";
+    ctx.textAlign = "center";
+    ctx.fillText("EYLA.", W/2, 130);
+    // Klein "EIN PERFEKTER TAG"
+    ctx.fillStyle = "#b09c7a";
+    ctx.font = "500 18px ui-monospace, monospace";
+    ctx.letterSpacing = "4px";
+    ctx.fillText("·  EIN PERFEKTER TAG  ·", W/2, 175);
+    // Name + Datum
+    ctx.fillStyle = "#e8e6e1";
+    ctx.font = "italic 300 96px Georgia, serif";
+    ctx.fillText(firstName || "Du", W/2, 320);
+    ctx.fillStyle = "#7a7a78";
+    ctx.font = "italic 28px Georgia, serif";
+    ctx.fillText(today, W/2, 380);
+    // Stat-Boxen
+    const stats = [
+      { icon:"💧", val:`${waterL}L`, label:"WASSER" },
+      { icon:"😴", val:`${sleepNum}h`, label:"SCHLAF" },
+      { icon:"🍽", val:`${totalKcal}`, label:"KCAL" },
+      { icon:"🏋", val:`${workoutMin}min`, label:"BEWEGUNG" },
+    ];
+    const cardW = 220, cardH = 220, gap = 24;
+    const totalW = cardW*2 + gap;
+    const startX = (W - totalW)/2;
+    const startY = 480;
+    stats.forEach((s, i) => {
+      const col = i % 2;
+      const row = Math.floor(i / 2);
+      const x = startX + col*(cardW+gap);
+      const y = startY + row*(cardH+gap);
+      // card bg
+      ctx.fillStyle = "rgba(255,255,255,0.04)";
+      ctx.strokeStyle = "rgba(176,156,122,0.3)";
+      ctx.lineWidth = 1;
+      const r = 24;
+      ctx.beginPath();
+      ctx.roundRect(x, y, cardW, cardH, r);
+      ctx.fill();
+      ctx.stroke();
+      // icon
+      ctx.font = "60px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(s.icon, x + cardW/2, y + 80);
+      // value
+      ctx.fillStyle = "#e8e6e1";
+      ctx.font = "300 44px ui-monospace, monospace";
+      ctx.fillText(s.val, x + cardW/2, y + 145);
+      // label
+      ctx.fillStyle = "#7a7a78";
+      ctx.font = "500 14px ui-monospace, monospace";
+      ctx.fillText(s.label, x + cardW/2, y + 185);
+    });
+    // Footer
+    ctx.fillStyle = "#5a5a58";
+    ctx.font = "italic 22px Georgia, serif";
+    ctx.fillText("alle Ziele erreicht.", W/2, H - 130);
+    ctx.fillStyle = "#b09c7a";
+    ctx.font = "500 16px ui-monospace, monospace";
+    ctx.fillText("eyla-app.vercel.app", W/2, H - 80);
+    // Als Blob für Share/Download
+    canvas.toBlob(blob => {
+      if (blob) setShareUrl(URL.createObjectURL(blob));
+    }, "image/png");
+  }, [firstName, today, waterL, sleepNum, totalKcal, workoutMin]);
+
+  async function handleShare() {
+    if (!canvasRef.current) return;
+    setSharing(true);
+    try {
+      canvasRef.current.toBlob(async (blob) => {
+        if (!blob) { setSharing(false); return; }
+        const file = new File([blob], `eyla-perfect-day-${tagKey.replace(/\s/g,"-")}.png`, { type:"image/png" });
+        const shareText = `Perfekter EYLA-Tag ${today} ✨ — Wasser ${waterL}L · Schlaf ${sleepNum}h · ${totalKcal} kcal · ${workoutMin}min Bewegung`;
+        if (navigator.canShare && navigator.canShare({ files:[file] })) {
+          try {
+            await navigator.share({ files:[file], title:"EYLA – Perfekter Tag", text: shareText });
+          } catch (err) {
+            // User abgebrochen oder nicht erlaubt → Fallback Download
+            if (err?.name !== "AbortError") downloadBlob(blob);
+          }
+        } else {
+          downloadBlob(blob);
+        }
+        setSharing(false);
+      }, "image/png");
+    } catch (e) {
+      console.error("share err", e);
+      setSharing(false);
+    }
+  }
+  function downloadBlob(blob) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `eyla-perfect-day-${tagKey.replace(/\s/g,"-")}.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 1000);
+  }
+
+  return (
+    <div onClick={onClose} style={{
+      position:"fixed", inset:0, zIndex:1000,
+      background:"rgba(0,0,0,0.75)", backdropFilter:"blur(8px)",
+      display:"flex", alignItems:"center", justifyContent:"center", padding:20,
+      animation:"fadeUp .3s ease both"
+    }}>
+      <div onClick={e=>e.stopPropagation()} style={{
+        background:T.bg2, border:`1px solid ${T.gold}55`, borderRadius:18,
+        padding:24, maxWidth:380, width:"100%", textAlign:"center",
+        boxShadow:`0 10px 60px ${T.gold}33, 0 0 80px ${T.acc}22`
+      }}>
+        <div style={{ fontSize:48, marginBottom:8, animation:"bounce 1.2s ease infinite" }}>✨</div>
+        <style>{`@keyframes bounce { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-8px)} }`}</style>
+        <div style={{ fontFamily:T.mono, fontSize:10, color:T.gold, letterSpacing:3, marginBottom:8 }}>PERFEKTER TAG</div>
+        <h2 style={{ fontSize:24, fontWeight:300, color:T.text, margin:"0 0 6px", fontFamily:T.serif }}>
+          Alle Ziele erreicht.
+        </h2>
+        <p style={{ color:T.mid, fontSize:13, fontStyle:"italic", fontFamily:T.serif, margin:"0 0 16px", lineHeight:1.5 }}>
+          {firstName}, das hat heute gepasst. Wasser, Schlaf, Essen, Bewegung. <br/>
+          Wenn du willst, teil's mit jemandem der's mitkriegen soll.
+        </p>
+        {/* Preview */}
+        {shareUrl && (
+          <img src={shareUrl} alt="Share Preview" style={{
+            width:"100%", borderRadius:12, marginBottom:16,
+            border:`1px solid ${T.borderS}`
+          }}/>
+        )}
+        <canvas ref={canvasRef} style={{ display:"none" }}/>
+        <div style={{ display:"flex", gap:8, justifyContent:"center" }}>
+          <button onClick={handleShare} disabled={sharing} style={{
+            flex:1,
+            background:`linear-gradient(135deg, ${T.gold}, ${T.acc})`,
+            border:"none", borderRadius:12, padding:"12px 20px",
+            color:T.bg, fontFamily:T.serif, fontSize:14, fontWeight:700,
+            cursor: sharing ? "default" : "pointer",
+            opacity: sharing ? .5 : 1
+          }}>{sharing ? "…" : "✦ Teilen"}</button>
+          <button onClick={onClose} style={{
+            background:"transparent", border:`1px solid ${T.borderS}`,
+            borderRadius:12, padding:"12px 20px",
+            color:T.muted, fontFamily:T.serif, fontSize:14, cursor:"pointer", fontStyle:"italic"
+          }}>Schließen</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Confetti({ show, onDone, mode = "normal" }) {
+  // "normal" = einzelnes Ziel erreicht (50 Stück, 2.4s)
+  // "super"  = ALLE Ziele erreicht (180 Stück, 4.5s, 3 Wellen, größer)
+  const isSuper = mode === "super";
+  const count = isSuper ? 180 : 50;
+  const duration = isSuper ? 4500 : 2400;
+
   useEffect(() => {
     if (!show) return;
-    const t = setTimeout(() => onDone?.(), 2400);
+    const t = setTimeout(() => onDone?.(), duration);
     return () => clearTimeout(t);
-  }, [show, onDone]);
+  }, [show, onDone, duration]);
   if (!show) return null;
+
   const colors = [T.acc, T.gold, T.green, T.rose, T.mid, T.goldL];
-  const pieces = Array.from({length:50}, (_, i) => ({
+  const pieces = Array.from({length:count}, (_, i) => ({
     id: i,
     color: colors[i % colors.length],
     left: Math.random()*100,
-    duration: 1.4 + Math.random()*1.2,
-    delay: Math.random()*0.4,
-    rot: -180 + Math.random()*360,
-    drift: -30 + Math.random()*60,
+    size: isSuper ? (5 + Math.random()*9) : 7,
+    duration: (isSuper ? 2.2 : 1.4) + Math.random()*1.4,
+    delay: Math.random() * (isSuper ? 2.0 : 0.4),
+    rot: -360 + Math.random()*720,
+    drift: -40 + Math.random()*80,
+    shape: isSuper ? (i % 3) : 0, // 0=rect 1=circle 2=star
   }));
   return (
     <div style={{ position:"fixed", inset:0, pointerEvents:"none", zIndex:999, overflow:"hidden" }}>
@@ -1022,9 +1218,10 @@ function Confetti({ show, onDone }) {
         <div key={p.id} style={{
           position:"absolute", top:0,
           left:`${p.left}%`,
-          width:7, height:11,
+          width:p.size, height:p.size * (p.shape===1?1:1.6),
           background: p.color,
-          borderRadius:1,
+          borderRadius: p.shape===1 ? "50%" : 1,
+          boxShadow: isSuper ? `0 0 ${p.size*1.2}px ${p.color}66` : "none",
           animation:`confettiFall ${p.duration}s ${p.delay}s cubic-bezier(.4,0,.2,1) forwards`,
           ["--drift"]: `${p.drift}vw`,
           ["--rot"]: `${p.rot}deg`,
@@ -1143,8 +1340,11 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate }) {
 
   // Konfetti-State (Effekt-Trigger wird weiter unten gesetzt nachdem `log` existiert)
   const [konfetti, setKonfetti] = useState(false);
+  const [konfettiMode, setKonfettiMode] = useState("normal"); // "normal" | "super"
+  const [perfectDayOpen, setPerfectDayOpen] = useState(false);
   const prevWaterRef = useRef(0);
   const prevKcalReachedRef = useRef(false);
+  const prevAllReachedRef = useRef(false);
 
   // Datum-Navigator: User kann auch andere Tage nachtragen
   const [tagDate, setTagDate] = useState(()=>new Date());
@@ -1163,6 +1363,7 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate }) {
   useEffect(() => {
     const wTarget = waterTargetUnits(profile);
     if (prevWaterRef.current < wTarget && (log.water||0) >= wTarget) {
+      setKonfettiMode("normal");
       setKonfetti(true);
       haptic(60);
     }
@@ -1173,11 +1374,43 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate }) {
     const target = calorieTarget(profile).target;
     const reached = totalKcal >= target;
     if (!prevKcalReachedRef.current && reached) {
+      setKonfettiMode("normal");
       setKonfetti(true);
       haptic(60);
     }
     prevKcalReachedRef.current = reached;
   }, [log.meals, profile]);
+
+  // ── PERFECT-DAY-Trigger: ALLE Tagesziele erreicht ──────────────────────────
+  // Bedingungen: Wasser ≥ Ziel, Schlaf ≥ Ziel, Kcal ≥ 90% Ziel, mind. 1 Workout
+  useEffect(() => {
+    if (!isToday) return; // nur für heute, nicht beim Nachtragen vergangener Tage
+    const wTarget = waterTargetUnits(profile);
+    const sTarget = sleepTargetH(profile);
+    const kcalTarget = calorieTarget(profile).target;
+    const sleepNum = parseFloat(String(log.sleep||"0").replace("+","")) || 0;
+    const totalKcal = (log.meals||[]).reduce((s,m)=>s+(m.calories||0),0);
+    const hasWorkout = (log.workouts||[]).length > 0;
+
+    const allReached =
+      (log.water||0) >= wTarget &&
+      sleepNum >= sTarget &&
+      totalKcal >= kcalTarget * 0.9 &&
+      hasWorkout;
+
+    // Persisted-Marker damit beim Reload nicht nochmal feuert
+    const storageKey = `eyla_perfectday_${tagKey}`;
+    const alreadyCelebrated = !!localStorage.getItem(storageKey);
+
+    if (allReached && !prevAllReachedRef.current && !alreadyCelebrated) {
+      try { localStorage.setItem(storageKey, "1"); } catch {}
+      setKonfettiMode("super");
+      setKonfetti(true);
+      setPerfectDayOpen(true);
+      haptic([50, 80, 50, 80, 120]); // longer pattern
+    }
+    prevAllReachedRef.current = allReached;
+  }, [log, profile, tagKey, isToday]);
 
   const eaten = log.meals.reduce((s,m)=>s+(m.calories||0),0);
   const eatenP = log.meals.reduce((s,m)=>s+(m.protein||0),0);
@@ -1333,7 +1566,15 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate }) {
 
   return (
     <div>
-      <Confetti show={konfetti} onDone={()=>setKonfetti(false)}/>
+      <Confetti show={konfetti} mode={konfettiMode} onDone={()=>setKonfetti(false)}/>
+      {perfectDayOpen && (
+        <PerfectDayModal
+          profile={profile}
+          log={log}
+          tagKey={tagKey}
+          onClose={()=>setPerfectDayOpen(false)}
+        />
+      )}
       {/* Smart-Hint von EYLA */}
       {hint && (
         <div style={{
