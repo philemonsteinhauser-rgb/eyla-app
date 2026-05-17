@@ -2631,6 +2631,21 @@ function DayTimeline({ events, dayKey, isToday, onSlotClick, onEventClick, freeS
   );
 }
 
+// Voice-Button für Kalender (klein, kompakt) – wraps useVoice Hook
+function CalVoiceBtn({ onResult }) {
+  const v = useVoice(onResult);
+  if (!v.supported) return null;
+  return (
+    <button onClick={v.toggle} title="Voice" style={{
+      background: v.listening ? T.green+"33" : T.acc+"18",
+      border: `1px solid ${v.listening ? T.green : T.acc}55`,
+      borderRadius:8, padding:"0 12px", cursor:"pointer",
+      color: v.listening ? T.green : T.acc, fontSize:15,
+      animation: v.listening ? "pulse 1.2s ease-in-out infinite" : "none"
+    }}>🎙</button>
+  );
+}
+
 // Termin-Templates für One-Tap-Add
 const EVENT_TEMPLATES = [
   { id:"workout",  label:"Workout",  icon:"🏋", duration:60, defaultTime:"18:00" },
@@ -3022,6 +3037,7 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
   const [newTime, setNewTime] = useState("");
   const [newDur, setNewDur] = useState("");
   const [newRec, setNewRec] = useState("");  // ""|"daily"|"weekly"
+  const [newTravel, setNewTravel] = useState(0); // Vorbereitungszeit in Minuten
   const [localEvents, setLocalEvents] = useState([]);
   // Google-Calendar-Events (wenn verbunden)
   const [googleEvents, setGoogleEvents] = useState([]);
@@ -3106,8 +3122,10 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
       id:Date.now(), title:newTitle.trim(), time:newTime||"",
       duration:newDur||"", date:selectedKey, local:true,
       recurrence: newRec || null,
+      travelTime: newTravel || 0,
     }]);
-    setNewTitle(""); setNewTime(""); setNewDur(""); setNewRec(""); setShowAdd(false);
+    setNewTitle(""); setNewTime(""); setNewDur(""); setNewRec(""); setNewTravel(0); setShowAdd(false);
+    window.dispatchEvent(new Event("eyla_events_changed"));
   }
 
   // AI-Quick-Add: Natürliche Sprache → Termin
@@ -3313,7 +3331,7 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
       {/* Termin hinzufügen */}
       {showAdd && (
         <Card gold style={{ marginBottom:14, animation:"fadeUp .3s ease both" }}>
-          {/* AI-Quick-Add via Natural Language */}
+          {/* AI-Quick-Add via Natural Language + Voice */}
           <Lbl color={T.acc} style={{ marginBottom:6 }}>✦ EYLA VERSTEHT</Lbl>
           <div style={{ display:"flex", gap:6, marginBottom:14 }}>
             <input value={aiInput} onChange={e=>setAiInput(e.target.value)}
@@ -3323,6 +3341,7 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
               style={{ flex:1, background:T.bg2, border:`1px solid ${T.acc}44`, borderRadius:8,
                 padding:"9px 12px", color:T.text, fontFamily:T.serif, fontSize:13,
                 fontStyle:"italic", outline:"none" }}/>
+            <CalVoiceBtn onResult={(t)=>setAiInput(t)}/>
             <button onClick={aiQuickAdd} disabled={!aiInput.trim()||aiParsing} style={{
               background: (aiInput.trim()&&!aiParsing) ? `linear-gradient(135deg,${T.dim},${T.acc})` : T.bg2,
               border:"none", borderRadius:8, padding:"0 14px",
@@ -3348,7 +3367,7 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
             }} onKeyDown={e=>e.key==="Enter"&&addEvent()}
             placeholder="Was?" autoFocus
             style={{ width:"100%", background:T.bg2,border:`1px solid ${T.borderS}`,borderRadius:8,padding:"9px 12px",color:T.text,fontFamily:T.serif,fontSize:13,fontStyle:"italic",outline:"none", boxSizing:"border-box", marginBottom:8 }}/>
-          <div style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr 1fr", gap:8, marginBottom:10 }}>
+          <div style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr 1fr", gap:8, marginBottom:8 }}>
             <input value={selectedKey} onChange={e=>{
               const d = new Date(e.target.value + "T00:00:00");
               if (!isNaN(d)) setSelectedDate(d);
@@ -3356,9 +3375,33 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
               style={{ background:T.bg2,border:`1px solid ${T.borderS}`,borderRadius:8,padding:"9px 10px",color:T.text,fontFamily:T.mono,fontSize:12,outline:"none" }}/>
             <input value={newTime} onChange={e=>setNewTime(e.target.value)} type="time"
               style={{ background:T.bg2,border:`1px solid ${T.borderS}`,borderRadius:8,padding:"9px 10px",color:T.text,fontFamily:T.mono,fontSize:12,outline:"none" }}/>
-            <input value={newDur} onChange={e=>setNewDur(e.target.value)} placeholder="z.B. 1h"
+            <input value={newDur} onChange={e=>setNewDur(e.target.value)} placeholder="z.B. 60"
               style={{ background:T.bg2,border:`1px solid ${T.borderS}`,borderRadius:8,padding:"9px 10px",color:T.text,fontFamily:T.mono,fontSize:12,outline:"none" }}/>
           </div>
+          {/* Travel-Time / Vorbereitung (optional) */}
+          <div style={{ display:"flex", gap:8, marginBottom:10, alignItems:"center" }}>
+            <Lbl style={{ fontSize:9, color:T.muted, marginRight:4 }}>VORBEREITUNG</Lbl>
+            {[0, 15, 30, 60].map(t => (
+              <button key={t} onClick={()=>setNewTravel(t)} style={{
+                background: (newTravel||0)===t ? T.acc+"22" : "transparent",
+                border:`1px solid ${(newTravel||0)===t ? T.acc : T.borderS}`,
+                borderRadius:6, padding:"4px 10px",
+                color: (newTravel||0)===t ? T.acc : T.muted,
+                fontFamily:T.mono, fontSize:10, cursor:"pointer", letterSpacing:.5
+              }}>{t===0?"–":`+${t}m`}</button>
+            ))}
+          </div>
+          {/* Live Konflikt-Check */}
+          {newTitle.trim() && newTime && (() => {
+            const tentative = { title:newTitle, time:newTime, duration:parseInt(newDur)||60, date:selectedKey };
+            const conflicts = detectConflicts(tentative, eventsForSelected);
+            if (conflicts.length === 0) return null;
+            return (
+              <div style={{ padding:"6px 10px", marginBottom:10, background:T.red+"22", border:`1px solid ${T.red}55`, borderRadius:8, color:T.red, fontSize:11, fontFamily:T.serif, fontStyle:"italic" }}>
+                ⚠ Konflikt mit: {conflicts.map(c=>`${c.time} ${c.title}`).join(", ")}
+              </div>
+            );
+          })()}
           {/* Recurrence */}
           <div style={{ display:"flex", gap:6, marginBottom:10 }}>
             {[["", "Einmalig"], ["daily", "Täglich"], ["weekly", "Wöchentlich"]].map(([val, lbl])=>(
@@ -3385,6 +3428,50 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
           </div>
         </Card>
       )}
+
+      {/* JARVIS-BRIEFING – nur wenn heute ausgewählt + was zu sagen */}
+      {isToday && (() => {
+        const slots = findFreeSlots(eventsForSelected, selectedKey, 7*60, 22*60, 60);
+        const topSlot = [...slots].sort((a,b)=>b.duration-a.duration)[0];
+        const evCount = eventsForSelected.length;
+        const hours = new Date().getHours();
+        const greetIcon = hours < 12 ? "☀" : hours < 18 ? "✦" : "🌙";
+        const greet = hours < 11 ? "Morgen" : hours < 14 ? "Mittag" : hours < 18 ? "Nachmittag" : "Abend";
+        // Kompaktes Briefing
+        let line;
+        if (evCount === 0) {
+          line = topSlot ? `Tag offen — größte Lücke ${minToHHMM(topSlot.start)}–${minToHHMM(topSlot.end)}.` : `Tag komplett offen.`;
+        } else {
+          const next = eventsForSelected
+            .filter(e => e.time)
+            .map(e => { const [h,m] = e.time.split(":").map(n=>parseInt(n)||0); return {ev:e, mins:h*60+m}; })
+            .find(e => e.mins >= (new Date().getHours()*60 + new Date().getMinutes()));
+          if (next) {
+            const dt = next.mins - (new Date().getHours()*60 + new Date().getMinutes());
+            const inStr = dt <= 0 ? "jetzt" : dt < 60 ? `in ${dt}min` : `in ${Math.floor(dt/60)}h${dt%60?` ${dt%60}m`:""}`;
+            line = `Nächstes: ${next.ev.title} um ${next.ev.time} (${inStr})${topSlot ? ` · größter freier Slot ${minToHHMM(topSlot.start)}–${minToHHMM(topSlot.end)}` : ""}.`;
+          } else {
+            line = `${evCount} Termin${evCount>1?"e":""} heute alle durch.${topSlot ? ` Lücke noch ${minToHHMM(topSlot.start)}–${minToHHMM(topSlot.end)}.` : ""}`;
+          }
+        }
+        return (
+          <div style={{
+            padding:"10px 14px", marginBottom:12,
+            background:T.bg2, border:`1px solid ${T.acc}33`, borderRadius:10,
+            display:"flex", alignItems:"flex-start", gap:10
+          }}>
+            <span style={{ fontSize:14, color:T.acc }}>{greetIcon}</span>
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ fontFamily:T.mono, fontSize:9, color:T.acc, letterSpacing:1.5, marginBottom:3 }}>
+                BRIEFING · {greet.toUpperCase()}
+              </div>
+              <div style={{ color:T.text, fontSize:12, fontFamily:T.serif, fontStyle:"italic", lineHeight:1.5 }}>
+                {line}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* SMART DAY-TIMELINE – visuelle Übersicht für den ausgewählten Tag */}
       {(() => {
