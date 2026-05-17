@@ -1711,6 +1711,25 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [] }) {
         </div>
       )}
 
+      {/* JARVIS-BRIEFING – Free-Slot + nächster Termin (nur wenn heute) */}
+      {isToday && (() => {
+        const todayKey = isoDateKey(new Date());
+        const allEv = [...(events||[]), ...localEvents].map(e => ({...e, date: e.date || todayKey}));
+        const briefing = generateBriefing(allEv, todayKey, true);
+        if (!briefing) return null;
+        return (
+          <div style={{
+            padding:"6px 12px", marginBottom:10, fontSize:11,
+            color:T.mid, fontStyle:"italic", fontFamily:T.serif,
+            background:T.acc+"06", border:`1px solid ${T.acc}1A`, borderRadius:8,
+            display:"flex", alignItems:"center", gap:6
+          }}>
+            <span style={{ color:T.acc, fontSize:10 }}>✦</span>
+            <span>{briefing}</span>
+          </div>
+        );
+      })()}
+
       {/* ANSTEHEND – Termine + Heute-Todos auf einen Blick (nur wenn heute + was zu zeigen) */}
       {isToday && (() => {
         const todoKey = tagKey;
@@ -2494,6 +2513,29 @@ function minToHHMM(min) {
   const h = Math.floor(min/60);
   const m = min % 60;
   return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
+}
+
+// Generiert einen kurzen Jarvis-Briefing-Text für einen Tag
+function generateBriefing(events, dayKey, isToday) {
+  if (!isToday) return null;
+  const slots = findFreeSlots(events, dayKey, 7*60, 22*60, 60);
+  const topSlot = [...slots].sort((a,b)=>b.duration-a.duration)[0];
+  const evCount = events.filter(e=>e.date===dayKey).length;
+  const nowMin = new Date().getHours()*60 + new Date().getMinutes();
+  if (evCount === 0) {
+    return topSlot ? `Tag offen — größte Lücke ${minToHHMM(topSlot.start)}–${minToHHMM(topSlot.end)}.` : `Tag komplett offen.`;
+  }
+  const next = events
+    .filter(e => e.date===dayKey && e.time)
+    .map(e => { const [h,m] = e.time.split(":").map(n=>parseInt(n)||0); return {ev:e, mins:h*60+m}; })
+    .sort((a,b)=>a.mins-b.mins)
+    .find(e => e.mins >= nowMin);
+  if (next) {
+    const dt = next.mins - nowMin;
+    const inStr = dt <= 0 ? "jetzt" : dt < 60 ? `in ${dt}min` : `in ${Math.floor(dt/60)}h${dt%60?` ${dt%60}m`:""}`;
+    return `Nächstes: ${next.ev.title} um ${next.ev.time} (${inStr})${topSlot ? ` · Frei ${minToHHMM(topSlot.start)}–${minToHHMM(topSlot.end)}` : ""}.`;
+  }
+  return `${evCount} Termin${evCount>1?"e":""} heute alle durch.${topSlot ? ` Lücke noch ${minToHHMM(topSlot.start)}–${minToHHMM(topSlot.end)}.` : ""}`;
 }
 
 // Day-Timeline – visuelle vertikale Zeitleiste eines Tages
@@ -3363,6 +3405,11 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
               if (!newDur || newDur === "60") {
                 const dur = smartDurationFromTitle(v);
                 if (dur && dur !== 60) setNewDur(String(dur));
+              }
+              // Smart-Travel-Time auto-vorschlagen (wenn noch 0)
+              if (!newTravel) {
+                const tr = smartTravelFromTitle(v);
+                if (tr > 0) setNewTravel(tr);
               }
             }} onKeyDown={e=>e.key==="Enter"&&addEvent()}
             placeholder="Was?" autoFocus
