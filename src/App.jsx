@@ -222,6 +222,14 @@ const DEFAULT_PROFILE = {
   sleepTargetH: 7,        // tagesziel schlaf in h
   // Sport-Vorlieben
   sportsPreferred: [],    // ["Yoga", "Laufen", "Krafttraining"]
+  // Reminder/Notifications
+  reminders: {
+    enabled: false,                                            // Master-Toggle
+    morning:  { enabled: true,  time: "08:30" },              // Schlaf + Energie eintragen
+    lunch:    { enabled: true,  time: "12:30" },              // Was zu Mittag?
+    water:    { enabled: true,  time: "14:00" },              // Wasser-Check
+    evening:  { enabled: true,  time: "21:00" },              // Tag-Reflexion
+  },
 };
 
 // Makronährstoff-Ziele aus Kalorien + Diät-Typ. Protein angemessen für Aktivität,
@@ -5927,6 +5935,90 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
             style={{...inputStyle, resize:"vertical", minHeight:80, fontFamily:T.serif, fontStyle:"italic", lineHeight:1.5}}/>
         </Card>
 
+        {/* ERINNERUNGEN */}
+        <Card style={{ marginBottom:12 }}>
+          <Lbl style={{ marginBottom:10 }}>ERINNERUNGEN</Lbl>
+          <p style={{ color:T.muted, fontSize:11, fontStyle:"italic", fontFamily:T.serif, margin:"0 0 14px", lineHeight:1.5 }}>
+            EYLA erinnert dich an Wasser, Mahlzeiten, Schlaf. Browser-Notification wenn erlaubt, sonst in-App-Banner. Nur 1x pro Tag pro Reminder.
+          </p>
+          {/* Master Toggle */}
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"8px 0", marginBottom:8, borderBottom:`1px solid ${T.border}` }}>
+            <span style={{ fontFamily:T.serif, fontSize:13, color:T.text }}>Erinnerungen aktiv</span>
+            <button onClick={()=>set("reminders", { ...(draft.reminders||{}), enabled: !(draft.reminders?.enabled) })}
+              style={{
+                width:42, height:24, borderRadius:14,
+                background: draft.reminders?.enabled ? T.acc : T.border,
+                border:"none", cursor:"pointer", position:"relative", transition:"background .2s"
+              }}>
+              <span style={{
+                position:"absolute", top:2, left: draft.reminders?.enabled ? 20 : 2,
+                width:20, height:20, borderRadius:"50%", background:T.bg,
+                transition:"left .2s"
+              }}/>
+            </button>
+          </div>
+          {/* Permission-Hint */}
+          {draft.reminders?.enabled && typeof Notification !== "undefined" && Notification.permission !== "granted" && (
+            <button onClick={async ()=>{
+              try { await Notification.requestPermission(); } catch {}
+              setDraft(p => ({...p})); // re-render
+            }} style={{
+              width:"100%", background:T.gold+"18", border:`1px solid ${T.gold}55`,
+              borderRadius:10, padding:"9px 12px", color:T.gold,
+              fontFamily:T.serif, fontSize:12, cursor:"pointer", marginBottom:12,
+              fontStyle:"italic"
+            }}>
+              {Notification.permission === "denied"
+                ? "🔕 Browser-Benachrichtigungen blockiert – nur In-App-Banner"
+                : "🔔 Browser-Benachrichtigungen erlauben (empfohlen)"}
+            </button>
+          )}
+          {/* Pro Reminder: Toggle + Zeit */}
+          {[
+            { key:"morning",  label:"Morgens",   hint:"Schlaf + Energie eintragen" },
+            { key:"lunch",    label:"Mittag",    hint:"Was hast du gegessen?" },
+            { key:"water",    label:"Wasser",    hint:"Falls Tagesziel noch nicht erreicht" },
+            { key:"evening",  label:"Abends",    hint:"Tag kurz reflektieren" },
+          ].map(r => {
+            const settings = draft.reminders?.[r.key] || { enabled:true, time:"" };
+            const disabled = !draft.reminders?.enabled;
+            return (
+              <div key={r.key} style={{
+                display:"flex", alignItems:"center", gap:10, padding:"8px 0",
+                borderBottom:`1px solid ${T.border}`,
+                opacity: disabled ? .4 : 1, pointerEvents: disabled ? "none" : "auto"
+              }}>
+                <button onClick={()=>{
+                  const newRems = { ...(draft.reminders||{}) };
+                  newRems[r.key] = { ...settings, enabled: !settings.enabled };
+                  set("reminders", newRems);
+                }} style={{
+                  width:30, height:18, borderRadius:10,
+                  background: settings.enabled ? T.acc : T.border,
+                  border:"none", cursor:"pointer", position:"relative", flexShrink:0
+                }}>
+                  <span style={{
+                    position:"absolute", top:2, left: settings.enabled ? 14 : 2,
+                    width:14, height:14, borderRadius:"50%", background:T.bg
+                  }}/>
+                </button>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontFamily:T.serif, fontSize:13, color:T.text }}>{r.label}</div>
+                  <div style={{ color:T.muted, fontSize:10, fontStyle:"italic", fontFamily:T.serif }}>{r.hint}</div>
+                </div>
+                <input type="time" value={settings.time||""} onChange={e=>{
+                  const newRems = { ...(draft.reminders||{}) };
+                  newRems[r.key] = { ...settings, time: e.target.value };
+                  set("reminders", newRems);
+                }} style={{
+                  background:T.bg, border:`1px solid ${T.borderS}`, borderRadius:6,
+                  padding:"5px 8px", color:T.text, fontFamily:T.mono, fontSize:12, outline:"none"
+                }}/>
+              </div>
+            );
+          })}
+        </Card>
+
         <div style={{ display:"flex", gap:10, marginTop:18 }}>
           <button onClick={save} disabled={!String(draft.name||"").trim()} style={{
             background: String(draft.name||"").trim() ? `linear-gradient(135deg,${T.dim},${T.acc})` : "transparent",
@@ -6559,6 +6651,132 @@ export default function App() {
   return <AppContent/>;
 }
 
+// ─── REMINDERS ────────────────────────────────────────────────────────────────
+// Mix aus Browser-Notification (wenn Permission granted) und In-App-Banner
+// als Fallback. Pro Tag pro Typ max 1 Trigger (localStorage-Marker).
+// Checkt alle 60s ob ein Reminder fällig ist; nur wenn App offen ist.
+
+const REMINDER_MESSAGES = {
+  morning:  { title:"Guten Morgen", body:"Wie war die Nacht? Trag deinen Schlaf ein." },
+  lunch:    { title:"Mittag fällig", body:"Was hast du gegessen?" },
+  water:    { title:"Wasser-Check", body:"Trink noch was. Du liegst noch unter Ziel." },
+  evening:  { title:"Tag-Reflexion", body:"Wie war heute? Kurz aufschreiben?" },
+};
+
+function reminderDueAt(profile, type) {
+  const r = profile?.reminders?.[type];
+  if (!r || !r.enabled) return null;
+  return r.time || null; // "HH:MM"
+}
+function isAfterTime(now, hhmm) {
+  if (!hhmm) return false;
+  const [h, m] = hhmm.split(":").map(n => parseInt(n)||0);
+  const target = new Date(now);
+  target.setHours(h, m, 0, 0);
+  return now >= target;
+}
+function reminderMarkerKey(type, dateKey) { return `eyla_rem_${type}_${dateKey}`; }
+
+function useReminders(profile, log) {
+  const [activeReminder, setActiveReminder] = useState(null);
+  const [hasPermission, setHasPermission] = useState(
+    typeof Notification !== "undefined" ? Notification.permission === "granted" : false
+  );
+
+  function dismissReminder() {
+    if (activeReminder) {
+      try { localStorage.setItem(reminderMarkerKey(activeReminder.type, new Date().toDateString()), "1"); } catch {}
+    }
+    setActiveReminder(null);
+  }
+
+  async function requestPermission() {
+    if (typeof Notification === "undefined") return false;
+    try {
+      const result = await Notification.requestPermission();
+      const granted = result === "granted";
+      setHasPermission(granted);
+      return granted;
+    } catch { return false; }
+  }
+
+  useEffect(() => {
+    if (!profile?.reminders?.enabled) return;
+    function check() {
+      const now = new Date();
+      const dateKey = now.toDateString();
+      // Reihenfolge: morning, lunch, water, evening
+      const types = ["morning","lunch","water","evening"];
+      for (const type of types) {
+        const time = reminderDueAt(profile, type);
+        if (!time) continue;
+        if (!isAfterTime(now, time)) continue;
+        // bereits heute getriggert?
+        try { if (localStorage.getItem(reminderMarkerKey(type, dateKey))) continue; } catch {}
+        // Sinnvolle Skip-Logik – wenn der Datentyp schon erledigt ist, nicht triggern
+        if (type === "morning"  && log?.sleep) continue;
+        if (type === "lunch"    && (log?.meals||[]).length > 0) continue;
+        if (type === "water"    && (log?.water||0) >= waterTargetUnits(profile)) continue;
+        if (type === "evening"  && log?.note) continue;
+        // Trigger
+        const msg = REMINDER_MESSAGES[type];
+        setActiveReminder({ type, ...msg });
+        if (hasPermission && typeof Notification !== "undefined") {
+          try { new Notification(`EYLA · ${msg.title}`, { body: msg.body, icon:"/icon-192.png", tag:`eyla-${type}-${dateKey}` }); } catch {}
+        }
+        try { localStorage.setItem(reminderMarkerKey(type, dateKey), "1"); } catch {}
+        haptic(40);
+        return; // ein Reminder pro Check
+      }
+    }
+    check(); // sofort beim Mount/Profil-Change
+    const id = setInterval(check, 60_000); // alle 60s
+    // auch beim sichtbar-werden checken (z.B. zurück aus Tab-Switch)
+    function onVis() { if (document.visibilityState === "visible") check(); }
+    document.addEventListener("visibilitychange", onVis);
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVis); };
+  }, [profile, log, hasPermission]);
+
+  return { activeReminder, dismissReminder, requestPermission, hasPermission };
+}
+
+function ReminderBanner({ reminder, onDismiss }) {
+  if (!reminder) return null;
+  return (
+    <div style={{
+      position:"fixed", left:0, right:0,
+      top:"calc(env(safe-area-inset-top, 0px) + 70px)",
+      zIndex:60, display:"flex", justifyContent:"center", padding:"0 14px",
+      pointerEvents:"none",
+      animation:"fadeUp .3s ease both"
+    }}>
+      <div style={{
+        pointerEvents:"auto",
+        maxWidth:480, width:"100%",
+        background: T.bg2+"F0", backdropFilter:"blur(20px)",
+        border:`1px solid ${T.gold}55`, borderRadius:12,
+        padding:"12px 14px",
+        display:"flex", alignItems:"flex-start", gap:12,
+        boxShadow:`0 8px 30px ${T.gold}22`
+      }}>
+        <div style={{ fontSize:18 }}>✦</div>
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ fontFamily:T.mono, fontSize:9, color:T.gold, letterSpacing:1.5, marginBottom:3 }}>
+            EYLA · {reminder.title.toUpperCase()}
+          </div>
+          <div style={{ color:T.text, fontSize:13, fontFamily:T.serif, lineHeight:1.45 }}>
+            {reminder.body}
+          </div>
+        </div>
+        <button onClick={onDismiss} style={{
+          background:"transparent", border:"none", color:T.muted,
+          fontSize:18, cursor:"pointer", padding:"0 4px", lineHeight:1
+        }}>×</button>
+      </div>
+    </div>
+  );
+}
+
 function AppContent() {
   const [profile, setProfile] = useState(null);
   const [logsByDate, setLogsByDate] = useState({});
@@ -6573,6 +6791,9 @@ function AppContent() {
 
   // Abgeleiteter Log für heute
   const log = logsByDate[TODAY] || EMPTY_LOG();
+
+  // Reminders – nur wenn profile geladen
+  const reminders = useReminders(profile, log);
 
   // Load everything on mount – migriert alle alten Keys automatisch
   useEffect(()=>{
@@ -6696,6 +6917,9 @@ function AppContent() {
       {/* BG glow – Farbe je nach aktivem Tab */}
       <div style={{ position:"fixed",inset:0,pointerEvents:"none",transition:"background .4s",
         background:`radial-gradient(ellipse at 50% 0%, ${sectionColor}0A 0%, transparent 50%)` }}/>
+
+      {/* Reminder-Banner (oben unter Top-Bar, wenn ein Reminder aktiv ist) */}
+      <ReminderBanner reminder={reminders.activeReminder} onDismiss={reminders.dismissReminder}/>
 
       {/* Top bar – feiner Akzent von Section-Color am unteren Rand. Safe-Area für iPhone-Notch. */}
       <div style={{ position:"sticky",top:0,zIndex:40,background:T.bg+"F0",
