@@ -204,6 +204,24 @@ const DEFAULT_PROFILE = {
   // Haushalt für Plan + Liste
   householdSize: 1,       // wie viele Personen mitessen
   householdNote: "",      // freier Text – z.B. "Partner vegetarisch", "2 Kinder"
+  // Erweiterte Profil-Daten
+  about: "",              // freitext "über mich"
+  occupation: "",         // beruf/tätigkeit
+  jobActivity: "",        // "sitzend" | "gemischt" | "aktiv" – beeinflusst kalorienbedarf
+  allergies: [],          // ECHTE allergien (lebensbedrohlich), separat von intoleranzen
+  healthNotes: "",        // gesundheits-themen: medikamente, beschwerden, beobachtungen
+  // Tagesrhythmus
+  wakeTime: "",           // "07:00"
+  sleepTime: "",          // "23:00"
+  mealPattern: "3normal", // "3normal" | "5small" | "if168" | "ifother" | "custom"
+  // Kochen
+  cookTime: "medium",     // "quick" (≤15min) | "medium" (15-30min) | "long" (30min+)
+  kitchenEquipment: ["Pfanne","Ofen"], // verfügbar: Pfanne, Ofen, Mikrowelle, Mixer, Airfryer, Reiskocher
+  // Tagesziele
+  waterTargetL: 2,        // tagesziel wasser in L
+  sleepTargetH: 7,        // tagesziel schlaf in h
+  // Sport-Vorlieben
+  sportsPreferred: [],    // ["Yoga", "Laufen", "Krafttraining"]
 };
 
 // Makronährstoff-Ziele aus Kalorien + Diät-Typ. Protein angemessen für Aktivität,
@@ -528,9 +546,10 @@ HALTUNG: Du arbeitest mit dem Vertrauen, dass der Mensch geschaffen ist und in d
 
 WISSENSCHAFTS-BASIS: Mediterrane Ernährung, Whole Foods (NOVA 1+2), adäquates Protein, Ballaststoffe, pflanzliche Vielfalt, Time-Restricted Eating bei Abnehmen erlaubt. Du kennst die Evidenz, gibst sie aber nicht als Vortrag aus.
 
-PROFIL: ${profile.name}, ${profile.age}J, ${profile.weight}kg, ${profile.height}cm
+PROFIL: ${profile.name}, ${profile.age}J, ${profile.weight}kg, ${profile.height}cm${profile.sex?` (${profile.sex==="m"?"♂":profile.sex==="f"?"♀":"⚧"})`:""}
 Aktivität: ${profile.activity||"k.A."} | Ziele: ${Array.isArray(profile.goal) ? (profile.goal.join(", ")||"Wohlbefinden") : (profile.goal||"Wohlbefinden")}
-Vorlieben: ${profile.preferences?.join(", ")||"k.A."} | Intoleranzen: ${profile.intolerances?.join(", ")||"keine"}
+Vorlieben: ${profile.preferences?.join(", ")||"k.A."} | Intoleranzen: ${profile.intolerances?.join(", ")||"keine"}${profile.allergies?.length>0?`\n⚠ ALLERGIEN (lebenswichtig!): ${profile.allergies.join(", ")}`:""}${profile.occupation||profile.jobActivity?`\nBeruf: ${profile.occupation||"k.A."}${profile.jobActivity?` (${profile.jobActivity})`:""}`:""}${profile.wakeTime||profile.sleepTime?`\nTagesrhythmus: ${profile.wakeTime?`auf ${profile.wakeTime}`:""}${profile.wakeTime&&profile.sleepTime?", ":""}${profile.sleepTime?`bett ${profile.sleepTime}`:""}`:""}${profile.mealPattern&&profile.mealPattern!=="3normal"?`\nMahlzeiten-Pattern: ${profile.mealPattern==="5small"?"5 kleine Mahlzeiten":profile.mealPattern==="if168"?"Intermittent Fasting 16:8":profile.mealPattern==="ifother"?"IF (anderer Rhythmus)":profile.mealPattern}`:""}${profile.cookTime?`\nKochzeit-Präferenz: ${profile.cookTime==="quick"?"≤15min":profile.cookTime==="long"?"30min+":"15-30min"}`:""}${profile.kitchenEquipment?.length>0?`\nKüchenausstattung: ${profile.kitchenEquipment.join(", ")}`:""}${profile.sportsPreferred?.length>0?`\nSport-Vorlieben: ${profile.sportsPreferred.join(", ")}`:""}${profile.healthNotes?`\nGesundheits-Notizen: ${profile.healthNotes}`:""}${profile.about?`\nÜber sich: ${profile.about}`:""}
+Tagesziele: ${profile.waterTargetL||2}L Wasser / ${profile.sleepTargetH||7}h Schlaf
 
 ERNÄHRUNGSZIEL: ${zielStr}
 
@@ -1754,6 +1773,59 @@ function MealRow({ meal, onEdit, onDelete, onDuplicate }) {
   const [c, setC] = useState(String(meal.carbs || ""));
   const [f, setF] = useState(String(meal.fat || ""));
 
+  // ── Swipe-to-delete State ────────────────────────────────────────────────────
+  const [swipeX, setSwipeX] = useState(0);          // aktueller Offset während Swipe
+  const [swiping, setSwiping] = useState(false);    // sind wir gerade dran zu swipen?
+  const touchStartXRef = useRef(0);
+  const touchStartYRef = useRef(0);
+  const isHorizontalRef = useRef(null);             // wird auf true/false gesetzt nach ersten 8px
+  const SWIPE_THRESHOLD = 90;                       // pixel ab denen geloescht wird
+
+  function handleTouchStart(e) {
+    if (editing) return;
+    const t = e.touches[0];
+    touchStartXRef.current = t.clientX;
+    touchStartYRef.current = t.clientY;
+    isHorizontalRef.current = null;
+    setSwiping(true);
+  }
+  function handleTouchMove(e) {
+    if (editing || !swiping) return;
+    const t = e.touches[0];
+    const dx = t.clientX - touchStartXRef.current;
+    const dy = t.clientY - touchStartYRef.current;
+    // Entscheide nach ersten Bewegungen ob horizontal oder vertikal
+    if (isHorizontalRef.current === null) {
+      if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
+        isHorizontalRef.current = Math.abs(dx) > Math.abs(dy);
+      } else {
+        return;
+      }
+    }
+    if (!isHorizontalRef.current) return;
+    // Nur Links-Swipe darstellen
+    if (dx < 0) {
+      setSwipeX(Math.max(-180, dx));
+      // verhindere Scrollen waehrend horizontaler Swipe
+      if (e.cancelable) e.preventDefault();
+    } else {
+      setSwipeX(0);
+    }
+  }
+  function handleTouchEnd() {
+    setSwiping(false);
+    if (swipeX < -SWIPE_THRESHOLD) {
+      // Wegswipen → bis Rand animieren und dann löschen
+      setSwipeX(-400);
+      try { navigator.vibrate?.(20); } catch {}
+      setTimeout(()=>{ onDelete(); }, 180);
+    } else {
+      // Zurück snappen
+      setSwipeX(0);
+    }
+    isHorizontalRef.current = null;
+  }
+
   function save() {
     if (!name.trim()) return;
     onEdit({
@@ -1803,34 +1875,76 @@ function MealRow({ meal, onEdit, onDelete, onDuplicate }) {
   }
 
   const hasMacros = (meal.protein || meal.carbs || meal.fat);
+  // Stärke der Lösch-Anzeige skaliert mit Swipe-Distanz
+  const swipeProgress = Math.min(1, Math.abs(swipeX) / SWIPE_THRESHOLD);
   return (
-    <div onClick={()=>setEditing(true)} style={{
-      display:"flex", justifyContent:"space-between", alignItems:"center",
-      padding:"8px 0", borderBottom:`1px solid ${T.border}`, cursor:"pointer",
-      transition:"background .15s"
-    }}
-    onMouseEnter={e=>e.currentTarget.style.background=T.acc+"06"}
-    onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-      <div style={{ flex:1, minWidth:0 }}>
-        <div style={{ color:T.text, fontSize:13 }}>{meal.name}</div>
-        {hasMacros && (
-          <div style={{ display:"flex", gap:8, marginTop:2, fontFamily:T.mono, fontSize:9 }}>
-            {meal.protein > 0 && <span style={{ color:T.rose }}>P {meal.protein}g</span>}
-            {meal.carbs   > 0 && <span style={{ color:T.gold }}>C {meal.carbs}g</span>}
-            {meal.fat     > 0 && <span style={{ color:T.green }}>F {meal.fat}g</span>}
-          </div>
-        )}
+    <div style={{
+      position:"relative", overflow:"hidden", borderBottom:`1px solid ${T.border}`
+    }}>
+      {/* Lösch-Hintergrund (sichtbar wenn nach links geswiped) */}
+      <div style={{
+        position:"absolute", top:0, right:0, bottom:0,
+        width:"100%", display:"flex", alignItems:"center", justifyContent:"flex-end",
+        paddingRight:18,
+        background:`linear-gradient(90deg, transparent 0%, ${T.red}${swipeProgress >= 1 ? "33" : "22"} 50%, ${T.red}${swipeProgress >= 1 ? "44" : "22"} 100%)`,
+        opacity: Math.abs(swipeX) > 4 ? 1 : 0,
+        transition: swiping ? "none" : "opacity .15s",
+        pointerEvents:"none"
+      }}>
+        <span style={{
+          fontFamily:T.mono, fontSize:11, color:T.red, letterSpacing:2,
+          fontWeight: swipeProgress >= 1 ? 700 : 400
+        }}>
+          {swipeProgress >= 1 ? "↞ LOSLASSEN" : "← LÖSCHEN"}
+        </span>
       </div>
-      <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-        {meal.calories>0 && <div style={{ color:T.acc, fontFamily:T.mono, fontSize:12 }}>{meal.calories}</div>}
-        <div style={{ color:T.muted, fontFamily:T.mono, fontSize:10 }}>{meal.time}</div>
-        {onDuplicate && (
-          <button onClick={(e)=>{ e.stopPropagation(); onDuplicate(); }}
-            title="Nochmal eintragen"
-            style={{ background:"transparent", border:`1px solid ${T.borderS}`, borderRadius:6,
-              padding:"2px 7px", color:T.muted, fontFamily:T.mono, fontSize:11, cursor:"pointer", lineHeight:1 }}
-          >+1</button>
-        )}
+
+      {/* Mahlzeit-Row (verschiebt sich beim Swipe) */}
+      <div
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        onClick={()=>{ if (Math.abs(swipeX) < 4) setEditing(true); }}
+        style={{
+          display:"flex", justifyContent:"space-between", alignItems:"center",
+          padding:"8px 0", cursor:"pointer",
+          background: T.bg,
+          transform: `translateX(${swipeX}px)`,
+          transition: swiping ? "none" : "transform .2s cubic-bezier(.2,.8,.2,1)",
+          touchAction: isHorizontalRef.current ? "pan-y" : "auto",
+        }}
+        onMouseEnter={e=>e.currentTarget.style.background=T.acc+"06"}
+        onMouseLeave={e=>e.currentTarget.style.background=T.bg}>
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ color:T.text, fontSize:13 }}>{meal.name}</div>
+          {hasMacros && (
+            <div style={{ display:"flex", gap:8, marginTop:2, fontFamily:T.mono, fontSize:9 }}>
+              {meal.protein > 0 && <span style={{ color:T.rose }}>P {meal.protein}g</span>}
+              {meal.carbs   > 0 && <span style={{ color:T.gold }}>C {meal.carbs}g</span>}
+              {meal.fat     > 0 && <span style={{ color:T.green }}>F {meal.fat}g</span>}
+            </div>
+          )}
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+          {meal.calories>0 && <div style={{ color:T.acc, fontFamily:T.mono, fontSize:12 }}>{meal.calories}</div>}
+          <div style={{ color:T.muted, fontFamily:T.mono, fontSize:10 }}>{meal.time}</div>
+          {onDuplicate && (
+            <button onClick={(e)=>{ e.stopPropagation(); onDuplicate(); }}
+              title="Nochmal eintragen"
+              style={{ background:"transparent", border:`1px solid ${T.borderS}`, borderRadius:6,
+                padding:"2px 7px", color:T.muted, fontFamily:T.mono, fontSize:11, cursor:"pointer", lineHeight:1 }}
+            >+1</button>
+          )}
+          {/* Desktop-Lösch-Knopf (mobile macht Swipe) */}
+          <button onClick={(e)=>{ e.stopPropagation(); onDelete(); }}
+            title="Löschen"
+            style={{ background:"transparent", border:`1px solid ${T.red}33`, borderRadius:6,
+              padding:"2px 7px", color:T.red+"99", fontFamily:T.mono, fontSize:11, cursor:"pointer",
+              lineHeight:1, opacity:.7 }}
+            onMouseEnter={e=>e.currentTarget.style.opacity=1}
+            onMouseLeave={e=>e.currentTarget.style.opacity=.7}
+          >×</button>
+        </div>
       </div>
     </div>
   );
@@ -3183,6 +3297,21 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
           const amount = String(input.amount||"").trim();
           const nameHasAmount = amount && rawName.toLowerCase().includes(amount.toLowerCase().replace(/\s+/g,""));
           const fullName = (amount && !nameHasAmount) ? `${amount} ${rawName}` : rawName;
+
+          // ── ANTI-BUG: Modell hat Menge mit Kalorien verwechselt? ──────────────
+          // "200g Steak" → wenn calories === 200 und Menge ist 200g/ml → sehr verdächtig.
+          // In dem Fall: nicht speichern, sondern Tool-Result mit Aufforderung zur Korrektur.
+          const checkText = `${amount} ${rawName}`.toLowerCase();
+          const amountMatch = checkText.match(/(\d+(?:[.,]\d+)?)\s*(g|gramm|ml)\b/);
+          if (amountMatch && cal > 0) {
+            const amountValue = parseFloat(amountMatch[1].replace(",","."));
+            // Wenn calories ≈ amountValue (innerhalb 5) UND amountValue ist im typischen Gramm-Bereich
+            if (Math.abs(cal - amountValue) <= 5 && amountValue >= 50 && amountValue <= 2000) {
+              return `❌ FEHLER: Du hast die MENGE (${amountValue}${amountMatch[2]}) in 'calories' eingetragen. ` +
+                `${amountValue}${amountMatch[2]} ${rawName.replace(amountMatch[0],"").trim()} hat eigene kcal – z.B. 200g Rindersteak ≈ 500 kcal, 200g Hähnchen ≈ 330 kcal, 200g Apfel ≈ 100 kcal. ` +
+                `Bitte add_meal NOCHMAL aufrufen mit name="${fullName}", amount="${amountValue}${amountMatch[2]}", calories=<realistische geschätzte kcal>, plus protein/carbs/fat.`;
+            }
+          }
           setLog(l => ({...l, meals: [...l.meals, {
             id: Date.now(),
             name: fullName,
@@ -5164,6 +5293,8 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
       // Arrays als Comma-Strings darstellen für Inputs
       preferences: Array.isArray(profile.preferences) ? profile.preferences.join(", ") : (profile.preferences||""),
       intolerances: Array.isArray(profile.intolerances) ? profile.intolerances.join(", ") : (profile.intolerances||""),
+      allergies: Array.isArray(profile.allergies) ? profile.allergies.join(", ") : (profile.allergies||""),
+      sportsPreferred: Array.isArray(profile.sportsPreferred) ? profile.sportsPreferred.join(", ") : (profile.sportsPreferred||""),
     });
     setEditing(true);
   }
@@ -5173,9 +5304,20 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
       ...draft,
       preferences: String(draft.preferences||"").split(",").map(s=>s.trim()).filter(Boolean),
       intolerances: String(draft.intolerances||"").split(",").map(s=>s.trim()).filter(Boolean),
+      allergies: String(draft.allergies||"").split(",").map(s=>s.trim()).filter(Boolean),
+      sportsPreferred: String(draft.sportsPreferred||"").split(",").map(s=>s.trim()).filter(Boolean),
     };
     onUpdate?.(cleaned);
     setEditing(false);
+  }
+
+  // Toggle für Array-Felder (z.B. kitchenEquipment)
+  function toggleArr(key, value) {
+    setDraft(prev => {
+      const arr = Array.isArray(prev[key]) ? prev[key] : [];
+      const next = arr.includes(value) ? arr.filter(x=>x!==value) : [...arr, value];
+      return { ...prev, [key]: next };
+    });
   }
 
   function cancel() {
@@ -5342,16 +5484,173 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
             style={inputStyle}/>
         </Card>
 
+        {/* BERUF & ALLTAG */}
+        <Card style={{ marginBottom:12 }}>
+          <Lbl style={{ marginBottom:10 }}>BERUF & ALLTAG</Lbl>
+          <div style={{ marginBottom:12 }}>
+            <Lbl style={{ marginBottom:6, fontSize:10 }}>WAS MACHST DU BERUFLICH?</Lbl>
+            <input value={draft.occupation||""} onChange={e=>set("occupation",e.target.value)}
+              placeholder='z.B. "Software-Entwickler", "Lehrerin"' style={inputStyle}/>
+          </div>
+          <div>
+            <Lbl style={{ marginBottom:6, fontSize:10 }}>WIE AKTIV IST DEIN JOB?</Lbl>
+            <div style={{ display:"flex", gap:6 }}>
+              {[
+                {id:"sitzend", label:"🪑 Sitzend"},
+                {id:"gemischt", label:"🚶 Gemischt"},
+                {id:"aktiv", label:"💪 Aktiv"},
+              ].map(o=>{
+                const sel = (draft.jobActivity||"")===o.id;
+                return (
+                  <button key={o.id} onClick={()=>set("jobActivity",o.id)} style={{
+                    flex:1, background:sel?T.acc+"22":"transparent",
+                    border:`1px solid ${sel?T.acc:T.borderS}`, borderRadius:8,
+                    padding:"8px 4px", color:sel?T.text:T.muted,
+                    fontFamily:T.serif, fontSize:11, cursor:"pointer", transition:"all .2s"
+                  }}>{o.label}</button>
+                );
+              })}
+            </div>
+          </div>
+        </Card>
+
+        {/* TAGESRHYTHMUS */}
+        <Card style={{ marginBottom:12 }}>
+          <Lbl style={{ marginBottom:10 }}>TAGESRHYTHMUS</Lbl>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:12 }}>
+            <div>
+              <Lbl style={{ marginBottom:6, fontSize:10 }}>AUFSTEHEN</Lbl>
+              <input type="time" value={draft.wakeTime||""} onChange={e=>set("wakeTime",e.target.value)} style={numStyle}/>
+            </div>
+            <div>
+              <Lbl style={{ marginBottom:6, fontSize:10 }}>SCHLAFEN</Lbl>
+              <input type="time" value={draft.sleepTime||""} onChange={e=>set("sleepTime",e.target.value)} style={numStyle}/>
+            </div>
+          </div>
+          <div>
+            <Lbl style={{ marginBottom:6, fontSize:10 }}>MAHLZEITEN-MUSTER</Lbl>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6 }}>
+              {[
+                {id:"3normal", label:"🍳 3× normal"},
+                {id:"5small",  label:"🥗 5× klein"},
+                {id:"if168",   label:"⏱ IF 16:8"},
+                {id:"ifother", label:"⏱ IF anders"},
+              ].map(o=>{
+                const sel = (draft.mealPattern||"3normal")===o.id;
+                return (
+                  <button key={o.id} onClick={()=>set("mealPattern",o.id)} style={{
+                    background:sel?T.acc+"22":"transparent",
+                    border:`1px solid ${sel?T.acc:T.borderS}`, borderRadius:8,
+                    padding:"8px 6px", color:sel?T.text:T.muted,
+                    fontFamily:T.serif, fontSize:11, cursor:"pointer", transition:"all .2s"
+                  }}>{o.label}</button>
+                );
+              })}
+            </div>
+          </div>
+        </Card>
+
+        {/* GESUNDHEIT */}
+        <Card style={{ marginBottom:12 }}>
+          <Lbl style={{ marginBottom:10 }}>GESUNDHEIT</Lbl>
+          <div style={{ marginBottom:12 }}>
+            <Lbl style={{ marginBottom:6, fontSize:10 }}>ALLERGIEN (LEBENSWICHTIG)</Lbl>
+            <input value={draft.allergies||""} onChange={e=>set("allergies",e.target.value)}
+              placeholder="z.B. Erdnüsse, Penicillin" style={inputStyle}/>
+          </div>
+          <div>
+            <Lbl style={{ marginBottom:6, fontSize:10 }}>NOTIZEN (BESCHWERDEN, MEDIKAMENTE, BEOBACHTUNGEN)</Lbl>
+            <textarea value={draft.healthNotes||""} onChange={e=>set("healthNotes",e.target.value)}
+              placeholder='z.B. "Knieprobleme rechts", "L-Thyroxin morgens", "Reflux abends"'
+              rows={3}
+              style={{...inputStyle, resize:"vertical", minHeight:60, fontFamily:T.serif, fontStyle:"italic"}}/>
+          </div>
+        </Card>
+
+        {/* TAGESZIELE */}
+        <Card style={{ marginBottom:12 }}>
+          <Lbl style={{ marginBottom:10 }}>TAGESZIELE</Lbl>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+            <div>
+              <Lbl style={{ marginBottom:6, fontSize:10 }}>WASSER (L)</Lbl>
+              <input type="number" step="0.25" min="0.5" max="5"
+                value={draft.waterTargetL ?? 2}
+                onChange={e=>set("waterTargetL", parseFloat(e.target.value)||2)}
+                style={numStyle}/>
+            </div>
+            <div>
+              <Lbl style={{ marginBottom:6, fontSize:10 }}>SCHLAF (H)</Lbl>
+              <input type="number" step="0.5" min="4" max="12"
+                value={draft.sleepTargetH ?? 7}
+                onChange={e=>set("sleepTargetH", parseFloat(e.target.value)||7)}
+                style={numStyle}/>
+            </div>
+          </div>
+        </Card>
+
+        {/* SPORT */}
+        <Card style={{ marginBottom:12 }}>
+          <Lbl style={{ marginBottom:10 }}>SPORT-VORLIEBEN (KOMMAGETRENNT)</Lbl>
+          <input value={draft.sportsPreferred||""} onChange={e=>set("sportsPreferred",e.target.value)}
+            placeholder="z.B. Yoga, Laufen, Krafttraining, Schwimmen" style={inputStyle}/>
+        </Card>
+
         <Card style={{ marginBottom:12 }}>
           <Lbl style={{ marginBottom:10 }}>KÜCHE</Lbl>
           <div style={{ marginBottom:12 }}>
             <Lbl style={{ marginBottom:6, fontSize:10 }}>VORLIEBEN (KOMMAGETRENNT)</Lbl>
             <input value={draft.preferences||""} onChange={e=>set("preferences",e.target.value)} placeholder="z.B. Mediterran, Proteinreich" style={inputStyle}/>
           </div>
-          <div>
+          <div style={{ marginBottom:12 }}>
             <Lbl style={{ marginBottom:6, fontSize:10 }}>INTOLERANZEN (KOMMAGETRENNT)</Lbl>
             <input value={draft.intolerances||""} onChange={e=>set("intolerances",e.target.value)} placeholder="z.B. Laktose, Gluten" style={inputStyle}/>
           </div>
+          <div style={{ marginBottom:12 }}>
+            <Lbl style={{ marginBottom:6, fontSize:10 }}>WIE VIEL ZEIT FÜRS KOCHEN?</Lbl>
+            <div style={{ display:"flex", gap:6 }}>
+              {[
+                {id:"quick", label:"⚡ ≤15min"},
+                {id:"medium", label:"⏱ 15-30min"},
+                {id:"long", label:"🍲 30min+"},
+              ].map(o=>{
+                const sel = (draft.cookTime||"medium")===o.id;
+                return (
+                  <button key={o.id} onClick={()=>set("cookTime",o.id)} style={{
+                    flex:1, background:sel?T.acc+"22":"transparent",
+                    border:`1px solid ${sel?T.acc:T.borderS}`, borderRadius:8,
+                    padding:"8px 4px", color:sel?T.text:T.muted,
+                    fontFamily:T.serif, fontSize:11, cursor:"pointer", transition:"all .2s"
+                  }}>{o.label}</button>
+                );
+              })}
+            </div>
+          </div>
+          <div>
+            <Lbl style={{ marginBottom:6, fontSize:10 }}>KÜCHEN-AUSSTATTUNG</Lbl>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+              {["Pfanne","Ofen","Mikrowelle","Mixer","Airfryer","Reiskocher","Wok","Thermomix"].map(item=>{
+                const sel = (Array.isArray(draft.kitchenEquipment)?draft.kitchenEquipment:[]).includes(item);
+                return (
+                  <button key={item} onClick={()=>toggleArr("kitchenEquipment", item)} style={{
+                    background:sel?T.acc+"22":"transparent",
+                    border:`1px solid ${sel?T.acc:T.borderS}`, borderRadius:18,
+                    padding:"5px 12px", color:sel?T.text:T.muted,
+                    fontFamily:T.serif, fontSize:11, cursor:"pointer",
+                    fontStyle:sel?"normal":"italic", transition:"all .2s"
+                  }}>{item}</button>
+                );
+              })}
+            </div>
+          </div>
+        </Card>
+
+        {/* ÜBER MICH – frei text */}
+        <Card style={{ marginBottom:12 }}>
+          <Lbl style={{ marginBottom:10 }}>ÜBER MICH (FREITEXT)</Lbl>
+          <textarea value={draft.about||""} onChange={e=>set("about",e.target.value)}
+            placeholder='Alles, was EYLA über dich wissen sollte – Persönlichkeit, Lebenssituation, Werte, was dir wichtig ist...'
+            rows={4}
+            style={{...inputStyle, resize:"vertical", minHeight:80, fontFamily:T.serif, fontStyle:"italic", lineHeight:1.5}}/>
         </Card>
 
         <div style={{ display:"flex", gap:10, marginTop:18 }}>
@@ -5438,12 +5737,92 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
         </div>
       </Card>
 
-      {/* KÜCHE – Vorlieben + Intoleranzen kombiniert */}
-      {((profile.preferences?.length>0) || (profile.intolerances?.length>0)) && (
+      {/* BERUF & ALLTAG */}
+      {(profile.occupation || profile.jobActivity) && (
+        <Card style={{ marginBottom:12 }}>
+          <Lbl style={{ marginBottom:14 }}>BERUF & ALLTAG</Lbl>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
+            {profile.occupation && (
+              <div>
+                <Lbl style={{ marginBottom:3, fontSize:10 }}>Beruf</Lbl>
+                <div style={{ color:T.text, fontSize:14 }}>{profile.occupation}</div>
+              </div>
+            )}
+            {profile.jobActivity && (
+              <div>
+                <Lbl style={{ marginBottom:3, fontSize:10 }}>Aktivität</Lbl>
+                <div style={{ color:T.text, fontSize:14 }}>
+                  {profile.jobActivity==="sitzend"?"🪑 Sitzend":profile.jobActivity==="aktiv"?"💪 Aktiv":"🚶 Gemischt"}
+                </div>
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
+
+      {/* TAGESRHYTHMUS */}
+      {(profile.wakeTime || profile.sleepTime || profile.mealPattern) && (
+        <Card style={{ marginBottom:12 }}>
+          <Lbl style={{ marginBottom:14 }}>TAGESRHYTHMUS</Lbl>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:14 }}>
+            {profile.wakeTime && (
+              <div>
+                <Lbl style={{ marginBottom:3, fontSize:10 }}>Auf</Lbl>
+                <div style={{ color:T.text, fontSize:14, fontFamily:T.mono }}>🌅 {profile.wakeTime}</div>
+              </div>
+            )}
+            {profile.sleepTime && (
+              <div>
+                <Lbl style={{ marginBottom:3, fontSize:10 }}>Bett</Lbl>
+                <div style={{ color:T.text, fontSize:14, fontFamily:T.mono }}>🌙 {profile.sleepTime}</div>
+              </div>
+            )}
+            {profile.mealPattern && (
+              <div>
+                <Lbl style={{ marginBottom:3, fontSize:10 }}>Pattern</Lbl>
+                <div style={{ color:T.text, fontSize:13 }}>
+                  {profile.mealPattern==="3normal"?"🍳 3× normal":
+                   profile.mealPattern==="5small"?"🥗 5× klein":
+                   profile.mealPattern==="if168"?"⏱ IF 16:8":
+                   profile.mealPattern==="ifother"?"⏱ IF anders":"–"}
+                </div>
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
+
+      {/* GESUNDHEIT */}
+      {((profile.allergies?.length>0) || profile.healthNotes) && (
+        <Card style={{ marginBottom:12 }}>
+          <Lbl style={{ marginBottom:14 }}>GESUNDHEIT</Lbl>
+          {profile.allergies?.length>0 && (
+            <div style={{ marginBottom: profile.healthNotes ? 14 : 0 }}>
+              <Lbl style={{ marginBottom:6, fontSize:10 }}>⚠ ALLERGIEN</Lbl>
+              <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+                {profile.allergies.map((a,i)=>(
+                  <span key={i} style={{ background:T.red+"22",border:`1px solid ${T.red}55`,borderRadius:18,padding:"3px 12px",fontSize:11,color:T.red,fontFamily:T.mono }}>{a}</span>
+                ))}
+              </div>
+            </div>
+          )}
+          {profile.healthNotes && (
+            <div>
+              <Lbl style={{ marginBottom:6, fontSize:10 }}>NOTIZEN</Lbl>
+              <div style={{ color:T.text, fontSize:13, fontFamily:T.serif, fontStyle:"italic", lineHeight:1.6, whiteSpace:"pre-wrap" }}>
+                {profile.healthNotes}
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* KÜCHE – Vorlieben + Intoleranzen + Kochzeit + Equipment */}
+      {((profile.preferences?.length>0) || (profile.intolerances?.length>0) || profile.cookTime || (profile.kitchenEquipment?.length>0)) && (
         <Card style={{ marginBottom:12 }}>
           <Lbl style={{ marginBottom:14 }}>KÜCHE</Lbl>
           {profile.preferences?.length>0 && (
-            <div style={{ marginBottom: profile.intolerances?.length>0 ? 14 : 0 }}>
+            <div style={{ marginBottom: 14 }}>
               <Lbl style={{ marginBottom:6, fontSize:10 }}>VORLIEBEN</Lbl>
               <div style={{ display:"flex",flexWrap:"wrap",gap:6 }}>
                 {profile.preferences.map((p,i)=>(
@@ -5453,7 +5832,7 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
             </div>
           )}
           {profile.intolerances?.length>0 && (
-            <div>
+            <div style={{ marginBottom: 14 }}>
               <Lbl style={{ marginBottom:6, fontSize:10 }}>INTOLERANZEN</Lbl>
               <div style={{ display:"flex",flexWrap:"wrap",gap:6 }}>
                 {profile.intolerances.map((p,i)=>(
@@ -5462,6 +5841,46 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
               </div>
             </div>
           )}
+          {profile.cookTime && (
+            <div style={{ marginBottom: (profile.kitchenEquipment?.length>0) ? 14 : 0 }}>
+              <Lbl style={{ marginBottom:6, fontSize:10 }}>KOCHZEIT</Lbl>
+              <div style={{ color:T.text, fontSize:13 }}>
+                {profile.cookTime==="quick"?"⚡ ≤15min":profile.cookTime==="long"?"🍲 30min+":"⏱ 15-30min"}
+              </div>
+            </div>
+          )}
+          {profile.kitchenEquipment?.length>0 && (
+            <div>
+              <Lbl style={{ marginBottom:6, fontSize:10 }}>AUSSTATTUNG</Lbl>
+              <div style={{ display:"flex",flexWrap:"wrap",gap:6 }}>
+                {profile.kitchenEquipment.map((p,i)=>(
+                  <span key={i} style={{ background:T.bg2,border:`1px solid ${T.borderS}`,borderRadius:18,padding:"3px 12px",fontSize:11,color:T.mid,fontFamily:T.mono }}>{p}</span>
+                ))}
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* SPORT */}
+      {profile.sportsPreferred?.length>0 && (
+        <Card style={{ marginBottom:12 }}>
+          <Lbl style={{ marginBottom:14 }}>SPORT-VORLIEBEN</Lbl>
+          <div style={{ display:"flex",flexWrap:"wrap",gap:6 }}>
+            {profile.sportsPreferred.map((p,i)=>(
+              <span key={i} style={{ background:T.green+"18",border:`1px solid ${T.green}33`,borderRadius:18,padding:"3px 12px",fontSize:11,color:T.green,fontFamily:T.mono }}>{p}</span>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {/* ÜBER MICH (Freitext) */}
+      {profile.about && (
+        <Card style={{ marginBottom:12 }}>
+          <Lbl style={{ marginBottom:10 }}>ÜBER MICH</Lbl>
+          <div style={{ color:T.text, fontSize:13, fontFamily:T.serif, fontStyle:"italic", lineHeight:1.6, whiteSpace:"pre-wrap" }}>
+            {profile.about}
+          </div>
         </Card>
       )}
 
@@ -5632,17 +6051,6 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
         </Card>
       )}
 
-      {/* EINSTELLUNGEN – Sektion */}
-      <div style={{ fontFamily:T.mono, fontSize:9, color:T.muted, letterSpacing:2, margin:"22px 4px 10px", display:"flex", alignItems:"center", gap:8 }}>
-        <span>EINSTELLUNGEN</span>
-        <div style={{ flex:1, height:1, background:T.borderS, opacity:.5 }}/>
-      </div>
-
-      {/* Voice-Settings */}
-      <VoiceSettings/>
-
-      {profile.apps?.length>0&&<Card style={{ marginBottom:12 }}><Lbl style={{ marginBottom:10 }}>VERBUNDENE APPS</Lbl><div style={{ display:"flex",flexWrap:"wrap",gap:7 }}>{profile.apps.map((a,i)=><div key={i} style={{ display:"flex",alignItems:"center",gap:6,background:T.bg2,border:`1px solid ${T.borderS}`,borderRadius:8,padding:"5px 12px" }}><div style={{ width:5,height:5,borderRadius:"50%",background:T.green,boxShadow:`0 0 5px ${T.green}` }}/><span style={{ color:T.mid,fontFamily:T.mono,fontSize:10 }}>{a}</span></div>)}</div></Card>}
-
       {/* DATEN – Sektion */}
       <div style={{ fontFamily:T.mono, fontSize:9, color:T.muted, letterSpacing:2, margin:"22px 4px 10px", display:"flex", alignItems:"center", gap:8 }}>
         <span>DATEN</span>
@@ -5711,6 +6119,16 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
             }}/>
         </div>
       </Card>
+
+      {/* EYLA – Sektion (app/agent settings, kommen ans Ende weil es bei Profil hauptsächlich um den User geht) */}
+      <div style={{ fontFamily:T.mono, fontSize:9, color:T.muted, letterSpacing:2, margin:"22px 4px 10px", display:"flex", alignItems:"center", gap:8 }}>
+        <span>EYLA · STIMME & APPS</span>
+        <div style={{ flex:1, height:1, background:T.borderS, opacity:.5 }}/>
+      </div>
+
+      <VoiceSettings/>
+
+      {profile.apps?.length>0&&<Card style={{ marginBottom:12 }}><Lbl style={{ marginBottom:10 }}>VERBUNDENE APPS</Lbl><div style={{ display:"flex",flexWrap:"wrap",gap:7 }}>{profile.apps.map((a,i)=><div key={i} style={{ display:"flex",alignItems:"center",gap:6,background:T.bg2,border:`1px solid ${T.borderS}`,borderRadius:8,padding:"5px 12px" }}><div style={{ width:5,height:5,borderRadius:"50%",background:T.green,boxShadow:`0 0 5px ${T.green}` }}/><span style={{ color:T.mid,fontFamily:T.mono,fontSize:10 }}>{a}</span></div>)}</div></Card>}
 
       <button onClick={onReset} style={{ background:"transparent",border:`1px solid ${T.borderS}`,borderRadius:10,padding:"9px 18px",color:T.muted,fontFamily:T.serif,fontSize:12,cursor:"pointer",fontStyle:"italic" }}>Profil zurücksetzen</button>
     </div>
