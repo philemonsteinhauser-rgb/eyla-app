@@ -588,11 +588,31 @@ ${planWeekStr || "  Kein Plan vorhanden."}
 EINKAUFSLISTE (offen):
 ${shoppingStr}
 
-AKTIONEN: Du hast Tools um direkt im Tagebuch des Users Sachen zu tun:
-- add_meal, set_water/add_water, set_sleep, set_energy → Tageslog pflegen
+${(()=>{
+  // Todos aus localStorage einlesen (synchron, im selben Frame wo buildPrompt läuft)
+  let todos = [];
+  try { todos = JSON.parse(localStorage.getItem("eyla_todos_v1")||"[]"); } catch {}
+  const open = todos.filter(t => t.status === "open");
+  if (open.length === 0) return "TO-DOS: keine offenen Aufgaben.";
+  const today = open.filter(t => (t.priority||"today")==="today");
+  const week  = open.filter(t => t.priority==="week");
+  const later = open.filter(t => t.priority==="later");
+  const fmt = arr => arr.map(t=>`    • ${t.text}`).join("\n");
+  let s = "TO-DOS (offen):";
+  if (today.length) s += `\n  Heute (${today.length}):\n${fmt(today)}`;
+  if (week.length)  s += `\n  Woche (${week.length}):\n${fmt(week)}`;
+  if (later.length && later.length <= 8) s += `\n  Später (${later.length}):\n${fmt(later)}`;
+  else if (later.length) s += `\n  Später: ${later.length} weitere`;
+  return s;
+})()}
+
+AKTIONEN: Du hast Tools um direkt im Leben des Users Sachen zu tun:
+- add_meal, set_water/add_water, set_sleep, set_energy, set_weight, add_workout → Tageslog pflegen
+- toggle_habit → Gewohnheiten abhaken
 - add_event → Termin in den Kalender
 - add_shopping_item, check_shopping_item → Einkaufsliste pflegen
-Wenn der User sagt "trag X ein" / "ich hab Y gegessen" / "noch 0.5L Wasser" / "Termin morgen 14 Uhr Sport" / "Eier auf die Liste" – nutze die Tools direkt. Kurz bestätigen, nicht ausschweifen. Wenn unklar: nachfragen statt raten.
+- add_todo, complete_todo, remove_todo, set_todo_priority → Aufgaben verwalten
+Wenn der User sagt "trag X ein" / "ich hab Y gegessen" / "noch 0.5L Wasser" / "Termin morgen 14 Uhr Sport" / "Eier auf die Liste" / "ich muss noch Mama anrufen" – nutze die Tools direkt. Kurz bestätigen, nicht ausschweifen. Wenn unklar: nachfragen statt raten.
 
 WICHTIGE REGEL für add_meal: Zahlen vom User wie "200g", "500ml", "2 Scheiben" sind MENGEN, NIEMALS Kalorien!
 Beispiele:
@@ -2226,6 +2246,373 @@ function isoDateKey(d) {
   return `${y}-${m}-${day}`;
 }
 
+// ─── TODO SCREEN ──────────────────────────────────────────────────────────────
+// Persönliche Aufgaben mit 3 Buckets: heute / woche / später.
+// Quick-Add per Text oder Voice. EYLA kann via Tools manipulieren (in executeTool).
+// Speicherung: eyla_todos_v1 (Array von Todo-Objekten)
+
+function loadTodos() {
+  try { const raw = localStorage.getItem("eyla_todos_v1"); return raw ? JSON.parse(raw) : []; } catch { return []; }
+}
+function saveTodos(arr) {
+  try { localStorage.setItem("eyla_todos_v1", JSON.stringify(arr)); } catch {}
+}
+function makeTodo(text, priority="today") {
+  return {
+    id: `t_${Date.now()}_${Math.random().toString(36).slice(2,8)}`,
+    text: String(text||"").trim(),
+    priority,                          // "today" | "week" | "later"
+    status: "open",                    // "open" | "done"
+    createdAt: new Date().toISOString(),
+    completedAt: null,
+    notes: "",
+  };
+}
+
+const TODO_BUCKETS = [
+  { id:"today",  label:"Heute",       color:"#b09c7a" },
+  { id:"week",   label:"Diese Woche", color:"#6b8e84" },
+  { id:"later",  label:"Später",      color:"#7a7a78" },
+];
+
+function TodoScreen({ profile }) {
+  const [todos, setTodos] = useState([]);
+  const [input, setInput] = useState("");
+  const [filter, setFilter] = useState("open"); // "open" | "done" | "all"
+  const [showDone, setShowDone] = useState(false);
+
+  useEffect(() => {
+    setTodos(loadTodos());
+    // Live-Sync wenn EYLA via Tool was ändert (anderes Tab oder gleiche App)
+    function onStorage(e) { if (e.key === "eyla_todos_v1") setTodos(loadTodos()); }
+    function onCustom() { setTodos(loadTodos()); }
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("eyla_todos_changed", onCustom);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("eyla_todos_changed", onCustom);
+    };
+  }, []);
+
+  function updateAll(updater) {
+    setTodos(prev => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      saveTodos(next);
+      return next;
+    });
+  }
+
+  function addTodo(text, priority="today") {
+    const t = String(text||"").trim();
+    if (!t) return;
+    updateAll(prev => [makeTodo(t, priority), ...prev]);
+    haptic(20);
+  }
+  function toggleDone(id) {
+    updateAll(prev => prev.map(t => t.id===id ? {
+      ...t,
+      status: t.status==="done" ? "open" : "done",
+      completedAt: t.status==="done" ? null : new Date().toISOString(),
+    } : t));
+    haptic(15);
+  }
+  function removeTodo(id) {
+    updateAll(prev => prev.filter(t => t.id !== id));
+  }
+  function setPriority(id, priority) {
+    updateAll(prev => prev.map(t => t.id===id ? {...t, priority} : t));
+    haptic(10);
+  }
+  function editText(id, text) {
+    updateAll(prev => prev.map(t => t.id===id ? {...t, text:String(text).trim()} : t));
+  }
+
+  // Voice-Quick-Add
+  const voice = useVoice((text) => {
+    if (text) {
+      setInput(text);
+      // direkt hinzufügen? Lieber im Input lassen, User bestätigt
+    }
+  });
+
+  function handleSubmit() {
+    if (!input.trim()) return;
+    addTodo(input, "today");
+    setInput("");
+  }
+
+  const openTodos = todos.filter(t => t.status === "open");
+  const doneTodos = todos.filter(t => t.status === "done");
+  const byBucket = (b) => openTodos.filter(t => (t.priority||"today") === b);
+
+  const stats = {
+    today: byBucket("today").length,
+    week: byBucket("week").length,
+    later: byBucket("later").length,
+    done: doneTodos.length,
+  };
+
+  return (
+    <div>
+      <div style={{ display:"flex", alignItems:"center", gap:18, marginBottom:24 }}>
+        <EylaOrb size={48}/>
+        <div style={{ flex:1, minWidth:0 }}>
+          <Lbl style={{ marginBottom:5 }}>TO-DO</Lbl>
+          <h2 style={{ fontSize:22, fontWeight:300, color:T.text, margin:0 }}>Was steht an?</h2>
+          <p style={{ color:T.muted, fontSize:11, fontStyle:"italic", fontFamily:T.serif, margin:"4px 0 0" }}>
+            {stats.today + stats.week + stats.later} offen · {stats.today} heute · {stats.done} erledigt
+          </p>
+        </div>
+      </div>
+
+      {/* Quick-Add Input mit Voice */}
+      <Card style={{ marginBottom:16 }}>
+        <div style={{ display:"flex", gap:8 }}>
+          <input
+            value={input}
+            onChange={e=>setInput(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&handleSubmit()}
+            placeholder="Aufgabe hinzufügen…"
+            style={{
+              flex:1, background:T.bg, border:`1px solid ${T.borderS}`, borderRadius:10,
+              padding:"11px 14px", color:T.text, fontSize:14, fontFamily:T.serif,
+              outline:"none", fontStyle:"italic"
+            }}
+          />
+          {voice.supported && (
+            <button onClick={voice.toggle} style={{
+              background: voice.listening ? T.green+"33" : T.acc+"18",
+              border: `1px solid ${voice.listening ? T.green : T.acc}55`,
+              borderRadius:10, padding:"0 14px", cursor:"pointer",
+              color: voice.listening ? T.green : T.acc, fontSize:18,
+              animation: voice.listening ? "pulse 1.2s ease-in-out infinite" : "none"
+            }} title="Voice-Eingabe">🎙</button>
+          )}
+          <button onClick={handleSubmit} disabled={!input.trim()} style={{
+            background: input.trim() ? `linear-gradient(135deg,${T.dim},${T.acc})` : "transparent",
+            border: input.trim() ? "none" : `1px solid ${T.borderS}`,
+            borderRadius:10, padding:"0 18px",
+            color: input.trim() ? T.bg : T.muted,
+            fontFamily:T.serif, fontSize:14, fontWeight:700,
+            cursor: input.trim() ? "pointer" : "default"
+          }}>+</button>
+        </div>
+        <style>{`@keyframes pulse { 0%,100% {transform:scale(1);opacity:1} 50% {transform:scale(1.08);opacity:.7}}`}</style>
+      </Card>
+
+      {/* Buckets */}
+      {TODO_BUCKETS.map(b => {
+        const items = byBucket(b.id);
+        return (
+          <div key={b.id} style={{ marginBottom:18 }}>
+            <div style={{
+              display:"flex", alignItems:"center", gap:8, margin:"4px 4px 8px",
+              fontFamily:T.mono, fontSize:9, color:b.color, letterSpacing:2
+            }}>
+              <span>{b.label.toUpperCase()}</span>
+              <span style={{ color:T.muted }}>· {items.length}</span>
+              <div style={{ flex:1, height:1, background:`${b.color}33` }}/>
+            </div>
+            {items.length === 0 ? (
+              <p style={{ color:T.muted, fontSize:11, fontStyle:"italic", fontFamily:T.serif, padding:"4px 8px 8px", margin:0 }}>
+                {b.id === "today" ? "Nichts für heute. Frei oder leer?" : b.id === "week" ? "Keine Wochen-Aufgaben." : "Backlog leer."}
+              </p>
+            ) : (
+              <Card>
+                {items.map((t, i) => (
+                  <TodoRow key={t.id} todo={t} isLast={i===items.length-1}
+                    onToggle={()=>toggleDone(t.id)}
+                    onDelete={()=>removeTodo(t.id)}
+                    onPriority={(p)=>setPriority(t.id, p)}
+                    onEdit={(text)=>editText(t.id, text)}
+                  />
+                ))}
+              </Card>
+            )}
+          </div>
+        );
+      })}
+
+      {/* Erledigt-Sektion (collapsed) */}
+      {doneTodos.length > 0 && (
+        <div style={{ marginTop:18 }}>
+          <button onClick={()=>setShowDone(s=>!s)} style={{
+            width:"100%", background:"transparent", border:"none",
+            display:"flex", alignItems:"center", gap:8, padding:"6px 4px",
+            fontFamily:T.mono, fontSize:9, color:T.muted, letterSpacing:2,
+            cursor:"pointer", textAlign:"left"
+          }}>
+            <span>{showDone ? "▾" : "▸"} ERLEDIGT · {doneTodos.length}</span>
+            <div style={{ flex:1, height:1, background:T.borderS, opacity:.5 }}/>
+            {!showDone && doneTodos.length >= 5 && (
+              <span style={{
+                color:T.muted, fontSize:9, fontStyle:"italic", fontFamily:T.serif,
+                cursor:"pointer", padding:"0 4px"
+              }} onClick={(e)=>{
+                e.stopPropagation();
+                if (confirm(`${doneTodos.length} erledigte Todos löschen?`)) {
+                  updateAll(prev => prev.filter(t => t.status !== "done"));
+                }
+              }}>aufräumen</span>
+            )}
+          </button>
+          {showDone && (
+            <Card style={{ marginTop:6 }}>
+              {doneTodos.slice(0, 30).map((t, i) => (
+                <TodoRow key={t.id} todo={t} isLast={i===Math.min(29,doneTodos.length-1)}
+                  onToggle={()=>toggleDone(t.id)}
+                  onDelete={()=>removeTodo(t.id)}
+                  onPriority={(p)=>setPriority(t.id, p)}
+                  onEdit={(text)=>editText(t.id, text)}
+                />
+              ))}
+            </Card>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TodoRow({ todo, isLast, onToggle, onDelete, onPriority, onEdit }) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(todo.text);
+  const [showPicker, setShowPicker] = useState(false);
+  // Swipe-to-delete state
+  const [swipeX, setSwipeX] = useState(0);
+  const [swiping, setSwiping] = useState(false);
+  const startXRef = useRef(0);
+  const startYRef = useRef(0);
+  const horizontalRef = useRef(null);
+  const SWIPE_TH = 90;
+
+  function handleTouchStart(e) {
+    if (editing) return;
+    const t = e.touches[0];
+    startXRef.current = t.clientX; startYRef.current = t.clientY;
+    horizontalRef.current = null;
+    setSwiping(true);
+  }
+  function handleTouchMove(e) {
+    if (editing || !swiping) return;
+    const t = e.touches[0];
+    const dx = t.clientX - startXRef.current;
+    const dy = t.clientY - startYRef.current;
+    if (horizontalRef.current === null) {
+      if (Math.abs(dx) > 8 || Math.abs(dy) > 8) horizontalRef.current = Math.abs(dx) > Math.abs(dy);
+      else return;
+    }
+    if (!horizontalRef.current) return;
+    if (dx < 0) { setSwipeX(Math.max(-200, dx)); if (e.cancelable) e.preventDefault(); }
+    else setSwipeX(0);
+  }
+  function handleTouchEnd() {
+    setSwiping(false);
+    if (swipeX < -SWIPE_TH) {
+      setSwipeX(-400);
+      haptic(20);
+      setTimeout(()=>onDelete(), 180);
+    } else setSwipeX(0);
+    horizontalRef.current = null;
+  }
+
+  function saveEdit() {
+    if (text.trim() && text.trim() !== todo.text) onEdit(text.trim());
+    setEditing(false);
+  }
+
+  const done = todo.status === "done";
+
+  return (
+    <div style={{
+      position:"relative", overflow:"hidden",
+      borderBottom: isLast ? "none" : `1px solid ${T.border}`
+    }}>
+      {/* Lösch-Hintergrund */}
+      <div style={{
+        position:"absolute", inset:0, display:"flex", alignItems:"center", justifyContent:"flex-end",
+        paddingRight:18, background:`linear-gradient(90deg, transparent, ${T.red}33)`,
+        opacity: Math.abs(swipeX) > 4 ? 1 : 0, transition: swiping ? "none" : "opacity .15s",
+        pointerEvents:"none"
+      }}>
+        <span style={{ fontFamily:T.mono, fontSize:11, color:T.red, letterSpacing:2 }}>
+          {Math.abs(swipeX) >= SWIPE_TH ? "↞ LOSLASSEN" : "← LÖSCHEN"}
+        </span>
+      </div>
+
+      <div
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        style={{
+          display:"flex", alignItems:"center", gap:10, padding:"10px 0",
+          background:T.bg,
+          transform:`translateX(${swipeX}px)`,
+          transition: swiping ? "none" : "transform .2s cubic-bezier(.2,.8,.2,1)"
+        }}>
+        {/* Checkbox */}
+        <button onClick={onToggle} style={{
+          width:22, height:22, borderRadius:6,
+          border:`1.5px solid ${done ? T.acc : T.borderS}`,
+          background: done ? T.acc+"33" : "transparent",
+          cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center",
+          color:T.acc, fontSize:13, padding:0, flexShrink:0, transition:"all .15s"
+        }}>{done ? "✓" : ""}</button>
+
+        {/* Text */}
+        <div style={{ flex:1, minWidth:0 }} onClick={()=>{ if (!done && !editing) setEditing(true); }}>
+          {editing ? (
+            <input value={text}
+              onChange={e=>setText(e.target.value)}
+              onKeyDown={e=>{ if (e.key==="Enter") saveEdit(); if (e.key==="Escape") { setText(todo.text); setEditing(false); }}}
+              onBlur={saveEdit}
+              autoFocus
+              style={{
+                width:"100%", background:T.bg, border:`1px solid ${T.acc}55`, borderRadius:6,
+                padding:"4px 8px", color:T.text, fontSize:14, fontFamily:T.serif, fontStyle:"italic", outline:"none"
+              }}/>
+          ) : (
+            <div style={{
+              color: done ? T.muted : T.text, fontSize:14,
+              textDecoration: done ? "line-through" : "none",
+              fontStyle: done ? "italic" : "normal",
+              cursor: done ? "default" : "text"
+            }}>{todo.text}</div>
+          )}
+        </div>
+
+        {/* Priority Picker */}
+        {!done && !editing && (
+          <div style={{ position:"relative" }}>
+            <button onClick={(e)=>{ e.stopPropagation(); setShowPicker(s=>!s); }} style={{
+              background:"transparent", border:`1px solid ${T.borderS}`, borderRadius:6,
+              padding:"2px 8px", color:T.muted, fontFamily:T.mono, fontSize:10,
+              cursor:"pointer", letterSpacing:1
+            }}>{TODO_BUCKETS.find(b=>b.id===(todo.priority||"today"))?.label.toUpperCase().slice(0,5)||"–"}</button>
+            {showPicker && (
+              <div onMouseLeave={()=>setShowPicker(false)} style={{
+                position:"absolute", right:0, top:"110%", zIndex:10,
+                background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:8,
+                padding:4, display:"flex", flexDirection:"column", gap:2,
+                boxShadow:"0 4px 14px rgba(0,0,0,.4)"
+              }}>
+                {TODO_BUCKETS.map(b => (
+                  <button key={b.id} onClick={(e)=>{ e.stopPropagation(); onPriority(b.id); setShowPicker(false); }} style={{
+                    background: todo.priority===b.id ? b.color+"22" : "transparent",
+                    border:"none", borderRadius:6, padding:"5px 12px",
+                    color: todo.priority===b.id ? T.text : T.muted, fontFamily:T.serif, fontSize:12,
+                    cursor:"pointer", textAlign:"left", whiteSpace:"nowrap"
+                  }}>{b.label}</button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
   const [newTitle, setNewTitle] = useState("");
   const [newTime, setNewTime] = useState("");
@@ -3184,6 +3571,48 @@ const EYLA_TOOLS = [
     }
   },
   {
+    name: "add_todo",
+    description: "Trag eine Aufgabe / Todo ein. Wenn User sagt 'ich muss noch X', 'denk dran dass ich Y mache', 'erinnere mich an Z' – nutze dieses Tool. Priorität entscheiden: 'today' für heute/akut, 'week' für diese Woche, 'later' für Backlog/irgendwann.",
+    input_schema: {
+      type: "object",
+      properties: {
+        text: { type: "string", description: "Die Aufgabe als kurzer prägnanter Text" },
+        priority: { type: "string", description: "today | week | later. Default today." }
+      },
+      required: ["text"]
+    }
+  },
+  {
+    name: "complete_todo",
+    description: "Hak ein Todo als erledigt ab. Sucht per Teilstring-Match.",
+    input_schema: {
+      type: "object",
+      properties: { match: { type: "string", description: "Text-Teil zum Matchen (z.B. 'Mama anrufen' findet 'Mama anrufen wegen Weihnachten')" } },
+      required: ["match"]
+    }
+  },
+  {
+    name: "remove_todo",
+    description: "Lösche ein Todo komplett (nicht nur abhaken). Sucht per Teilstring.",
+    input_schema: {
+      type: "object",
+      properties: { match: { type: "string", description: "Text-Teil zum Matchen" } },
+      required: ["match"]
+    }
+  },
+  {
+    name: "set_todo_priority",
+    description: "Verschiebe ein Todo in ein anderes Bucket (today/week/later).",
+    input_schema: {
+      type: "object",
+      properties: {
+        match: { type: "string", description: "Text-Teil zum Matchen" },
+        priority: { type: "string", description: "today | week | later" }
+      },
+      required: ["match", "priority"]
+    }
+  },
+  {
     name: "add_event",
     description: "Trag einen Termin in den Kalender ein. Wenn kein Datum angegeben wird, ist es heute.",
     input_schema: {
@@ -3650,6 +4079,53 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
           const done = input.done === false ? false : true;
           setLog(l => ({ ...l, habits: { ...(l.habits||{}), [habit.id]: done }}));
           return `${done ? "✓" : "✗"} ${habit.name}`;
+        }
+        case "add_todo": {
+          const text = String(input.text||"").trim();
+          if (!text) return "add_todo: text fehlt";
+          const priority = ["today","week","later"].includes(input.priority) ? input.priority : "today";
+          const newTodo = makeTodo(text, priority);
+          const arr = loadTodos();
+          saveTodos([newTodo, ...arr]);
+          window.dispatchEvent(new Event("eyla_todos_changed"));
+          const bucketLabel = priority==="today"?"Heute":priority==="week"?"Diese Woche":"Später";
+          return `📝 To-do hinzugefügt: "${text}" → ${bucketLabel}`;
+        }
+        case "complete_todo": {
+          const q = String(input.match||"").toLowerCase();
+          if (!q) return "complete_todo: match fehlt";
+          const arr = loadTodos();
+          const idx = arr.findIndex(t => t.status==="open" && t.text.toLowerCase().includes(q));
+          if (idx < 0) return `Kein offenes Todo mit "${input.match}" gefunden.`;
+          arr[idx] = { ...arr[idx], status:"done", completedAt:new Date().toISOString() };
+          saveTodos(arr);
+          window.dispatchEvent(new Event("eyla_todos_changed"));
+          return `✓ Erledigt: "${arr[idx].text}"`;
+        }
+        case "remove_todo": {
+          const q = String(input.match||"").toLowerCase();
+          if (!q) return "remove_todo: match fehlt";
+          const arr = loadTodos();
+          const idx = arr.findIndex(t => t.text.toLowerCase().includes(q));
+          if (idx < 0) return `Kein Todo mit "${input.match}" gefunden.`;
+          const removed = arr[idx].text;
+          arr.splice(idx, 1);
+          saveTodos(arr);
+          window.dispatchEvent(new Event("eyla_todos_changed"));
+          return `🗑 Gelöscht: "${removed}"`;
+        }
+        case "set_todo_priority": {
+          const q = String(input.match||"").toLowerCase();
+          const priority = ["today","week","later"].includes(input.priority) ? input.priority : "today";
+          if (!q) return "set_todo_priority: match fehlt";
+          const arr = loadTodos();
+          const idx = arr.findIndex(t => t.text.toLowerCase().includes(q));
+          if (idx < 0) return `Kein Todo mit "${input.match}" gefunden.`;
+          arr[idx] = { ...arr[idx], priority };
+          saveTodos(arr);
+          window.dispatchEvent(new Event("eyla_todos_changed"));
+          const bucketLabel = priority==="today"?"Heute":priority==="week"?"Diese Woche":"Später";
+          return `↻ "${arr[idx].text}" → ${bucketLabel}`;
         }
         case "add_event": {
           const todayK = isoDateKey(new Date());
@@ -6982,9 +7458,11 @@ function AppContent() {
             <SubTabRow current={tagSub} onChange={setTagSub} options={[
               {id:"heute",    label:"Heute",    color:T.acc},
               {id:"kalender", label:"Kalender", color:T.gold},
+              {id:"todo",     label:"To-do",    color:T.rose},
             ]}/>
             {tagSub==="heute"    && <TodayScreen profile={profile} setLog={setLog} logsByDate={logsByDate}/>}
             {tagSub==="kalender" && <KalenderScreen events={events} eventsLoading={eventsLoading} onRefresh={loadCalendar} profile={profile} log={log}/>}
+            {tagSub==="todo"     && <TodoScreen profile={profile}/>}
           </>
         )}
         {screen==="woche" && <WeekScreen logsByDate={logsByDate} profile={profile}/>}
