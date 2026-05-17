@@ -1041,10 +1041,27 @@ function haptic(ms = 20) {
 
 // Smart-Hint: ein kontextabhängiger EYLA-Satz oben in Heute, basierend auf
 // Tageszeit + Datenlücken + Plan. Wechselt im Lauf des Tages.
+// ── Tagesziele-Helper ─────────────────────────────────────────────────────────
+// User-konfigurierbar in Profil. Default 2L / 7h falls noch nicht gesetzt.
+// waterTargetUnits gibt die Anzahl 0.25L-Einheiten (z.B. 2.5L → 10 Units)
+function waterTargetUnits(profile) {
+  const liters = parseFloat(profile?.waterTargetL) || 2;
+  return Math.round(liters * 4); // 1 Unit = 0.25L
+}
+function waterTargetL(profile) {
+  return parseFloat(profile?.waterTargetL) || 2;
+}
+function sleepTargetH(profile) {
+  return parseFloat(profile?.sleepTargetH) || 7;
+}
+
 function smartHintFor(log, profile, plan) {
   const hour = new Date().getHours();
   const eaten = (log.meals||[]).reduce((s,m)=>s+(m.calories||0),0);
   const water = log.water || 0;
+  const targetUnits = waterTargetUnits(profile);
+  const halfTarget = Math.ceil(targetUnits / 2); // Mittagsbenchmark = halbes Tagesziel
+  const quartTarget = Math.ceil(targetUnits / 4);
   const hasWorkout = (log.workouts||[]).length > 0;
   const todayWeekday = ["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"][new Date().getDay()];
   const todayPlan = plan?.days?.find(d => d.day && d.day.toLowerCase().includes(todayWeekday.toLowerCase()));
@@ -1061,9 +1078,9 @@ function smartHintFor(log, profile, plan) {
       return `Heute Abend laut Plan: ${todayPlan.dinner.split("(")[0].trim()}.`;
     }
   }
-  // Priorität 2: Wasser-Lücke
-  if (hour >= 14 && water < 4) return `Schon ${hour} Uhr und erst ${(water*.25).toFixed(2)}L Wasser. Schluck noch was.`;
-  if (hour >= 11 && water < 2) return `Vergiss das Wasser nicht – noch nichts heute.`;
+  // Priorität 2: Wasser-Lücke – relativ zum User-Ziel
+  if (hour >= 14 && water < halfTarget) return `Schon ${hour} Uhr und erst ${(water*.25).toFixed(2)}L Wasser (Ziel: ${waterTargetL(profile)}L). Schluck noch was.`;
+  if (hour >= 11 && water < quartTarget) return `Vergiss das Wasser nicht – noch fast nichts heute.`;
   // Priorität 3: Training
   if (hour >= 17 && !hasWorkout && new Date().getDay() !== 0) return `Heute noch keine Bewegung. Auch 20 Min Spazieren zählen.`;
   // Priorität 4: Abend-Reflexion
@@ -1144,12 +1161,13 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate }) {
 
   // Konfetti-Trigger: wenn Wasser-Ziel oder Kcal-Ziel erstmalig erreicht
   useEffect(() => {
-    if (prevWaterRef.current < 8 && (log.water||0) >= 8) {
+    const wTarget = waterTargetUnits(profile);
+    if (prevWaterRef.current < wTarget && (log.water||0) >= wTarget) {
       setKonfetti(true);
       haptic(60);
     }
     prevWaterRef.current = log.water||0;
-  }, [log.water]);
+  }, [log.water, profile]);
   useEffect(() => {
     const totalKcal = (log.meals||[]).reduce((s,m)=>s+(m.calories||0),0);
     const target = calorieTarget(profile).target;
@@ -1340,8 +1358,8 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate }) {
           </h2>
         </div>
         <ActivityRings
-          water={log.water||0} waterTarget={8}
-          sleep={parseFloat(String(log.sleep||"0").replace("+",""))||0} sleepTarget={7}
+          water={log.water||0} waterTarget={waterTargetUnits(profile)}
+          sleep={parseFloat(String(log.sleep||"0").replace("+",""))||0} sleepTarget={sleepTargetH(profile)}
           kcal={eaten} kcalTarget={targetKcal}
           workouts={(log.workouts||[]).reduce((s,w)=>s+(w.duration||0),0)}
         />
@@ -1400,7 +1418,7 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate }) {
           <Lbl style={{ marginBottom:5 }}>Wasser</Lbl>
           <div style={{ fontSize:22, fontWeight:300, color:T.text, marginBottom:8 }}>
             {(log.water*.25).toFixed(2)}<span style={{ fontSize:13, color:T.muted, marginLeft:3 }}>L</span>
-            <span style={{ fontSize:10, color:T.muted, marginLeft:8, fontFamily:T.mono }}>von 2L</span>
+            <span style={{ fontSize:10, color:T.muted, marginLeft:8, fontFamily:T.mono }}>von {waterTargetL(profile)}L</span>
           </div>
           <div style={{ display:"flex", gap:8, alignItems:"center" }}>
             <button onClick={()=>setLog(l=>({...l,water:Math.max(0,l.water-1)}))} style={{ width:30,height:30,borderRadius:"50%",background:T.bg2,border:`1px solid ${T.borderS}`,color:T.muted,fontSize:16,cursor:"pointer" }}>−</button>
@@ -2578,8 +2596,8 @@ function WeekScreen({ logsByDate, profile }) {
     }
     return s;
   }
-  const waterStreak = streakOf(d => d.water >= 8);
-  const sleepStreak = streakOf(d => d.sleepNum >= 7);
+  const waterStreak = streakOf(d => d.water >= waterTargetUnits(profile));
+  const sleepStreak = streakOf(d => d.sleepNum >= sleepTargetH(profile));
   const mealStreak  = streakOf(d => d.hasAny && (logsByDate?.[d.key]?.meals?.length||0) > 0);
 
   function labelFor(dateKey, idx) {
@@ -2688,8 +2706,8 @@ function WeekScreen({ logsByDate, profile }) {
           <Lbl style={{ marginBottom:10 }}>STREAKS</Lbl>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10 }}>
             {[
-              { label:"💧 Wasser ≥2L", value:waterStreak, color:T.acc },
-              { label:"😴 Schlaf ≥7h", value:sleepStreak, color:T.mid },
+              { label:`💧 Wasser ≥${waterTargetL(profile)}L`, value:waterStreak, color:T.acc },
+              { label:`😴 Schlaf ≥${sleepTargetH(profile)}h`, value:sleepStreak, color:T.mid },
               { label:"🍽 Mahlzeit", value:mealStreak, color:T.gold },
             ].map(s => (
               <div key={s.label}>
@@ -2740,7 +2758,7 @@ function WeekScreen({ logsByDate, profile }) {
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:14 }}>
             <div>
               <div style={{ fontSize:10, color:T.muted, marginBottom:4, fontFamily:T.mono, letterSpacing:1 }}>💧 WASSER</div>
-              <MiniBars values={dayData.map(d=>d.water)} max={12} color={T.acc} targetLine={8}/>
+              <MiniBars values={dayData.map(d=>d.water)} max={12} color={T.acc} targetLine={waterTargetUnits(profile)}/>
               {chartLabels()}
             </div>
             <div>
@@ -3299,17 +3317,30 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
           const fullName = (amount && !nameHasAmount) ? `${amount} ${rawName}` : rawName;
 
           // ── ANTI-BUG: Modell hat Menge mit Kalorien verwechselt? ──────────────
-          // "200g Steak" → wenn calories === 200 und Menge ist 200g/ml → sehr verdächtig.
-          // In dem Fall: nicht speichern, sondern Tool-Result mit Aufforderung zur Korrektur.
-          const checkText = `${amount} ${rawName}`.toLowerCase();
-          const amountMatch = checkText.match(/(\d+(?:[.,]\d+)?)\s*(g|gramm|ml)\b/);
-          if (amountMatch && cal > 0) {
-            const amountValue = parseFloat(amountMatch[1].replace(",","."));
-            // Wenn calories ≈ amountValue (innerhalb 5) UND amountValue ist im typischen Gramm-Bereich
-            if (Math.abs(cal - amountValue) <= 5 && amountValue >= 50 && amountValue <= 2000) {
-              return `❌ FEHLER: Du hast die MENGE (${amountValue}${amountMatch[2]}) in 'calories' eingetragen. ` +
-                `${amountValue}${amountMatch[2]} ${rawName.replace(amountMatch[0],"").trim()} hat eigene kcal – z.B. 200g Rindersteak ≈ 500 kcal, 200g Hähnchen ≈ 330 kcal, 200g Apfel ≈ 100 kcal. ` +
-                `Bitte add_meal NOCHMAL aufrufen mit name="${fullName}", amount="${amountValue}${amountMatch[2]}", calories=<realistische geschätzte kcal>, plus protein/carbs/fat.`;
+          // Robuste Heuristik: prüft alle Zahlen im Input (Voice-transkribiert
+          // oft uneinheitlich) und matched gegen calories.
+          // Bsp: "200g Steak", "200 Gramm Steak", "Steak 200g", "200 Stück" etc.
+          if (cal > 0) {
+            const checkText = `${amount} ${rawName}`.toLowerCase();
+            // Erweiterte Einheiten-Regex
+            const unitWords = /(g|gramm|gr|kg|ml|milliliter|cl|stk|stueck|stück|scheibe[n]?|scheibchen|portion[en]?|tasse[n]?|glas|gläser|tl|el|löffel|löffe?l)\b/i;
+            // Finde alle Zahlen im Text
+            const numbers = [...checkText.matchAll(/(\d+(?:[.,]\d+)?)/g)].map(m => parseFloat(m[1].replace(",",".")));
+            const hasUnitWord = unitWords.test(checkText);
+
+            // Fall A: Zahl matched calories UND irgendeine Einheit ist im Text
+            const matchesCal = numbers.some(n => Math.abs(n - cal) <= 3 && n >= 30 && n <= 3000);
+            if (matchesCal && hasUnitWord) {
+              return `❌ FEHLER: '${rawName}' enthält eine Mengenangabe – du hast die MENGE (${cal}) statt der echten Kalorien eingetragen. ` +
+                `Realistische Schätzungen für ${cal}g: Rindersteak ≈ 500 kcal, Hähnchen ≈ 330 kcal, Lachs ≈ 410 kcal, Brot ≈ 240 kcal, Apfel ≈ 100 kcal, Reis gekocht ≈ 260 kcal. ` +
+                `Bitte add_meal NOCHMAL aufrufen – setze 'name' = "${fullName}", 'amount' = Mengenangabe, 'calories' = REALISTISCHE Schätzung (NICHT die Menge!), plus protein/carbs/fat.`;
+            }
+            // Fall B: cal ist sehr niedrig (<100) und name enthält typisches Protein-Lebensmittel → unrealistisch
+            const proteinFoods = /\b(steak|fleisch|rind|hähnchen|haehnchen|hühn|huehn|pute|truthahn|lachs|thun|fisch|filet|kotelett|schnitzel|brat|burger|wurst|hack|gulasch)\b/i;
+            if (cal < 100 && proteinFoods.test(checkText)) {
+              return `❌ FEHLER: ${cal} kcal für '${rawName}' ist unrealistisch niedrig. ` +
+                `Selbst 100g mageres Fleisch hat 100-200 kcal, 200g Steak ≈ 500 kcal. ` +
+                `Bitte add_meal NOCHMAL aufrufen mit realistischer kcal-Schätzung.`;
             }
           }
           setLog(l => ({...l, meals: [...l.meals, {
@@ -5278,9 +5309,11 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
       }
       return max;
     }
+    const wTarget = waterTargetUnits(profile);
+    const sTarget = sleepTargetH(profile);
     return {
-      water: longestStreak(l => (l.water||0) >= 8),
-      sleep: longestStreak(l => (parseFloat(String(l.sleep||"0").replace("+","")) || 0) >= 7),
+      water: longestStreak(l => (l.water||0) >= wTarget),
+      sleep: longestStreak(l => (parseFloat(String(l.sleep||"0").replace("+","")) || 0) >= sTarget),
       meal:  longestStreak(l => (l.meals?.length||0) > 0),
     };
   })();
@@ -6033,8 +6066,8 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
           <Lbl style={{ marginBottom:12 }}>REKORDE · LÄNGSTE STREAKS</Lbl>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12 }}>
             {[
-              { label:"💧 Wasser ≥2L", value:allTimeStreaks.water, color:T.acc },
-              { label:"😴 Schlaf ≥7h", value:allTimeStreaks.sleep, color:T.mid },
+              { label:`💧 Wasser ≥${waterTargetL(profile)}L`, value:allTimeStreaks.water, color:T.acc },
+              { label:`😴 Schlaf ≥${sleepTargetH(profile)}h`, value:allTimeStreaks.sleep, color:T.mid },
               { label:"🍽 Mahlzeit", value:allTimeStreaks.meal, color:T.gold },
             ].map(s => (
               <div key={s.label} style={{ textAlign:"center", padding:"4px 0" }}>
@@ -6051,13 +6084,23 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
         </Card>
       )}
 
-      {/* DATEN – Sektion */}
+      {/* EYLA – Sektion (app/agent settings, kommen ans Ende weil es bei Profil hauptsächlich um den User geht) */}
+      <div style={{ fontFamily:T.mono, fontSize:9, color:T.muted, letterSpacing:2, margin:"22px 4px 10px", display:"flex", alignItems:"center", gap:8 }}>
+        <span>EYLA · STIMME & APPS</span>
+        <div style={{ flex:1, height:1, background:T.borderS, opacity:.5 }}/>
+      </div>
+
+      <VoiceSettings/>
+
+      {profile.apps?.length>0&&<Card style={{ marginBottom:12 }}><Lbl style={{ marginBottom:10 }}>VERBUNDENE APPS</Lbl><div style={{ display:"flex",flexWrap:"wrap",gap:7 }}>{profile.apps.map((a,i)=><div key={i} style={{ display:"flex",alignItems:"center",gap:6,background:T.bg2,border:`1px solid ${T.borderS}`,borderRadius:8,padding:"5px 12px" }}><div style={{ width:5,height:5,borderRadius:"50%",background:T.green,boxShadow:`0 0 5px ${T.green}` }}/><span style={{ color:T.mid,fontFamily:T.mono,fontSize:10 }}>{a}</span></div>)}</div></Card>}
+
+      {/* DATEN – Sektion (hinter EYLA, damit Backup nahe Reset) */}
       <div style={{ fontFamily:T.mono, fontSize:9, color:T.muted, letterSpacing:2, margin:"22px 4px 10px", display:"flex", alignItems:"center", gap:8 }}>
         <span>DATEN</span>
         <div style={{ flex:1, height:1, background:T.borderS, opacity:.5 }}/>
       </div>
 
-      {/* Daten: Export / Import / Reset */}
+      {/* Backup-Card – jetzt hinter EYLA */}
       <Card style={{ marginBottom:12 }}>
         <Lbl style={{ marginBottom:10 }}>BACKUP</Lbl>
         <p style={{ color:T.muted, fontSize:11, fontStyle:"italic", fontFamily:T.serif, margin:"0 0 14px", lineHeight:1.6 }}>
@@ -6119,16 +6162,6 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
             }}/>
         </div>
       </Card>
-
-      {/* EYLA – Sektion (app/agent settings, kommen ans Ende weil es bei Profil hauptsächlich um den User geht) */}
-      <div style={{ fontFamily:T.mono, fontSize:9, color:T.muted, letterSpacing:2, margin:"22px 4px 10px", display:"flex", alignItems:"center", gap:8 }}>
-        <span>EYLA · STIMME & APPS</span>
-        <div style={{ flex:1, height:1, background:T.borderS, opacity:.5 }}/>
-      </div>
-
-      <VoiceSettings/>
-
-      {profile.apps?.length>0&&<Card style={{ marginBottom:12 }}><Lbl style={{ marginBottom:10 }}>VERBUNDENE APPS</Lbl><div style={{ display:"flex",flexWrap:"wrap",gap:7 }}>{profile.apps.map((a,i)=><div key={i} style={{ display:"flex",alignItems:"center",gap:6,background:T.bg2,border:`1px solid ${T.borderS}`,borderRadius:8,padding:"5px 12px" }}><div style={{ width:5,height:5,borderRadius:"50%",background:T.green,boxShadow:`0 0 5px ${T.green}` }}/><span style={{ color:T.mid,fontFamily:T.mono,fontSize:10 }}>{a}</span></div>)}</div></Card>}
 
       <button onClick={onReset} style={{ background:"transparent",border:`1px solid ${T.borderS}`,borderRadius:10,padding:"9px 18px",color:T.muted,fontFamily:T.serif,fontSize:12,cursor:"pointer",fontStyle:"italic" }}>Profil zurücksetzen</button>
     </div>
@@ -6445,7 +6478,6 @@ function AppContent() {
         </div>
         <div style={{ display:"flex",gap:6,alignItems:"center" }}>
           {events.length>0&&<span style={{ background:T.gold+"18",border:`1px solid ${T.gold}33`,borderRadius:20,padding:"3px 10px",fontSize:10,color:T.gold,fontFamily:T.mono }}>▦ {events.length}</span>}
-          {log.water>0&&<span style={{ background:T.acc+"18",border:`1px solid ${T.acc}33`,borderRadius:20,padding:"3px 10px",fontSize:10,color:T.acc,fontFamily:T.mono }}>💧 {(log.water*.25).toFixed(2)}L</span>}
           {/* Sync-Indikator (nur wenn was zu zeigen ist) */}
           {syncState.status !== "idle" && (
             <span title={
