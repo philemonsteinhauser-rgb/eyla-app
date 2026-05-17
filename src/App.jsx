@@ -1310,6 +1310,27 @@ function smartHintFor(log, profile, plan) {
   if (hour >= 17 && !hasWorkout && new Date().getDay() !== 0) return `Heute noch keine Bewegung. Auch 20 Min Spazieren zählen.`;
   // Priorität 4: Abend-Reflexion
   if (hour >= 21 && !log.note) return `Schon spät. Kurz aufschreiben wie der Tag war?`;
+  // Priorität 4.5: Todos – wenn welche heute offen sind, mention sie
+  try {
+    const todosRaw = localStorage.getItem("eyla_todos_v1");
+    if (todosRaw) {
+      const todos = JSON.parse(todosRaw);
+      const openTodayTodos = todos.filter(t => t.status==="open" && (t.priority||"today")==="today");
+      if (openTodayTodos.length > 0) {
+        // Finde den ältesten Todo (lange offen)
+        const sorted = [...openTodayTodos].sort((a,b) => (a.createdAt||"").localeCompare(b.createdAt||""));
+        const oldest = sorted[0];
+        const ageDays = oldest.createdAt ? Math.floor((Date.now() - new Date(oldest.createdAt).getTime()) / 86400000) : 0;
+        if (hour >= 9 && hour <= 12 && openTodayTodos.length >= 1) {
+          if (ageDays >= 3) return `"${oldest.text}" hängt seit ${ageDays} Tagen. Heute angehen?`;
+          if (openTodayTodos.length >= 3) return `${openTodayTodos.length} Todos heute. Was zuerst?`;
+        }
+        if (hour >= 16 && hour <= 19 && ageDays >= 2) {
+          return `"${oldest.text}" ist noch offen. Schnell jetzt?`;
+        }
+      }
+    }
+  } catch {}
   // Priorität 5: Morgens neutral
   if (hour < 9) return `Guten Morgen. ${profile.name?.split(" ")[0] || ""}.`;
   return null;
@@ -1346,7 +1367,29 @@ function ActivityRings({ water, waterTarget, sleep, sleepTarget, kcal, kcalTarge
   );
 }
 
-function TodayScreen({ profile, setLog: setLogRaw, logsByDate }) {
+function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [] }) {
+  // Todos im Heute-Screen sichtbar machen (Live-Sync via storage + custom event)
+  const [todos, setTodos] = useState([]);
+  const [localEvents, setLocalEvents] = useState([]);
+  useEffect(() => {
+    setTodos(loadTodos());
+    retrieve("eyla_local_events_v2", []).then(e => setLocalEvents(Array.isArray(e) ? e : []));
+    function onStorage(e) {
+      if (e.key === "eyla_todos_v1") setTodos(loadTodos());
+      if (e.key === "eyla_local_events_v2") retrieve("eyla_local_events_v2", []).then(arr => setLocalEvents(arr||[]));
+    }
+    function onCustom() { setTodos(loadTodos()); }
+    function onEvCustom() { retrieve("eyla_local_events_v2", []).then(arr => setLocalEvents(arr||[])); }
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("eyla_todos_changed", onCustom);
+    window.addEventListener("eyla_events_changed", onEvCustom);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("eyla_todos_changed", onCustom);
+      window.removeEventListener("eyla_events_changed", onEvCustom);
+    };
+  }, []);
+
   const [mealName, setMealName] = useState("");
   const [mealCal, setMealCal] = useState("");
   const [mealP, setMealP] = useState("");
@@ -1373,6 +1416,7 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate }) {
   const prevWaterRef = useRef(0);
   const prevKcalReachedRef = useRef(false);
   const prevAllReachedRef = useRef(false);
+  const prevTodoAllDoneRef = useRef(false);
 
   // Datum-Navigator: User kann auch andere Tage nachtragen
   const [tagDate, setTagDate] = useState(()=>new Date());
@@ -1408,6 +1452,20 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate }) {
     }
     prevKcalReachedRef.current = reached;
   }, [log.meals, profile]);
+
+  // Konfetti wenn der letzte Heute-Todo abgehakt wird (cleaner Subtrigger)
+  useEffect(() => {
+    if (!isToday) return;
+    const todayTodos = todos.filter(t => (t.priority||"today")==="today");
+    if (todayTodos.length === 0) { prevTodoAllDoneRef.current = false; return; }
+    const allDone = todayTodos.every(t => t.status === "done");
+    if (allDone && !prevTodoAllDoneRef.current) {
+      setKonfettiMode("normal");
+      setKonfetti(true);
+      haptic(40);
+    }
+    prevTodoAllDoneRef.current = allDone;
+  }, [todos, isToday]);
 
   // ── PERFECT-DAY-Trigger: ALLE Tagesziele erreicht ──────────────────────────
   // Bedingungen: Wasser ≥ Ziel, Schlaf ≥ Ziel, Kcal ≥ 90% Ziel, mind. 1 Workout
@@ -1615,6 +1673,96 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate }) {
           <span style={{ color:T.mid, fontSize:12, fontStyle:"italic", fontFamily:T.serif, flex:1 }}>{hint}</span>
         </div>
       )}
+
+      {/* ANSTEHEND – Termine + Heute-Todos auf einen Blick (nur wenn heute + was zu zeigen) */}
+      {isToday && (() => {
+        const todoKey = tagKey;
+        // Heute-Todos (status open)
+        const todayTodos = todos.filter(t => t.status==="open" && (t.priority||"today")==="today");
+        // Events von heute (Recurring expansion: täglich/wöchentlich)
+        const todayKey = isoDateKey(new Date());
+        const todayDow = new Date().getDay();
+        const allEv = [...(events||[]), ...localEvents];
+        const todayEvents = allEv.filter(ev => {
+          if (ev.date === todayKey) return true;
+          if (ev.recurring === "daily" && ev.date && ev.date <= todayKey) return true;
+          if (ev.recurring === "weekly" && ev.date) {
+            const orig = new Date(ev.date);
+            return orig.getDay() === todayDow && ev.date <= todayKey;
+          }
+          return false;
+        }).sort((a,b)=>(a.time||"").localeCompare(b.time||""));
+
+        if (todayTodos.length === 0 && todayEvents.length === 0) return null;
+        return (
+          <Card style={{ marginBottom:14 }}>
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
+              <Lbl>ANSTEHEND</Lbl>
+              <span style={{ fontFamily:T.mono, fontSize:9, color:T.muted, letterSpacing:1 }}>
+                {todayEvents.length}T · {todayTodos.length}TODO
+              </span>
+            </div>
+            {/* Termine zuerst */}
+            {todayEvents.length > 0 && (
+              <div style={{ marginBottom: todayTodos.length > 0 ? 10 : 0 }}>
+                {todayEvents.slice(0, 5).map((ev, i) => (
+                  <div key={ev.id||i} style={{
+                    display:"flex", alignItems:"center", gap:10, padding:"5px 0",
+                    borderBottom: i < Math.min(4, todayEvents.length-1) ? `1px solid ${T.border}` : "none"
+                  }}>
+                    <span style={{ fontFamily:T.mono, fontSize:11, color:T.gold, minWidth:42 }}>
+                      {ev.time || "–"}
+                    </span>
+                    <span style={{ flex:1, color:T.text, fontSize:13, fontFamily:T.serif }}>{ev.title}</span>
+                    {ev.duration && <span style={{ fontFamily:T.mono, fontSize:9, color:T.muted }}>{ev.duration}min</span>}
+                  </div>
+                ))}
+                {todayEvents.length > 5 && (
+                  <div style={{ fontSize:10, color:T.muted, fontStyle:"italic", fontFamily:T.serif, marginTop:4 }}>
+                    +{todayEvents.length-5} weitere Termine
+                  </div>
+                )}
+              </div>
+            )}
+            {/* Todos heute (Quick-Toggle) */}
+            {todayTodos.length > 0 && (
+              <div style={{
+                paddingTop: todayEvents.length > 0 ? 8 : 0,
+                borderTop: todayEvents.length > 0 ? `1px dashed ${T.border}` : "none"
+              }}>
+                {todayTodos.slice(0, 6).map((t, i) => (
+                  <div key={t.id} style={{
+                    display:"flex", alignItems:"center", gap:10, padding:"6px 0",
+                    borderBottom: i < Math.min(5, todayTodos.length-1) ? `1px solid ${T.border}` : "none"
+                  }}>
+                    <button onClick={()=>{
+                      const arr = loadTodos();
+                      const idx = arr.findIndex(x => x.id === t.id);
+                      if (idx >= 0) {
+                        arr[idx] = {...arr[idx], status:"done", completedAt:new Date().toISOString()};
+                        saveTodos(arr);
+                        setTodos(arr);
+                        window.dispatchEvent(new Event("eyla_todos_changed"));
+                        haptic(15);
+                      }
+                    }} style={{
+                      width:20, height:20, borderRadius:5,
+                      border:`1.5px solid ${T.rose}88`, background:"transparent",
+                      cursor:"pointer", padding:0, flexShrink:0
+                    }}/>
+                    <span style={{ flex:1, color:T.text, fontSize:13, fontFamily:T.serif }}>{t.text}</span>
+                  </div>
+                ))}
+                {todayTodos.length > 6 && (
+                  <div style={{ fontSize:10, color:T.muted, fontStyle:"italic", fontFamily:T.serif, marginTop:4 }}>
+                    +{todayTodos.length-6} weitere Todos – siehe To-do-Tab
+                  </div>
+                )}
+              </div>
+            )}
+          </Card>
+        );
+      })()}
       <div style={{ marginBottom:14, display:"flex", alignItems:"center", justifyContent:"space-between", gap:14 }}>
         <div style={{ minWidth:0, flex:1 }}>
           <Lbl style={{ marginBottom:6 }}>
@@ -7460,7 +7608,7 @@ function AppContent() {
               {id:"kalender", label:"Kalender", color:T.gold},
               {id:"todo",     label:"To-do",    color:T.rose},
             ]}/>
-            {tagSub==="heute"    && <TodayScreen profile={profile} setLog={setLog} logsByDate={logsByDate}/>}
+            {tagSub==="heute"    && <TodayScreen profile={profile} setLog={setLog} logsByDate={logsByDate} events={events}/>}
             {tagSub==="kalender" && <KalenderScreen events={events} eventsLoading={eventsLoading} onRefresh={loadCalendar} profile={profile} log={log}/>}
             {tagSub==="todo"     && <TodoScreen profile={profile}/>}
           </>
