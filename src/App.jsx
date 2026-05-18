@@ -4887,6 +4887,17 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
     }
     setSpeaking(false);
   }
+
+  // Globale Bridge: erlaubt Floating-Stop-Pill in AppContent (egal welcher Screen)
+  useEffect(() => {
+    if (speaking) {
+      window.__eylaStopSpeaking = stopSpeaking;
+      window.dispatchEvent(new Event("eyla_speech_start"));
+    } else {
+      window.__eylaStopSpeaking = null;
+      window.dispatchEvent(new Event("eyla_speech_end"));
+    }
+  }, [speaking]);
   // Wenn Voice-Toggle eingeschaltet wird: einen leeren Utterance abspielen
   // damit iOS die Audio-Permission freigibt (User-Gesture-Unlock).
   function toggleVoice() {
@@ -8566,6 +8577,52 @@ function IntegrationsCard() {
   );
 }
 
+// ─── GLOBAL SPEECH STOP-PILL ──────────────────────────────────────────────────
+// Sticky-Pill unten rechts, sichtbar wenn EYLA spricht – egal auf welchem Tab.
+// User berichtet: er muss sonst die Seite reloaden um die Stimme zu stoppen.
+function GlobalSpeechStopPill() {
+  const [active, setActive] = useState(false);
+  useEffect(() => {
+    function on() { setActive(true); }
+    function off() { setActive(false); }
+    window.addEventListener("eyla_speech_start", on);
+    window.addEventListener("eyla_speech_end", off);
+    return () => {
+      window.removeEventListener("eyla_speech_start", on);
+      window.removeEventListener("eyla_speech_end", off);
+    };
+  }, []);
+  if (!active) return null;
+  return (
+    <button onClick={() => { try { window.__eylaStopSpeaking?.(); } catch {} }} style={{
+      position:"fixed", right:14,
+      bottom:"calc(96px + env(safe-area-inset-bottom, 0px))",
+      zIndex:200,
+      background: T.acc+"EE", border:`1px solid ${T.acc}`, borderRadius:24,
+      padding:"10px 16px", color:T.bg,
+      fontFamily:T.mono, fontSize:11, fontWeight:700, letterSpacing:1,
+      cursor:"pointer", display:"flex", alignItems:"center", gap:8,
+      boxShadow:`0 8px 24px ${T.acc}66, 0 0 30px ${T.acc}44`,
+      animation:"speechPulse 1.4s ease-in-out infinite"
+    }} title="EYLA spricht – tippen zum Stummschalten">
+      <style>{`@keyframes speechPulse {
+        0%,100% { box-shadow: 0 8px 24px ${T.acc}55, 0 0 30px ${T.acc}33; }
+        50%     { box-shadow: 0 8px 24px ${T.acc}99, 0 0 40px ${T.acc}77; }
+      }`}</style>
+      <span style={{ display:"inline-flex", gap:2, alignItems:"flex-end", height:10 }}>
+        {[0,1,2,3].map(i => (
+          <span key={i} style={{
+            display:"inline-block", width:2, background:T.bg, borderRadius:1,
+            animation:`vSpeak ${.5+(i%3)*.15}s ease-in-out infinite alternate`,
+            animationDelay:`${(i*.08).toFixed(2)}s`
+          }}/>
+        ))}
+      </span>
+      ⏹ STUMM
+    </button>
+  );
+}
+
 // ─── REMINDERS ────────────────────────────────────────────────────────────────
 // Mix aus Browser-Notification (wenn Permission granted) und In-App-Banner
 // als Fallback. Pro Tag pro Typ max 1 Trigger (localStorage-Marker).
@@ -8835,6 +8892,9 @@ function AppContent() {
 
       {/* Reminder-Banner (oben unter Top-Bar, wenn ein Reminder aktiv ist) */}
       <ReminderBanner reminder={reminders.activeReminder} onDismiss={reminders.dismissReminder}/>
+
+      {/* Globale Stop-Pill für EYLA-Stimme — egal auf welchem Screen */}
+      <GlobalSpeechStopPill/>
 
       {/* Top bar – feiner Akzent von Section-Color am unteren Rand. Safe-Area für iPhone-Notch. */}
       <div style={{ position:"sticky",top:0,zIndex:40,background:T.bg+"F0",
