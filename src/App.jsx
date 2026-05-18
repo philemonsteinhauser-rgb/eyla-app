@@ -9081,29 +9081,64 @@ const PHASE_INFO = {
   },
 };
 
-// ─── ANDACHT-CARD (morgens, Schöpfungs-Perspektive) ─────────────────────────
-// Kurzer Bibelvers + Reflexionsfrage. 30 Verse rotieren über den Tag (deterministisch).
+// ─── ANDACHT-CARD (morgens, Schöpfungs-Perspektive, konfessionslos) ──────────
+// Kurze Reflexion + Frage. 30 Einträge rotieren deterministisch über den Tag.
+// Mischung aus Psalmen, Mystikern, Dichtern, Schöpfungs-Reflexion, Stille-Praxis
+// – ohne dogmatische Schlagseite. Glaube und Staunen, nicht Konfession.
 const ANDACHT_VERSE = [
-  { ref:"Psalm 139,14", text:"Ich danke dir dafür, dass ich wunderbar gemacht bin.", reflect:"Was an dir ist heute Geschenk?" },
-  { ref:"Jesaja 40,31", text:"Die auf den Herrn harren, kriegen neue Kraft.", reflect:"Wo brauchst du heute neue Kraft?" },
-  { ref:"Matthäus 6,34", text:"Sorgt euch nicht um morgen — der morgige Tag wird für das Seine sorgen.", reflect:"Was kannst du heute loslassen?" },
-  { ref:"Psalm 23,1", text:"Der Herr ist mein Hirte, mir wird nichts mangeln.", reflect:"Wofür darfst du heute dankbar sein?" },
-  { ref:"Philipper 4,13", text:"Ich vermag alles durch den, der mich mächtig macht.", reflect:"Was traust du dir heute zu?" },
-  { ref:"Jeremia 29,11", text:"Ich weiß wohl, was ich für Gedanken über euch habe — Gedanken des Friedens.", reflect:"Welchen Frieden suchst du heute?" },
-  { ref:"Sprüche 3,5-6", text:"Verlass dich auf den Herrn von ganzem Herzen.", reflect:"Wo musst du heute loslassen und vertrauen?" },
-  { ref:"Psalm 46,2", text:"Gott ist unsere Zuflucht und Stärke, eine Hilfe in den großen Nöten.", reflect:"Wo brauchst du heute Zuflucht?" },
-  { ref:"1. Korinther 13,4", text:"Die Liebe ist langmütig und freundlich.", reflect:"Wem kannst du heute mit Geduld begegnen?" },
-  { ref:"Galater 5,22", text:"Die Frucht des Geistes ist Liebe, Freude, Friede, Geduld, Freundlichkeit.", reflect:"Welche Frucht möchtest du heute zeigen?" },
-  { ref:"Psalm 90,12", text:"Lehre uns bedenken, dass wir sterben müssen — auf dass wir klug werden.", reflect:"Was zählt heute wirklich?" },
-  { ref:"Römer 12,2", text:"Stellt euch nicht dieser Welt gleich, sondern ändert euch durch Erneuerung eures Sinnes.", reflect:"Was möchtest du heute anders denken?" },
-  { ref:"Psalm 121,1-2", text:"Ich hebe meine Augen auf zu den Bergen. Woher kommt mir Hilfe?", reflect:"Wo schaust du heute hin um Hilfe?" },
-  { ref:"Matthäus 11,28", text:"Kommt her zu mir alle, die ihr mühselig und beladen seid; ich will euch erquicken.", reflect:"Was darfst du heute ablegen?" },
-  { ref:"Josua 1,9", text:"Sei getrost und unverzagt — der Herr, dein Gott, ist mit dir.", reflect:"Was macht dir heute Mut?" },
-  { ref:"Psalm 119,105", text:"Dein Wort ist meines Fußes Leuchte und ein Licht auf meinem Weg.", reflect:"Welches Wort begleitet dich heute?" },
-  { ref:"Römer 8,28", text:"Wir wissen aber, dass denen, die Gott lieben, alle Dinge zum Besten dienen.", reflect:"Wo siehst du heute Gutes — auch im Schweren?" },
-  { ref:"1. Petrus 5,7", text:"Alle eure Sorge werft auf ihn; denn er sorgt für euch.", reflect:"Welche Sorge darfst du heute abgeben?" },
-  { ref:"2. Korinther 12,9", text:"Lass dir an meiner Gnade genügen; denn meine Kraft ist in den Schwachen mächtig.", reflect:"Wo darfst du heute schwach sein?" },
-  { ref:"Psalm 1,3", text:"Er ist wie ein Baum, gepflanzt an den Wasserbächen, der seine Frucht bringt zu seiner Zeit.", reflect:"Wo bist du heute verwurzelt?" },
+  { ref:"",                 text:"Du bist gewollt. Bevor du wusstest dass du wirst, warst du gedacht.",                   reflect:"Was an dir ist heute Geschenk?" },
+  { ref:"",                 text:"Atme ein. Atme aus. Du musst heute nichts beweisen.",                                    reflect:"Wo darfst du heute einfach sein?" },
+  { ref:"",                 text:"Die Schöpfung ist kein Versehen. Du auch nicht.",                                        reflect:"Wo siehst du heute Schönheit?" },
+  { ref:"Psalm 139",        text:"Du bist wunderbar gemacht. Wunderbar sind deine Werke.",                                 reflect:"Was an deinem Körper darfst du heute würdigen?" },
+  { ref:"Psalm 23",         text:"Auch wenn ich wanderte im finsteren Tal — du bist bei mir.",                             reflect:"Wo brauchst du heute Begleitung?" },
+  { ref:"",                 text:"Stille ist nicht Abwesenheit. Sie ist die Anwesenheit dessen, was wirklich ist.",       reflect:"Wo findest du heute Stille?" },
+  { ref:"Hildegard v. B.",  text:"Der Mensch ist mit Wurzeln in den Himmel gepflanzt.",                                    reflect:"Wo bist du heute verwurzelt?" },
+  { ref:"Rilke",            text:"Ich kreise um Gott, um den uralten Turm — und ich weiß noch nicht, was ich bin.",       reflect:"Was umkreist du heute?" },
+  { ref:"Psalm 46",         text:"Seid stille und erkennt: ich bin Gott.",                                                 reflect:"Wann warst du das letzte Mal wirklich still?" },
+  { ref:"",                 text:"Du bist nicht was du leistest. Du bist das, was du bist.",                               reflect:"Wer bist du heute — ohne Tun?" },
+  { ref:"Meister Eckhart",  text:"Wenn die Seele zu sich kommt, ist Gott schon da.",                                       reflect:"Wo zieht es dich heute zu dir selbst?" },
+  { ref:"Tao Te Ching",     text:"Wer andere kennt, ist klug. Wer sich selbst kennt, ist weise.",                          reflect:"Was weißt du heute über dich?" },
+  { ref:"",                 text:"Was bleibt, wenn alles wegfällt? Das was dich trägt.",                                   reflect:"Was trägt dich heute?" },
+  { ref:"Psalm 90",         text:"Lehre uns bedenken, dass wir sterben müssen, damit wir klug werden.",                    reflect:"Was zählt heute wirklich?" },
+  { ref:"Sprüche 4,23",     text:"Behüte dein Herz mit allem Fleiß. Aus ihm fließt das Leben.",                            reflect:"Was nährt dein Herz heute?" },
+  { ref:"",                 text:"Dankbarkeit verwandelt was du hast in genug.",                                           reflect:"Wofür bist du heute dankbar — drei Dinge?" },
+  { ref:"Bonhoeffer",       text:"Wer das Nächste tut, dem wird das Übernächste gegeben.",                                 reflect:"Was ist heute das Nächste?" },
+  { ref:"",                 text:"Die wichtigsten Dinge des Lebens sind keine Dinge.",                                     reflect:"Wer ist dir heute wichtig?" },
+  { ref:"Psalm 8",          text:"Was ist der Mensch, dass du seiner gedenkst — und doch hast du ihn wenig niedriger gemacht.", reflect:"Wo spürst du heute deine Würde?" },
+  { ref:"Wüstenväter",      text:"Geh in deine Zelle, und deine Zelle wird dich alles lehren.",                            reflect:"Wo ist deine 'Zelle' — dein stiller Ort?" },
+  { ref:"",                 text:"Die Schöpfung spricht. Du musst nur hinhören.",                                          reflect:"Was hörst du heute, wenn du leise wirst?" },
+  { ref:"Jesaja 40",        text:"Die auf das Schöpferische warten, kriegen neue Kraft. Sie fliegen wie Adler.",           reflect:"Wo brauchst du heute neue Kraft?" },
+  { ref:"",                 text:"Heute ist ein Tag. Mehr nicht. Weniger auch nicht.",                                     reflect:"Wie willst du diesen Tag empfangen?" },
+  { ref:"1. Kor 13",        text:"Die Liebe ist langmütig und freundlich. Sie sucht nicht das Ihre.",                      reflect:"Wo darfst du heute freundlich sein — auch zu dir?" },
+  { ref:"",                 text:"Du musst nicht alles können. Du darfst lernen, bitten, ruhen.",                          reflect:"Was darfst du heute lassen?" },
+  { ref:"",                 text:"Vergebung ist die Erinnerung daran, dass du selbst Gnade brauchst.",                     reflect:"Wem kannst du heute vergeben — oder dir selbst?" },
+  { ref:"Mt 6",             text:"Sorge dich nicht um morgen. Der Tag hat genug an seiner eigenen Plage.",                 reflect:"Welche Sorge darfst du heute parken?" },
+  { ref:"",                 text:"Die Welt ist tiefer, als der Tag es uns glauben lässt.",                                 reflect:"Wo siehst du heute mehr als nur Oberfläche?" },
+  { ref:"Psalm 139",        text:"Wohin sollte ich gehen vor dir? Auch die Finsternis ist nicht finster vor dir.",         reflect:"Wo darfst du heute gesehen werden?" },
+  { ref:"",                 text:"Der Atem ist Geschenk. Jeder. Auch dieser.",                                             reflect:"Wann spürst du heute deinen Atem bewusst?" },
+  // Koran
+  { ref:"Koran 50,16",      text:"Wir sind ihm näher als seine Halsschlagader.",                                           reflect:"Wo spürst du heute Nähe?" },
+  { ref:"Koran 13,28",      text:"Wahrlich, im Gedenken finden die Herzen Ruhe.",                                          reflect:"Was bringt dein Herz heute zur Ruhe?" },
+  { ref:"Koran 94,5-6",     text:"Wahrlich, mit der Schwierigkeit kommt Erleichterung. Mit der Schwierigkeit kommt Erleichterung.", reflect:"Wo darfst du heute auf Erleichterung warten?" },
+  { ref:"Koran 2,286",      text:"Keiner Seele wird auferlegt, was über ihre Kraft geht.",                                 reflect:"Was traust du dir heute zu — und was nicht?" },
+  { ref:"Koran 65,3",       text:"Wer vertraut, dem genügt er.",                                                           reflect:"Wem oder was vertraust du heute?" },
+  // Sufi-Mystik / Rumi
+  { ref:"Rumi",             text:"Die Wunde ist der Ort, wo das Licht in dich eintritt.",                                  reflect:"Welche Wunde lehrt dich heute?" },
+  { ref:"Rumi",             text:"Du bist nicht ein Tropfen im Ozean. Du bist der ganze Ozean in einem Tropfen.",          reflect:"Was lebt heute groß in dir?" },
+  { ref:"Rumi",             text:"Suche nicht nach Liebe. Suche nach den Hindernissen, die du gegen sie gebaut hast.",     reflect:"Was steht heute zwischen dir und Offenheit?" },
+  // Zen / Buddhismus
+  { ref:"S. Suzuki",        text:"Im Anfänger-Geist gibt es viele Möglichkeiten. Im Experten-Geist nur wenige.",           reflect:"Was möchtest du heute neu sehen?" },
+  { ref:"Buddha",           text:"Du selbst, wie alle Wesen, verdienst deine Liebe und Zuneigung.",                        reflect:"Wie gehst du heute mit dir um?" },
+  { ref:"Buddha",           text:"Frieden kommt von innen. Suche ihn nicht außen.",                                        reflect:"Wo wird's heute laut in dir?" },
+  // Jüdische Tradition
+  { ref:"Talmud",           text:"Wer ein Leben rettet, rettet eine ganze Welt.",                                          reflect:"Wem kannst du heute Gutes tun?" },
+  { ref:"Pirkei Avot",      text:"Du musst das Werk nicht vollenden. Aber du darfst dich auch nicht entziehen.",            reflect:"Was ist heute dein Beitrag — auch wenn klein?" },
+  // Upanishaden / Yoga
+  { ref:"Chandogya Up.",    text:"Tat tvam asi. Das bist du.",                                                              reflect:"Was ist heute deine tiefere Identität?" },
+  { ref:"Patanjali",        text:"Yoga ist das Zur-Ruhe-Bringen der Bewegungen des Geistes.",                                reflect:"Welche Bewegung in dir darf heute ruhen?" },
+  // Universell
+  { ref:"",                 text:"Liebe ist freundlich. Auch zu dir.",                                                       reflect:"Wo darfst du dir heute freundlich begegnen?" },
+  { ref:"",                 text:"Sei wie das Wasser: nimm die Form an, finde Lücken, sei geduldig.",                       reflect:"Wo musst du heute weicher werden?" },
 ];
 function AndachtCard() {
   const [open, setOpen] = useState(false);
