@@ -615,11 +615,9 @@ ${(()=>{
 AKTIONEN: Du hast Tools um direkt im Leben des Users Sachen zu tun:
 - add_meal, set_water/add_water, set_sleep, set_energy, set_weight, add_workout → Tageslog pflegen
 - toggle_habit → Gewohnheiten abhaken
-- add_event → Termin in den Kalender (synct auto in Google Calendar wenn verbunden)
+- add_event → Termin in den Kalender
 - add_shopping_item, check_shopping_item → Einkaufsliste pflegen
 - add_todo, complete_todo, remove_todo, set_todo_priority → Aufgaben verwalten
-- read_recent_emails → Gmail-Inbox lesen ("was kam heute rein?")
-- sync_strava_today → letzte Strava-Activities ziehen
 - find_free_slot → Lücke im Kalender finden ("wann hab ich 90min Zeit für Yoga?")
 - move_event → Termin verschieben ("schieb meinen 10-Uhr-Call auf 11")
 - delete_event → Termin löschen
@@ -1476,8 +1474,6 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [] }) {
   // Todos im Heute-Screen sichtbar machen (Live-Sync via storage + custom event)
   const [todos, setTodos] = useState([]);
   const [localEvents, setLocalEvents] = useState([]);
-  // Strava: einmaliger Auto-Sync pro Tag
-  const stravaSyncedRef = useRef(false);
   useEffect(() => {
     setTodos(loadTodos());
     retrieve("eyla_local_events_v2", []).then(e => setLocalEvents(Array.isArray(e) ? e : []));
@@ -1560,36 +1556,7 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [] }) {
     prevKcalReachedRef.current = reached;
   }, [log.meals, profile]);
 
-  // Strava Auto-Sync (einmal pro Mount): hole heute's Activities, füge fehlende zu log.workouts
-  useEffect(() => {
-    if (!isToday || stravaSyncedRef.current) return;
-    (async () => {
-      const { ok, data } = await fetchJSON("/api/strava/status");
-      if (!ok || !data?.connected) return;
-      stravaSyncedRef.current = true;
-      const startOfDay = new Date(); startOfDay.setHours(0,0,0,0);
-      const activities = await fetchStravaActivities(startOfDay);
-      if (!activities.length) return;
-      // Dedup gegen vorhandene log.workouts (per stravaId)
-      const existingIds = new Set((log.workouts||[]).map(w => w.stravaId).filter(Boolean));
-      const newOnes = activities
-        .filter(a => a.date === isoDateKey(new Date()))
-        .filter(a => !existingIds.has(a.id));
-      if (newOnes.length === 0) return;
-      setLog(l => ({...l, workouts: [...(l.workouts||[]), ...newOnes.map(a => ({
-        type: a.type,
-        duration: a.duration || a.durationMoving,
-        intensity: a.avgHeartRate > 150 ? "hart" : a.avgHeartRate > 130 ? "mittel" : "leicht",
-        stravaId: a.id,
-        distance: a.distance,
-        calories: a.calories,
-        avgHeartRate: a.avgHeartRate,
-        time: a.startTime || new Date().toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"}),
-      }))]}));
-    })().catch(()=>{});
-  }, [isToday]);
-
-  // Konfetti wenn der letzte Heute-Todo abgehakt wird (cleaner Subtrigger)
+// Konfetti wenn der letzte Heute-Todo abgehakt wird (cleaner Subtrigger)
   useEffect(() => {
     if (!isToday) return;
     const todayTodos = todos.filter(t => (t.priority||"today")==="today");
@@ -3320,28 +3287,7 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
   const [showLegacyList, setShowLegacyList] = useState(false); // alte Stunden-Liste collapsed
   const [calView, setCalView] = useState("day"); // "day" | "week"
   const [localEvents, setLocalEvents] = useState([]);
-  // Google-Calendar-Events (wenn verbunden)
-  const [googleEvents, setGoogleEvents] = useState([]);
-  const [googleConnected, setGoogleConnected] = useState(false);
-  useEffect(() => {
-    (async () => {
-      const { ok, data } = await fetchJSON("/api/google/status");
-      const isConn = !!(ok && data?.connected);
-      setGoogleConnected(isConn);
-      if (isConn) {
-        const from = new Date(); from.setHours(0,0,0,0); from.setDate(from.getDate()-1);
-        const to = new Date(); to.setDate(to.getDate()+90);
-        setGoogleEvents(await fetchGoogleEvents(from, to));
-      }
-    })();
-  }, []);
-  // Re-fetch wenn localEvents geändert werden (Pull-to-Refresh kann der User per Refresh-Button anstoßen)
-  async function refreshGoogle() {
-    if (!googleConnected) return;
-    const from = new Date(); from.setHours(0,0,0,0); from.setDate(from.getDate()-1);
-    const to = new Date(); to.setDate(to.getDate()+90);
-    setGoogleEvents(await fetchGoogleEvents(from, to));
-  }
+  // (Google-Sync entfernt – Kalender ist self-contained)
   const [showAdd, setShowAdd] = useState(false);
   const [selectedDate, setSelectedDate] = useState(()=>new Date());
   // Inline-Edit-Mode für Termine
@@ -3492,7 +3438,6 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
   const eventsForSelected = [
     ...(isToday ? events.map(e=>({...e,local:false,date:todayKey})) : []),
     ...localEvents.filter(matchesRecurrence),
-    ...googleEvents.filter(e => e.date === selectedKey).map(e => ({...e, local:false, google:true}))
   ].sort((a,b)=>(a.time||"99:99").localeCompare(b.time||"99:99"));
 
   const nowH = new Date().getHours();
@@ -3525,8 +3470,7 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
             const isTodayPill = dKey === dTodayK;
             // Anzahl Events an dem Tag (lokale + recurring)
             const dWeekday = d.getDay();
-            const gCount = googleEvents.filter(e => e.date === dKey).length;
-            const count = gCount + localEvents.filter(e => {
+            const count = localEvents.filter(e => {
               const evDateStr = e.date || dTodayK;
               if (evDateStr === dKey) return true;
               if (!e.recurrence) return false;
@@ -3794,13 +3738,6 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
                     {Object.keys(conflictsById).length} KONFLIKT{Object.keys(conflictsById).length>1?"E":""}
                   </span>
                 )}
-                {googleConnected && (
-                  <button onClick={refreshGoogle} title="Google neu laden" style={{
-                    background:"transparent", border:`1px solid ${T.acc}33`, borderRadius:8,
-                    padding:"2px 8px", color:T.acc+"AA", fontFamily:T.mono, fontSize:9,
-                    cursor:"pointer", letterSpacing:1
-                  }}>↻ G</button>
-                )}
               </div>
             </div>
             {topSlots.length > 0 && (
@@ -3824,7 +3761,6 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
               const wkKeys = Array.from({length:7},(_,i)=>{ const d=new Date(wkStart); d.setDate(d.getDate()+i); return isoDateKey(d); });
               const weekEvents = [
                 ...localEvents.filter(e => wkKeys.includes(e.date)),
-                ...googleEvents.filter(e => wkKeys.includes(e.date)),
               ];
               return (
                 <WeekTimeline
@@ -4638,22 +4574,6 @@ const EYLA_TOOLS = [
     }
   },
   {
-    name: "read_recent_emails",
-    description: "Liest die letzten ungelesenen Mails aus Gmail (falls verbunden). Gut für 'Was kam heute rein?' oder 'Hab ich was wichtiges in der Inbox?'. Standardmäßig die letzten 10 ungelesenen.",
-    input_schema: {
-      type: "object",
-      properties: {
-        max: { type: "number", description: "Max Anzahl (1-30, default 10)" },
-        query: { type: "string", description: "Gmail-Suchquery (default 'in:inbox is:unread'). Beispiele: 'from:max@x.de', 'subject:Rechnung', 'newer_than:2d'." }
-      }
-    }
-  },
-  {
-    name: "sync_strava_today",
-    description: "Holt aktuelle Strava-Aktivitäten von heute und fügt sie zum Tageslog hinzu. Sagt User 'sync mein training' oder 'hab grad gelaufen' und Strava ist verbunden.",
-    input_schema: { type: "object", properties: {} }
-  },
-  {
     name: "find_free_slot",
     description: "Findet freie Lücken im Kalender für einen Tag (oder über mehrere Tage). Antwortet mit Zeiten in HH:MM. Nutzen wenn User sagt 'wann hab ich Zeit für X', 'plan mir 90min ein', 'wann ist Platz für Yoga'.",
     input_schema: {
@@ -5239,34 +5159,11 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
           const bucketLabel = priority==="today"?"Heute":priority==="week"?"Diese Woche":"Später";
           return `↻ "${arr[idx].text}" → ${bucketLabel}`;
         }
-        case "read_recent_emails": {
-          const max = Math.min(30, parseInt(input.max) || 10);
-          const query = String(input.query || "in:inbox is:unread");
-          const data = await fetchGmailRecent({ query, max });
-          if (data.error === "not_connected") return "Gmail nicht verbunden. Im Profil unter 'Verbundene Apps' Google verbinden.";
-          if (!data.messages || data.messages.length === 0) return `Keine Mails für '${query}'.`;
-          const lines = data.messages.slice(0, max).map(m => {
-            const from = m.from.replace(/<.*?>/, "").trim().slice(0, 40);
-            const subj = m.subject.slice(0, 60);
-            return `• ${from}: ${subj}${m.isUnread ? " (ungelesen)" : ""}`;
-          });
-          return `📧 ${data.messages.length} Mails:\n${lines.join("\n")}`;
-        }
         case "find_free_slot": {
           const dateKey = String(input.date || isoDateKey(new Date()));
           const duration = parseInt(input.duration) || 60;
           const evs = await retrieve("eyla_local_events_v2", []) || [];
-          // Optional: Google-Events dazu wenn verbunden
-          let allEv = evs.filter(e => e.date === dateKey);
-          try {
-            const st = await fetchJSON("/api/google/status");
-            if (st.ok && st.data?.connected) {
-              const from = new Date(`${dateKey}T00:00:00`);
-              const to = new Date(`${dateKey}T23:59:59`);
-              const gEv = await fetchGoogleEvents(from, to);
-              allEv = [...allEv, ...gEv];
-            }
-          } catch {}
+          const allEv = evs.filter(e => e.date === dateKey);
           // Range aus preferAfter/Before
           const parseHHMM = s => { const [h, m] = String(s||"").split(":").map(n=>parseInt(n)||0); return h*60+m; };
           const rangeStart = input.preferAfter ? parseHHMM(input.preferAfter) : 7*60;
@@ -5306,17 +5203,6 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
           const todayK = isoDateKey(new Date());
           const evs = await retrieve("eyla_local_events_v2", []) || [];
           const todayEvs = evs.filter(e => e.date === todayK).sort((a,b)=>(a.time||"99").localeCompare(b.time||"99"));
-          // Google falls verbunden
-          try {
-            const st = await fetchJSON("/api/google/status");
-            if (st.ok && st.data?.connected) {
-              const from = new Date(`${todayK}T00:00:00`);
-              const to = new Date(`${todayK}T23:59:59`);
-              const gEv = await fetchGoogleEvents(from, to);
-              todayEvs.push(...gEv);
-              todayEvs.sort((a,b)=>(a.time||"99").localeCompare(b.time||"99"));
-            }
-          } catch {}
           // Todos heute
           let openTodos = [];
           try {
@@ -5335,23 +5221,6 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
           if (topSlot) parts.push(`Größter freier Slot: ${minToHHMM(topSlot.start)}–${minToHHMM(topSlot.end)} (${topSlot.duration>=60?`${Math.floor(topSlot.duration/60)}h${topSlot.duration%60?` ${topSlot.duration%60}m`:''}`:`${topSlot.duration}m`})`);
           return parts.join("\n");
         }
-        case "sync_strava_today": {
-          const { ok, data } = await fetchJSON("/api/strava/status");
-          if (!ok || !data?.connected) return "Strava nicht verbunden. Im Profil unter 'Verbundene Apps' Strava verbinden.";
-          const startOfDay = new Date(); startOfDay.setHours(0,0,0,0);
-          const activities = await fetchStravaActivities(startOfDay);
-          const todayK = (new Date()).toDateString();
-          const existingIds = new Set((log.workouts||[]).map(w => w.stravaId).filter(Boolean));
-          const newOnes = activities.filter(a => a.date === isoDateKey(new Date()) && !existingIds.has(a.id));
-          if (newOnes.length === 0) return "Keine neuen Strava-Aktivitäten von heute.";
-          setLog(l => ({...l, workouts: [...(l.workouts||[]), ...newOnes.map(a => ({
-            type: a.type, duration: a.duration||a.durationMoving,
-            stravaId: a.id, distance: a.distance, calories: a.calories,
-            avgHeartRate: a.avgHeartRate,
-            time: a.startTime || new Date().toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"}),
-          }))]}));
-          return `🏃 ${newOnes.length} Strava-${newOnes.length===1?"Aktivität":"Aktivitäten"} synchronisiert: ${newOnes.map(a=>`${a.type} ${a.duration}min`).join(", ")}`;
-        }
         case "add_event": {
           const todayK = isoDateKey(new Date());
           const arr = await retrieve("eyla_local_events_v2", []) || [];
@@ -5365,21 +5234,7 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
           };
           await persist("eyla_local_events_v2", [...arr, newEv]);
           window.dispatchEvent(new Event("eyla_events_changed"));
-          // Wenn Google verbunden: auch dort anlegen (kein Block-Fail wenn down)
-          let googleSuffix = "";
-          try {
-            const statusRes = await fetchJSON("/api/google/status");
-            if (statusRes.ok && statusRes.data?.connected) {
-              const created = await createGoogleEvent({
-                title: input.title,
-                date: input.date || todayK,
-                time: input.time || "",
-                duration: parseInt(input.duration) || 60,
-              });
-              if (created.ok) googleSuffix = " (+ Google)";
-            }
-          } catch {}
-          return `Termin: ${input.title}${input.time?` um ${input.time}`:""}${input.date && input.date !== todayK?` (${input.date})`:""}${googleSuffix}`;
+          return `Termin: ${input.title}${input.time?` um ${input.time}`:""}${input.date && input.date !== todayK?` (${input.date})`:""}`;
         }
         case "add_shopping_item": {
           const sh = await retrieve("eyla_shopping_v1", null);
@@ -8141,10 +7996,7 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
 
       <VoiceSettings/>
 
-      {/* Verbundene Apps – Connect/Disconnect für externe Dienste */}
-      <IntegrationsCard/>
-
-      {profile.apps?.length>0&&<Card style={{ marginBottom:12 }}><Lbl style={{ marginBottom:10 }}>VERBUNDENE APPS (alt)</Lbl><div style={{ display:"flex",flexWrap:"wrap",gap:7 }}>{profile.apps.map((a,i)=><div key={i} style={{ display:"flex",alignItems:"center",gap:6,background:T.bg2,border:`1px solid ${T.borderS}`,borderRadius:8,padding:"5px 12px" }}><div style={{ width:5,height:5,borderRadius:"50%",background:T.green,boxShadow:`0 0 5px ${T.green}` }}/><span style={{ color:T.mid,fontFamily:T.mono,fontSize:10 }}>{a}</span></div>)}</div></Card>}
+{profile.apps?.length>0&&<Card style={{ marginBottom:12 }}><Lbl style={{ marginBottom:10 }}>VERBUNDENE APPS (alt)</Lbl><div style={{ display:"flex",flexWrap:"wrap",gap:7 }}>{profile.apps.map((a,i)=><div key={i} style={{ display:"flex",alignItems:"center",gap:6,background:T.bg2,border:`1px solid ${T.borderS}`,borderRadius:8,padding:"5px 12px" }}><div style={{ width:5,height:5,borderRadius:"50%",background:T.green,boxShadow:`0 0 5px ${T.green}` }}/><span style={{ color:T.mid,fontFamily:T.mono,fontSize:10 }}>{a}</span></div>)}</div></Card>}
 
       {/* DATEN – Sektion (hinter EYLA, damit Backup nahe Reset) */}
       <div style={{ fontFamily:T.mono, fontSize:9, color:T.muted, letterSpacing:2, margin:"22px 4px 10px", display:"flex", alignItems:"center", gap:8 }}>
@@ -8370,10 +8222,7 @@ export default function App() {
   return <AppContent/>;
 }
 
-// ─── INTEGRATIONS (Google Calendar / Strava / Gmail) ─────────────────────────
-// Connect-State pro Provider. Tokens liegen im Backend (Upstash via /api/<provider>/status).
-// Wir cachen nur den Connect-Status im React-State.
-
+// ─── KLEINE HELPERS ───────────────────────────────────────────────────────────
 function getEylaCode() {
   try { return JSON.parse(localStorage.getItem("eyla_access_code_v1") || "null"); } catch { return null; }
 }
@@ -8389,194 +8238,7 @@ async function fetchJSON(url, opts={}) {
   return { ok: r.ok, status: r.status, data: j };
 }
 
-function useIntegrationStatus(provider) {
-  const [status, setStatus] = useState({ loading:true, connected:false });
-  const refresh = useCallback(async () => {
-    const code = getEylaCode();
-    if (!code) { setStatus({ loading:false, connected:false, noCode:true }); return; }
-    setStatus(s => ({...s, loading:true}));
-    const { ok, data } = await fetchJSON(`/api/${provider}/status`);
-    if (ok && data) setStatus({ loading:false, ...data });
-    else setStatus({ loading:false, connected:false });
-  }, [provider]);
-  useEffect(() => { refresh(); }, [refresh]);
-  return { ...status, refresh };
-}
-
-function connectGoogle() {
-  const code = getEylaCode();
-  if (!code) { alert("Erst mit Access-Code einloggen."); return; }
-  window.location.href = `/api/google/auth?code=${encodeURIComponent(code)}`;
-}
-
-function connectStrava() {
-  const code = getEylaCode();
-  if (!code) { alert("Erst mit Access-Code einloggen."); return; }
-  window.location.href = `/api/strava/auth?code=${encodeURIComponent(code)}`;
-}
-
-async function fetchStravaActivities(after) {
-  const params = after ? `?after=${encodeURIComponent(after.toISOString())}` : "";
-  const { ok, data } = await fetchJSON(`/api/strava/activities${params}`);
-  if (!ok) return [];
-  return data?.activities || [];
-}
-
-// Gmail nutzt den gleichen Google-Token wie Calendar
-async function fetchGmailRecent({ query = "in:inbox is:unread", max = 10 } = {}) {
-  const params = new URLSearchParams({ query, max: String(max) });
-  const { ok, data } = await fetchJSON(`/api/google/gmail?${params}`);
-  if (!ok) return { messages: [], error: data?.error };
-  return data;
-}
-
-async function disconnectProvider(provider) {
-  await fetchJSON(`/api/${provider}/disconnect`, { method:"POST" });
-}
-
-async function fetchGoogleEvents(fromDate, toDate) {
-  const from = fromDate.toISOString();
-  const to = toDate.toISOString();
-  const { ok, data } = await fetchJSON(`/api/google/events?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
-  if (!ok) return [];
-  return data?.events || [];
-}
-
-async function createGoogleEvent({ title, date, time, duration }) {
-  const { ok, data } = await fetchJSON(`/api/google/events`, {
-    method: "POST",
-    body: JSON.stringify({ title, date, time, duration }),
-  });
-  return { ok, data };
-}
-
-function IntegrationsCard() {
-  const google = useIntegrationStatus("google");
-  const strava = useIntegrationStatus("strava");
-  const [postOAuthMsg, setPostOAuthMsg] = useState(null);
-
-  // Check URL-Params nach OAuth Callback
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const connected = params.get("app_connected");
-    const error = params.get("app_error");
-    if (connected) {
-      setPostOAuthMsg({ type:"success", text: `${connected} verbunden ✓` });
-      google.refresh();
-      // URL bereinigen
-      window.history.replaceState({}, "", window.location.pathname);
-    } else if (error) {
-      setPostOAuthMsg({ type:"error", text: `Verbindung fehlgeschlagen: ${error}` });
-      window.history.replaceState({}, "", window.location.pathname);
-    }
-    if (connected || error) {
-      const t = setTimeout(()=>setPostOAuthMsg(null), 4000);
-      return () => clearTimeout(t);
-    }
-  }, []);
-
-  const providers = [
-    {
-      id: "google",
-      label: "Google Calendar",
-      hint: "Termine sehen + erstellen direkt in deinem Google-Kalender.",
-      icon: "🗓",
-      color: T.acc,
-      status: google,
-      onConnect: connectGoogle,
-      onDisconnect: async () => { await disconnectProvider("google"); google.refresh(); },
-    },
-    {
-      id: "strava",
-      label: "Strava",
-      hint: "Workouts importieren (Distanz, Dauer, Puls, Kalorien).",
-      icon: "🏃",
-      color: T.green,
-      status: strava,
-      onConnect: connectStrava,
-      onDisconnect: async () => { await disconnectProvider("strava"); strava.refresh(); },
-    },
-    {
-      id: "gmail",
-      label: "Gmail",
-      hint: google.connected
-        ? "Verbunden via Google. Frag EYLA: 'was kam heute rein?'"
-        : "Erst Google Calendar verbinden – Gmail nutzt den gleichen Login.",
-      icon: "✉",
-      color: T.gold,
-      status: { connected: google.connected, loading: google.loading, viaGoogle: true, email: google.email },
-      onConnect: connectGoogle,  // gleicher Flow
-      onDisconnect: async () => { await disconnectProvider("google"); google.refresh(); },
-    },
-  ];
-
-  return (
-    <Card style={{ marginBottom:12 }}>
-      <Lbl style={{ marginBottom:10 }}>VERBUNDENE APPS</Lbl>
-      {postOAuthMsg && (
-        <div style={{
-          padding:"8px 12px", borderRadius:8, marginBottom:12,
-          background: postOAuthMsg.type==="success" ? T.green+"22" : T.red+"22",
-          border: `1px solid ${postOAuthMsg.type==="success" ? T.green : T.red}55`,
-          color: postOAuthMsg.type==="success" ? T.green : T.red,
-          fontSize:12, fontFamily:T.serif
-        }}>
-          {postOAuthMsg.text}
-        </div>
-      )}
-      {providers.map(p => (
-        <div key={p.id} style={{
-          display:"flex", alignItems:"center", gap:12, padding:"10px 0",
-          borderBottom:`1px solid ${T.border}`
-        }}>
-          <div style={{
-            width:38, height:38, borderRadius:10, background: p.color+"18",
-            border:`1px solid ${p.color}44`, display:"flex", alignItems:"center",
-            justifyContent:"center", fontSize:18, flexShrink:0
-          }}>{p.icon}</div>
-          <div style={{ flex:1, minWidth:0 }}>
-            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-              <span style={{ color:T.text, fontSize:13, fontFamily:T.serif }}>{p.label}</span>
-              {p.status.connected && (
-                <span style={{ background:T.green+"22", border:`1px solid ${T.green}55`, borderRadius:10, padding:"1px 8px", fontSize:9, color:T.green, fontFamily:T.mono, letterSpacing:1 }}>VERBUNDEN</span>
-              )}
-              {p.status.comingSoon && (
-                <span style={{ background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:10, padding:"1px 8px", fontSize:9, color:T.muted, fontFamily:T.mono, letterSpacing:1 }}>BALD</span>
-              )}
-            </div>
-            <div style={{ color:T.muted, fontSize:11, fontStyle:"italic", fontFamily:T.serif, marginTop:2 }}>
-              {p.status.connected && p.status.email ? p.status.email : p.hint}
-            </div>
-          </div>
-          {p.status.comingSoon ? (
-            <span style={{ color:T.muted, fontFamily:T.mono, fontSize:10, fontStyle:"italic" }}>—</span>
-          ) : p.status.loading ? (
-            <span style={{ color:T.muted, fontFamily:T.mono, fontSize:10 }}>…</span>
-          ) : p.status.connected ? (
-            <button onClick={p.onDisconnect} style={{
-              background:"transparent", border:`1px solid ${T.red}33`, borderRadius:8,
-              padding:"5px 10px", color:T.red+"AA", fontFamily:T.mono, fontSize:10,
-              cursor:"pointer", letterSpacing:1
-            }}>TRENNEN</button>
-          ) : (
-            <button onClick={p.onConnect} style={{
-              background:p.color+"22", border:`1px solid ${p.color}66`, borderRadius:8,
-              padding:"5px 12px", color:p.color, fontFamily:T.mono, fontSize:10,
-              cursor:"pointer", letterSpacing:1
-            }}>VERBINDEN</button>
-          )}
-        </div>
-      ))}
-      <p style={{ color:T.muted, fontSize:10, fontStyle:"italic", fontFamily:T.serif, margin:"12px 0 0", lineHeight:1.5 }}>
-        Tokens liegen verschlüsselt im EYLA-Cloud-Speicher (Upstash). Du kannst jederzeit trennen — Tokens werden dann auch bei Google revoked.
-      </p>
-      <p style={{ color:T.muted, fontSize:10, fontStyle:"italic", fontFamily:T.serif, margin:"6px 0 0", lineHeight:1.5 }}>
-        Setup-Anleitung (Google Cloud / Strava): siehe <code style={{ fontFamily:T.mono, fontSize:10, color:T.acc }}>INTEGRATIONS.md</code> im Repo.
-      </p>
-    </Card>
-  );
-}
-
+// (Integrations-Code entfernt – wir bauen den Kalender selbst, ohne Google/Strava/Gmail)
 // ─── GLOBAL SPEECH STOP-PILL ──────────────────────────────────────────────────
 // Sticky-Pill unten rechts, sichtbar wenn EYLA spricht – egal auf welchem Tab.
 // User berichtet: er muss sonst die Seite reloaden um die Stimme zu stoppen.
