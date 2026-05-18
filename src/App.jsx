@@ -1803,6 +1803,41 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [] }) {
         );
       })()}
 
+      {/* WAS PASST JETZT REIN – wenn aktuell ≥30min frei sind */}
+      {isToday && (() => {
+        const todayKey = isoDateKey(new Date());
+        const allEv = [...(events||[]), ...localEvents].map(e => ({...e, date: e.date || todayKey}));
+        const nowMin = new Date().getHours()*60 + new Date().getMinutes();
+        const slots = findFreeSlots(allEv, todayKey, 7*60, 22*60, 15);
+        const currentSlot = slots.find(s => s.start <= nowMin && s.end > nowMin);
+        if (!currentSlot) return null;
+        const restMin = currentSlot.end - nowMin;
+        if (restMin < 15) return null;
+        // Vorschlag basierend auf Restzeit
+        const suggestion =
+          restMin >= 90 ? { icon:"🧠", label:"Deep Work", action:"Fokus-Block" } :
+          restMin >= 60 ? { icon:"🏋", label:"Workout", action:"Bewegung" } :
+          restMin >= 30 ? { icon:"🧘", label:"Stretching", action:"15min Beweglichkeit" } :
+                         { icon:"💧", label:"Wasser-Pause", action:"Glas Wasser" };
+        return (
+          <div style={{
+            padding:"8px 12px", marginBottom:10,
+            background:T.green+"0A", border:`1px solid ${T.green}33`, borderRadius:10,
+            display:"flex", alignItems:"center", gap:10
+          }}>
+            <span style={{ fontSize:18 }}>{suggestion.icon}</span>
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ fontFamily:T.mono, fontSize:9, color:T.green, letterSpacing:1.5 }}>
+                JETZT FREI · {restMin >= 60 ? `${Math.floor(restMin/60)}h${restMin%60?` ${restMin%60}m`:""}` : `${restMin}min`}
+              </div>
+              <div style={{ color:T.text, fontSize:12, fontFamily:T.serif, fontStyle:"italic" }}>
+                Passt rein: {suggestion.action}.
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* ANSTEHEND – Termine + Heute-Todos auf einen Blick (nur wenn heute + was zu zeigen) */}
       {isToday && (() => {
         const todoKey = tagKey;
@@ -3257,6 +3292,7 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
   const [newTravel, setNewTravel] = useState(0); // Vorbereitungszeit in Minuten
   const [smartSchedule, setSmartSchedule] = useState(null); // {template, start} oder null
   const [showLegacyList, setShowLegacyList] = useState(false); // alte Stunden-Liste collapsed
+  const [calView, setCalView] = useState("day"); // "day" | "week"
   const [localEvents, setLocalEvents] = useState([]);
   // Google-Calendar-Events (wenn verbunden)
   const [googleEvents, setGoogleEvents] = useState([]);
@@ -3714,8 +3750,19 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
         return (
           <Card style={{ marginBottom:12 }}>
             <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
-              <Lbl>{isToday ? "HEUTE" : "TAG"} · TIMELINE</Lbl>
+              <Lbl>{calView==="week" ? "WOCHE" : isToday ? "HEUTE" : "TAG"} · TIMELINE</Lbl>
               <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+                {/* Tag/Woche Toggle */}
+                <div style={{ display:"flex", background:T.bg, borderRadius:8, padding:2, border:`1px solid ${T.borderS}` }}>
+                  {[["day","Tag"],["week","Woche"]].map(([id, lbl]) => (
+                    <button key={id} onClick={()=>setCalView(id)} style={{
+                      background: calView===id ? T.acc+"33" : "transparent",
+                      border:"none", borderRadius:6, padding:"3px 10px",
+                      color: calView===id ? T.acc : T.muted, fontFamily:T.mono, fontSize:9,
+                      letterSpacing:1, cursor:"pointer"
+                    }}>{lbl.toUpperCase()}</button>
+                  ))}
+                </div>
                 {hasConflicts && (
                   <span style={{ background:T.red+"22", border:`1px solid ${T.red}55`, borderRadius:10, padding:"1px 8px", fontSize:9, color:T.red, fontFamily:T.mono, letterSpacing:1 }}>
                     {Object.keys(conflictsById).length} KONFLIKT{Object.keys(conflictsById).length>1?"E":""}
@@ -3740,19 +3787,43 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
                 ))}
               </div>
             )}
-            <DayTimeline
-              events={eventsForSelected}
-              dayKey={selectedKey}
-              isToday={isToday}
-              freeSlots={slots}
-              conflictsById={conflictsById}
-              onSlotClick={(slot) => {
-                setNewTime(minToHHMM(slot.start));
-                setNewDur(String(Math.min(slot.duration, 60)));
-                setShowAdd(true);
-              }}
-              onEventClick={(ev) => { if (ev.local) startEdit(ev); }}
-            />
+            {calView === "week" ? (() => {
+              // Wochen-Start: Montag der ausgewählten Woche
+              const wkStart = new Date(selectedDate);
+              const dow = (wkStart.getDay() + 6) % 7; // 0=Mo
+              wkStart.setDate(wkStart.getDate() - dow);
+              wkStart.setHours(0,0,0,0);
+              // 7 Tage Events sammeln (lokal + Google in dem Zeitraum)
+              const wkEnd = new Date(wkStart); wkEnd.setDate(wkEnd.getDate()+7);
+              const wkKeys = Array.from({length:7},(_,i)=>{ const d=new Date(wkStart); d.setDate(d.getDate()+i); return isoDateKey(d); });
+              const weekEvents = [
+                ...localEvents.filter(e => wkKeys.includes(e.date)),
+                ...googleEvents.filter(e => wkKeys.includes(e.date)),
+              ];
+              return (
+                <WeekTimeline
+                  events={weekEvents}
+                  weekStart={wkStart}
+                  isTodayKey={isoDateKey(new Date())}
+                  onDayClick={(d)=>{ setSelectedDate(d); setCalView("day"); }}
+                  onEventClick={(ev)=>{ if (ev.local) startEdit(ev); }}
+                />
+              );
+            })() : (
+              <DayTimeline
+                events={eventsForSelected}
+                dayKey={selectedKey}
+                isToday={isToday}
+                freeSlots={slots}
+                conflictsById={conflictsById}
+                onSlotClick={(slot) => {
+                  setNewTime(minToHHMM(slot.start));
+                  setNewDur(String(Math.min(slot.duration, 60)));
+                  setShowAdd(true);
+                }}
+                onEventClick={(ev) => { if (ev.local) startEdit(ev); }}
+              />
+            )}
           </Card>
         );
       })()}
