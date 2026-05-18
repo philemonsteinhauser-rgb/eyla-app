@@ -8542,6 +8542,9 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
           )}
         </Card>
 
+        {/* PUSH-NOTIFICATIONS (vor Erinnerungen weil die nichts wert sind ohne Push) */}
+        <PushSettingsCard/>
+
         {/* ERINNERUNGEN */}
         <Card style={{ marginBottom:12 }}>
           <Lbl style={{ marginBottom:10 }}>ERINNERUNGEN</Lbl>
@@ -10368,6 +10371,141 @@ WICHTIG: nur EIN Tool. Bei Mengen IMMER realistische Kalorien schätzen, NIE die
         {status === "thinking" ? "…" : isListening ? "■" : "🎙"}
       </button>
     </>
+  );
+}
+
+// ─── PUSH NOTIFICATIONS (echte System-Notifications via Service Worker) ──────
+// urlBase64ToUint8Array – Helper für VAPID applicationServerKey
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
+}
+
+function usePushSubscription() {
+  const [status, setStatus] = useState({
+    supported: false, registered: false, subscribed: false, loading: true, error: null
+  });
+
+  useEffect(() => {
+    const supported = "serviceWorker" in navigator && "PushManager" in window;
+    if (!supported) {
+      setStatus({ supported:false, registered:false, subscribed:false, loading:false, error:null });
+      return;
+    }
+    (async () => {
+      try {
+        const reg = await navigator.serviceWorker.register("/sw.js");
+        const sub = await reg.pushManager.getSubscription();
+        setStatus({ supported:true, registered:true, subscribed: !!sub, loading:false, error:null });
+      } catch (e) {
+        setStatus({ supported:true, registered:false, subscribed:false, loading:false, error:String(e?.message||e) });
+      }
+    })();
+  }, []);
+
+  async function subscribe() {
+    setStatus(s => ({...s, loading:true, error:null}));
+    try {
+      // Permission anfordern
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") { setStatus(s => ({...s, loading:false, error:"Permission abgelehnt"})); return; }
+      // VAPID Public Key holen
+      const { ok, data } = await fetchJSON("/api/push?action=public-key");
+      if (!ok || !data?.key) { setStatus(s => ({...s, loading:false, error: data?.error || "VAPID-Key fehlt im Backend"})); return; }
+      // SW + Push subscribe
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(data.key),
+      });
+      // An Backend schicken
+      const r = await fetchJSON("/api/push?action=subscribe", {
+        method:"POST", body: JSON.stringify({ subscription: sub })
+      });
+      if (!r.ok) { setStatus(s => ({...s, loading:false, error: r.data?.error || "Subscribe failed"})); return; }
+      setStatus(s => ({...s, subscribed:true, loading:false }));
+    } catch (e) {
+      setStatus(s => ({...s, loading:false, error: String(e?.message||e) }));
+    }
+  }
+  async function unsubscribe() {
+    setStatus(s => ({...s, loading:true}));
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) {
+        await fetchJSON("/api/push?action=unsubscribe", {
+          method:"POST", body: JSON.stringify({ endpoint: sub.endpoint })
+        });
+        await sub.unsubscribe();
+      }
+      setStatus(s => ({...s, subscribed:false, loading:false}));
+    } catch (e) {
+      setStatus(s => ({...s, loading:false, error: String(e?.message||e)}));
+    }
+  }
+  async function sendTest() {
+    const r = await fetchJSON("/api/push?action=test", { method:"POST" });
+    if (!r.ok) alert("Test-Push fehlgeschlagen: " + (r.data?.error || r.status));
+    else alert(`✓ Test-Push verschickt (${r.data.sent}/${r.data.sent+r.data.failed} Devices). Sollte gleich kommen.`);
+  }
+  return { ...status, subscribe, unsubscribe, sendTest };
+}
+
+function PushSettingsCard() {
+  const push = usePushSubscription();
+  if (!push.supported) {
+    return (
+      <Card style={{ marginBottom:12, opacity:.6 }}>
+        <Lbl style={{ marginBottom:8 }}>PUSH-NOTIFICATIONS</Lbl>
+        <p style={{ color:T.muted, fontSize:11, fontStyle:"italic", fontFamily:T.serif, margin:0, lineHeight:1.5 }}>
+          Dein Browser unterstützt das nicht (iOS &lt; 16.4 oder kein PWA).<br/>
+          Tipp: App zum Home-Screen hinzufügen (Safari → Teilen → „Zum Home-Bildschirm").
+        </p>
+      </Card>
+    );
+  }
+  return (
+    <Card style={{ marginBottom:12 }}>
+      <Lbl style={{ marginBottom:8 }}>PUSH-NOTIFICATIONS</Lbl>
+      <p style={{ color:T.muted, fontSize:11, fontStyle:"italic", fontFamily:T.serif, margin:"0 0 14px", lineHeight:1.5 }}>
+        Echte System-Benachrichtigungen — auch wenn die App zu ist. Funktioniert nur wenn die App als PWA installiert ist (iOS Safari → Teilen → Zum Home-Bildschirm).
+      </p>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+        <span style={{ fontFamily:T.serif, fontSize:13, color:T.text }}>
+          {push.subscribed ? "✓ Aktiv auf diesem Gerät" : push.loading ? "…" : "Nicht aktiv"}
+        </span>
+        {push.subscribed ? (
+          <div style={{ display:"flex", gap:6 }}>
+            <button onClick={push.sendTest} style={{
+              background:"transparent", border:`1px solid ${T.acc}55`, borderRadius:8,
+              padding:"5px 12px", color:T.acc, fontFamily:T.mono, fontSize:10,
+              letterSpacing:1, cursor:"pointer"
+            }}>TEST</button>
+            <button onClick={push.unsubscribe} disabled={push.loading} style={{
+              background:"transparent", border:`1px solid ${T.red}33`, borderRadius:8,
+              padding:"5px 12px", color:T.red+"AA", fontFamily:T.mono, fontSize:10,
+              letterSpacing:1, cursor:"pointer"
+            }}>TRENNEN</button>
+          </div>
+        ) : (
+          <button onClick={push.subscribe} disabled={push.loading} style={{
+            background: T.acc+"22", border:`1px solid ${T.acc}88`, borderRadius:8,
+            padding:"6px 14px", color:T.acc, fontFamily:T.mono, fontSize:11,
+            letterSpacing:1, cursor:"pointer", fontWeight:700
+          }}>{push.loading ? "…" : "✦ AKTIVIEREN"}</button>
+        )}
+      </div>
+      {push.error && (
+        <p style={{ color:T.red, fontSize:10, fontStyle:"italic", margin:"10px 0 0", fontFamily:T.serif }}>
+          {push.error}
+        </p>
+      )}
+    </Card>
   );
 }
 
