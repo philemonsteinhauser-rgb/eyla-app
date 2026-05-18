@@ -1,8 +1,8 @@
 // Konsolidierter Strava-Handler — eine Function für alle Routen
 // /api/strava/auth | callback | status | disconnect | activities
 
-import { getRedis, tokenKey, userCodeFromReq, setCors } from "../_kv.js";
-import { getStravaAccessToken } from "./_token.js";
+import { getRedis, tokenKey, userCodeFromReq, setCors } from "../../lib/kv.js";
+import { getStravaAccessToken } from "../../lib/strava-token.js";
 
 export default async function handler(req, res) {
   setCors(res);

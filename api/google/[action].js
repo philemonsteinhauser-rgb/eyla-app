@@ -7,8 +7,8 @@
 // /api/google/events      → action="events"      – Calendar lesen/schreiben
 // /api/google/gmail       → action="gmail"       – Gmail-Inbox lesen
 
-import { getRedis, tokenKey, userCodeFromReq, setCors } from "../_kv.js";
-import { getGoogleAccessToken } from "./_token.js";
+import { getRedis, tokenKey, userCodeFromReq, setCors } from "../../lib/kv.js";
+import { getGoogleAccessToken } from "../../lib/google-token.js";
 
 export default async function handler(req, res) {
   setCors(res);
