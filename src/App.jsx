@@ -636,6 +636,73 @@ Kalorien immer realistisch SCHÄTZEN basierend auf Lebensmittel × Menge. Lieber
 REGELN: Immer Deutsch. 2–4 Sätze. Konkret mit Mengen/Zeiten. Bei Ernährungsfragen Tagesziel + Rest-kcal einbeziehen. Wenn jemand übers Ziel ist: kein Drama, am nächsten Tag flexibel ausgleichen. Termine einbeziehen wenn sinnvoll. Letzte 7 Tage nur wenn Trend relevant. Nie "Als KI". Nie "ich sehe/kenne deinen Kalender".`;
 }
 
+// ─── TEXT-NORMALISIERUNG für TTS ──────────────────────────────────────────────
+// Ersetzt Abkürzungen + Zahlenformate damit ElevenLabs (und Browser-TTS) sie
+// richtig aussprechen. Bsp: "200 kcal" → "200 Kilokalorien", "2.5L" → "2,5 Liter".
+// Wichtig: Reihenfolge der Regeln — spezifisch zuerst, allgemein danach.
+function normalizeForSpeech(text) {
+  if (!text) return text;
+  let s = String(text);
+
+  // Datum/Zeit-Spezialformate ZUERST
+  s = s.replace(/(\d{1,2}):(\d{2})\s*(Uhr|h)?/gi, (_, h, m, suffix) => {
+    const hh = parseInt(h, 10);
+    const mm = parseInt(m, 10);
+    if (mm === 0) return `${hh} Uhr`;
+    if (mm === 30) return `${hh} Uhr ${mm}`;
+    return `${hh} Uhr ${mm}`;
+  });
+
+  // Bereich-Pfeile/Trennzeichen für Sprache
+  s = s.replace(/(\d+)\s*[–\-—]\s*(\d+)\s*Uhr/g, "$1 bis $2 Uhr");
+  s = s.replace(/(\d+)\s*[–\-—]\s*(\d+)\s*(min|m)\b/gi, "$1 bis $2 Minuten");
+
+  // Mengen + Einheiten – spezifische Patterns
+  // Liter (auch 0.25L, 2,5L)
+  s = s.replace(/(\d+([.,]\d+)?)\s*L\b/g, (_, n) => `${n.replace(".", ",")} Liter`);
+  s = s.replace(/(\d+([.,]\d+)?)\s*ml\b/gi, (_, n) => `${n.replace(".", ",")} Milliliter`);
+  // Kilogramm/Gramm
+  s = s.replace(/(\d+([.,]\d+)?)\s*kg\b/gi, (_, n) => `${n.replace(".", ",")} Kilo`);
+  s = s.replace(/(\d+([.,]\d+)?)\s*g\b(?!ramm)/g, (_, n) => `${n.replace(".", ",")} Gramm`);
+  // Kalorien
+  s = s.replace(/(\d+)\s*kcal\b/gi, "$1 Kilokalorien");
+  s = s.replace(/(\d+)\s*kal\b/gi, "$1 Kalorien");
+  // Zeit
+  s = s.replace(/(\d+)\s*min\b/gi, (_, n) => `${n} Minute${parseInt(n)===1?"":"n"}`);
+  s = s.replace(/(\d+)\s*h\b/g, (_, n) => `${n} Stunde${parseInt(n)===1?"":"n"}`);
+  s = s.replace(/(\d+)\s*sek\b/gi, (_, n) => `${n} Sekunden`);
+  // Distanz
+  s = s.replace(/(\d+([.,]\d+)?)\s*km\b/g, (_, n) => `${n.replace(".", ",")} Kilometer`);
+  s = s.replace(/(\d+)\s*m\b(?!in|ml|illi)/g, "$1 Meter");
+  // Makros (P/C/F)
+  s = s.replace(/\bP\s*(\d+)g?\b/g, "$1 Gramm Protein");
+  s = s.replace(/\bC\s*(\d+)g?\b/g, "$1 Gramm Kohlenhydrate");
+  s = s.replace(/\bF\s*(\d+)g?\b/g, "$1 Gramm Fett");
+  // Häufige Wörter
+  s = s.replace(/\bz\.B\.\b/gi, "zum Beispiel");
+  s = s.replace(/\bbzw\.\b/gi, "beziehungsweise");
+  s = s.replace(/\bca\.\b/gi, "circa");
+  s = s.replace(/\bggf\.\b/gi, "gegebenenfalls");
+  s = s.replace(/\busw\.\b/gi, "und so weiter");
+  s = s.replace(/\bd\.h\.\b/gi, "das heißt");
+  s = s.replace(/\bevtl\.\b/gi, "eventuell");
+  s = s.replace(/\bk\.A\.\b/gi, "keine Angabe");
+  s = s.replace(/\bvs\.\b/gi, "versus");
+  // Wochentage-Abkürzungen
+  s = s.replace(/\bMo\b/g, "Montag").replace(/\bDi\b/g, "Dienstag")
+       .replace(/\bMi\b/g, "Mittwoch").replace(/\bDo\b/g, "Donnerstag")
+       .replace(/\bFr\b/g, "Freitag").replace(/\bSa\b/g, "Samstag")
+       .replace(/\bSo\b/g, "Sonntag");
+  // Slashes zu " oder "
+  s = s.replace(/(\w)\/(\w)/g, "$1 oder $2");
+  // Bullets / Symbole raus
+  s = s.replace(/[•·∙]/g, ",");
+  s = s.replace(/[→✓✗★✦☀🌙⚡💧😴🍽🏋📅🧘🧠📞✂🗓✉🏃]/g, " ");
+  // Mehrfach-Spaces zusammenfassen
+  s = s.replace(/\s{2,}/g, " ").trim();
+  return s;
+}
+
 // ─── VOICE HOOK ───────────────────────────────────────────────────────────────
 function useVoice(onResult) {
   const recRef = useRef(null);
@@ -2679,6 +2746,108 @@ function DayTimeline({ events, dayKey, isToday, onSlotClick, onEventClick, freeS
   );
 }
 
+// Wochen-Timeline: 7 Tage nebeneinander als Mini-Spalten
+function WeekTimeline({ events, weekStart, isTodayKey, onDayClick, onEventClick }) {
+  const HOUR_START = 7;
+  const HOUR_END = 22;
+  const HOUR_HEIGHT = 18; // kompakter als Tag-View
+  const TOTAL_HEIGHT = (HOUR_END - HOUR_START) * HOUR_HEIGHT;
+  const dayNames = ["Mo","Di","Mi","Do","Fr","Sa","So"];
+  const days = Array.from({length:7}, (_, i) => {
+    const d = new Date(weekStart);
+    d.setDate(d.getDate() + i);
+    return { date: d, key: isoDateKey(d), label: dayNames[i], dayNum: d.getDate() };
+  });
+  const nowMin = new Date().getHours()*60 + new Date().getMinutes();
+  const nowY = (nowMin - HOUR_START*60) * (HOUR_HEIGHT/60);
+
+  return (
+    <div style={{ position:"relative" }}>
+      {/* Stunden-Labels links */}
+      <div style={{ position:"absolute", left:0, top:24, width:30, height:TOTAL_HEIGHT }}>
+        {Array.from({length: HOUR_END - HOUR_START + 1}, (_, i) => {
+          const h = HOUR_START + i;
+          const y = i * HOUR_HEIGHT;
+          if (h % 3 !== 0) return null;
+          return (
+            <div key={h} style={{
+              position:"absolute", top: y - 5, right:2, width:26,
+              fontFamily:T.mono, fontSize:8, color:T.muted, textAlign:"right"
+            }}>{String(h).padStart(2,"0")}</div>
+          );
+        })}
+      </div>
+      {/* 7 Tag-Spalten */}
+      <div style={{ marginLeft:32, display:"grid", gridTemplateColumns:"repeat(7, 1fr)", gap:2 }}>
+        {days.map(d => {
+          const isCurrentDay = d.key === isTodayKey;
+          const dayEvents = events.filter(e => e.date === d.key && e.time);
+          return (
+            <div key={d.key} style={{ position:"relative" }}>
+              {/* Header Tag */}
+              <button onClick={()=>onDayClick?.(d.date)} style={{
+                width:"100%", background: isCurrentDay ? T.acc+"22" : "transparent",
+                border: `1px solid ${isCurrentDay ? T.acc : T.borderS}`,
+                borderRadius:6, padding:"3px 0",
+                color: isCurrentDay ? T.acc : T.muted, fontFamily:T.mono, fontSize:9,
+                letterSpacing:.5, cursor:"pointer", marginBottom:4,
+                display:"flex", flexDirection:"column", alignItems:"center"
+              }}>
+                <span style={{ opacity:.7, fontSize:8 }}>{d.label}</span>
+                <span style={{ fontSize:11, fontWeight:isCurrentDay ? 700 : 400 }}>{d.dayNum}</span>
+              </button>
+              {/* Tag-Slot */}
+              <div style={{
+                position:"relative", height: TOTAL_HEIGHT,
+                background: T.bg2 + "55", border:`1px solid ${T.border}`, borderRadius:4,
+              }}>
+                {/* Hour-Gridlines */}
+                {Array.from({length: HOUR_END - HOUR_START + 1}, (_, i) => i % 3 === 0 && (
+                  <div key={i} style={{
+                    position:"absolute", left:0, right:0, top: i * HOUR_HEIGHT, height:1,
+                    background: T.border, opacity:.5
+                  }}/>
+                ))}
+                {/* Jetzt-Linie nur am heutigen Tag */}
+                {isCurrentDay && nowY >= 0 && nowY <= TOTAL_HEIGHT && (
+                  <div style={{
+                    position:"absolute", left:0, right:0, top:nowY, height:2,
+                    background:T.red, opacity:.85, zIndex:5
+                  }}/>
+                )}
+                {/* Events */}
+                {dayEvents.map(ev => {
+                  const [h, m] = ev.time.split(":").map(n => parseInt(n)||0);
+                  const startMin = h*60 + m;
+                  const dur = parseInt(ev.duration) || 60;
+                  const top = (startMin - HOUR_START*60) * (HOUR_HEIGHT/60);
+                  const height = Math.max(14, dur * (HOUR_HEIGHT/60));
+                  const isGoogle = ev.google || ev.source === "google";
+                  const col = isGoogle ? T.acc : T.gold;
+                  return (
+                    <button key={ev.id || `${ev.title}-${ev.time}`} onClick={()=>onEventClick?.(ev)} style={{
+                      position:"absolute", left:1, right:1, top, height,
+                      background: col+"33", borderLeft:`2px solid ${col}`, borderRadius:3,
+                      padding:"1px 3px", overflow:"hidden", cursor:"pointer",
+                      display:"flex", alignItems:"flex-start"
+                    }} title={`${ev.title} · ${ev.time} (${dur}min)`}>
+                      <span style={{
+                        fontFamily:T.serif, fontSize:8, color:T.text,
+                        whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis",
+                        width:"100%", textAlign:"left", lineHeight:1.2
+                      }}>{ev.title}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // Voice-Button für Kalender (klein, kompakt) – wraps useVoice Hook
 function CalVoiceBtn({ onResult }) {
   const v = useVoice(onResult);
@@ -4518,6 +4687,9 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
     if (!voiceOn || !text) { console.log("[speak] skip: voiceOn=", voiceOn, "textLen=", text?.length); return; }
     const settings = loadVoiceSettings();
     console.log("[speak] settings:", settings, "textLen:", text.length);
+
+    // Text für TTS aufbereiten: Zahlen und Abkürzungen ausschreiben
+    text = normalizeForSpeech(text);
 
     // 1. ElevenLabs probieren wenn aktiviert + Voice-ID vorhanden
     if (settings.useElevenLabs && settings.elevenLabsVoiceId) {
