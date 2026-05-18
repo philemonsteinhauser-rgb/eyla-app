@@ -3086,6 +3086,8 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
   const [newDur, setNewDur] = useState("");
   const [newRec, setNewRec] = useState("");  // ""|"daily"|"weekly"
   const [newTravel, setNewTravel] = useState(0); // Vorbereitungszeit in Minuten
+  const [smartSchedule, setSmartSchedule] = useState(null); // {template, start} oder null
+  const [showLegacyList, setShowLegacyList] = useState(false); // alte Stunden-Liste collapsed
   const [localEvents, setLocalEvents] = useState([]);
   // Google-Calendar-Events (wenn verbunden)
   const [googleEvents, setGoogleEvents] = useState([]);
@@ -3586,16 +3588,33 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
         );
       })()}
 
-      {/* Quick-Templates für One-Tap-Add */}
+      {/* Quick-Templates mit SMART-SCHEDULE: Tap → bester Slot wird gefunden + Vorschlag */}
       <Card style={{ marginBottom:12 }}>
-        <Lbl style={{ marginBottom:8 }}>QUICK-ADD</Lbl>
+        <Lbl style={{ marginBottom:8 }}>QUICK-ADD · TAP FÜR SMART-SLOT</Lbl>
         <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
           {EVENT_TEMPLATES.map(tpl => (
             <button key={tpl.id} onClick={()=>{
-              setNewTitle(tpl.label);
-              setNewDur(String(tpl.duration));
-              if (tpl.defaultTime) setNewTime(tpl.defaultTime);
-              setShowAdd(true);
+              // Smart-Schedule: finde besten Slot für tpl.duration im selectedKey
+              const slots = findFreeSlots(eventsForSelected, selectedKey, 7*60, 22*60, tpl.duration);
+              // Preferenz: defaultTime wenn da und passt, sonst nächster großer Slot
+              let chosenStart = null;
+              if (tpl.defaultTime) {
+                const [h, m] = tpl.defaultTime.split(":").map(n=>parseInt(n)||0);
+                const target = h*60 + m;
+                const fits = slots.find(s => s.start <= target && s.end >= target + tpl.duration);
+                if (fits) chosenStart = target;
+              }
+              if (chosenStart === null) {
+                // Nächster Slot ab jetzt (wenn heute) sonst frühster
+                const nowMin = isToday ? (new Date().getHours()*60 + new Date().getMinutes()) : 0;
+                const futureSlot = slots.find(s => s.end >= nowMin + tpl.duration);
+                if (futureSlot) chosenStart = Math.max(futureSlot.start, nowMin);
+              }
+              if (chosenStart === null) {
+                alert(`Keine ${tpl.duration}min-Lücke an diesem Tag.`);
+                return;
+              }
+              setSmartSchedule({ template: tpl, start: chosenStart });
             }} style={{
               background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:18,
               padding:"5px 12px", color:T.mid, fontFamily:T.serif, fontSize:12,
@@ -3603,12 +3622,93 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
               fontStyle:"italic"
             }}>
               <span>{tpl.icon}</span>{tpl.label}
+              <span style={{ color:T.acc, fontSize:9, fontFamily:T.mono, marginLeft:2 }}>{tpl.duration}m</span>
             </button>
           ))}
         </div>
       </Card>
 
-      {/* Legacy Stunden-Liste (Termine zum Editieren) */}
+      {/* SMART-SCHEDULE VORSCHLAG-MODAL */}
+      {smartSchedule && (() => {
+        const tpl = smartSchedule.template;
+        const start = smartSchedule.start;
+        const end = start + tpl.duration;
+        const alternateSlots = findFreeSlots(eventsForSelected, selectedKey, 7*60, 22*60, tpl.duration)
+          .filter(s => s.start !== start)
+          .slice(0, 3);
+        return (
+          <div onClick={()=>setSmartSchedule(null)} style={{
+            position:"fixed", inset:0, zIndex:200, background:"rgba(0,0,0,0.7)",
+            backdropFilter:"blur(6px)", display:"flex", alignItems:"center",
+            justifyContent:"center", padding:20
+          }}>
+            <div onClick={e=>e.stopPropagation()} style={{
+              background:T.bg2, border:`1px solid ${T.acc}55`, borderRadius:14,
+              padding:20, maxWidth:380, width:"100%",
+              boxShadow:`0 10px 60px ${T.acc}33`
+            }}>
+              <div style={{ fontSize:32, textAlign:"center", marginBottom:6 }}>{tpl.icon}</div>
+              <div style={{ fontFamily:T.mono, fontSize:9, color:T.acc, letterSpacing:2, textAlign:"center", marginBottom:6 }}>SMART-SLOT</div>
+              <h3 style={{ fontSize:18, fontWeight:300, color:T.text, margin:"0 0 4px", textAlign:"center", fontFamily:T.serif }}>
+                {tpl.label} um {minToHHMM(start)}
+              </h3>
+              <p style={{ color:T.mid, fontSize:12, fontStyle:"italic", fontFamily:T.serif, margin:"0 0 16px", textAlign:"center" }}>
+                {minToHHMM(start)}–{minToHHMM(end)} · {tpl.duration}min ohne Kollision.
+              </p>
+              <div style={{ display:"flex", gap:8, marginBottom:10 }}>
+                <button onClick={()=>{
+                  // Direkt anlegen
+                  saveLocal([...localEvents, {
+                    id:Date.now(), title:tpl.label, time:minToHHMM(start),
+                    duration:String(tpl.duration), date:selectedKey, local:true,
+                    recurrence:null, travelTime:0
+                  }]);
+                  window.dispatchEvent(new Event("eyla_events_changed"));
+                  haptic(30);
+                  setSmartSchedule(null);
+                }} style={{
+                  flex:1, background:`linear-gradient(135deg,${T.dim},${T.acc})`,
+                  border:"none", borderRadius:10, padding:"11px 18px",
+                  color:T.bg, fontFamily:T.serif, fontSize:14, fontWeight:700, cursor:"pointer"
+                }}>✓ Anlegen</button>
+                <button onClick={()=>setSmartSchedule(null)} style={{
+                  background:"transparent", border:`1px solid ${T.borderS}`, borderRadius:10,
+                  padding:"11px 18px", color:T.muted, fontFamily:T.serif, fontSize:14,
+                  cursor:"pointer", fontStyle:"italic"
+                }}>Abbrechen</button>
+              </div>
+              {alternateSlots.length > 0 && (
+                <div>
+                  <div style={{ fontFamily:T.mono, fontSize:9, color:T.muted, letterSpacing:1.5, marginBottom:6, marginTop:4 }}>
+                    ODER ANDERE ZEIT
+                  </div>
+                  <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+                    {alternateSlots.map((s, i) => (
+                      <button key={i} onClick={()=>setSmartSchedule({...smartSchedule, start:s.start})} style={{
+                        background:T.bg, border:`1px solid ${T.borderS}`, borderRadius:8,
+                        padding:"4px 10px", color:T.mid, fontFamily:T.mono, fontSize:11,
+                        cursor:"pointer"
+                      }}>{minToHHMM(s.start)}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Legacy Stunden-Liste (collapsed by default, nur zum Editieren) */}
+      <button onClick={()=>setShowLegacyList(s=>!s)} style={{
+        width:"100%", background:"transparent", border:"none",
+        display:"flex", alignItems:"center", gap:8, padding:"6px 4px",
+        fontFamily:T.mono, fontSize:9, color:T.muted, letterSpacing:2,
+        cursor:"pointer", textAlign:"left", marginBottom:8
+      }}>
+        <span>{showLegacyList ? "▾" : "▸"} TERMINE BEARBEITEN · {eventsForSelected.length}</span>
+        <div style={{ flex:1, height:1, background:T.borderS, opacity:.4 }}/>
+      </button>
+      {showLegacyList && (
       <Card style={{ padding:"16px 0", overflow:"hidden" }}>
         {eventsLoading && isToday && (
           <div style={{ textAlign:"center", padding:"20px 0" }}>
@@ -3714,6 +3814,7 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
           );
         })}
       </Card>
+      )}
 
       {/* Keine Termine Info */}
       {!eventsLoading && eventsForSelected.length === 0 && (
