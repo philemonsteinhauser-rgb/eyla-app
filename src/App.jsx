@@ -626,12 +626,38 @@ AKTIONEN: Du hast Tools um direkt im Leben des Users Sachen zu tun:
 - daily_briefing → Tages-Brief mit Terminen, Todos, freien Slots ("wie sieht heute aus?")
 Wenn der User sagt "trag X ein" / "ich hab Y gegessen" / "noch 0.5L Wasser" / "Termin morgen 14 Uhr Sport" / "Eier auf die Liste" / "ich muss noch Mama anrufen" / "was kam in der mail?" / "sync mein training" – nutze die Tools direkt. Kurz bestätigen, nicht ausschweifen. Wenn unklar: nachfragen statt raten.
 
-WICHTIGE REGEL für add_meal: Zahlen vom User wie "200g", "500ml", "2 Scheiben" sind MENGEN, NIEMALS Kalorien!
-Beispiele:
-- "200g Steak" → name:"200g Steak", amount:"200g", calories:~500 (geschätzt, nicht 200!)
-- "1 Apfel" → name:"1 Apfel", amount:"1 Stück", calories:~80
-- "500ml Saft" → name:"500ml Saft", amount:"500ml", calories:~220
-Kalorien immer realistisch SCHÄTZEN basierend auf Lebensmittel × Menge. Lieber gute Schätzung als 0.
+⚠⚠⚠ KRITISCHE REGEL für add_meal — KEINE Ausnahmen, NIEMALS verletzen:
+
+NIEMALS calories = die Zahl die der User für die Menge nennt.
+Auch wenn KEINE Einheit dabei steht — wenn jemand sagt "200 Steak" oder "100 Hähnchen" sind das GRAMM, nicht Kalorien.
+
+REALISTISCHE kcal-Werte pro 100g (für ehrliche Schätzungen):
+- Rindersteak: ~250 kcal/100g  →  200g Steak = ~500 kcal
+- Schnitzel/Kotelett: ~350/100g
+- Hähnchen/Pute: ~165/100g  →  200g Hähnchen = ~330
+- Lachs: ~205/100g  →  200g = ~410
+- Brot: ~245/100g  →  Scheibe (40g) = ~100
+- Reis gekocht: ~130/100g  →  Portion 200g = ~260
+- Pasta gekocht: ~158/100g  →  Portion 250g = ~400
+- Apfel: ~52/100g  →  1 mittlerer Apfel (180g) = ~95
+- Banane: ~89/100g  →  1 mittlere (120g) = ~107
+- Avocado: ~160/100g  →  halbe (100g) = ~160
+- Müsli: ~360/100g  →  Schüssel (50g + 250ml Milch) = ~310
+- Ei: ~155/100g  →  1 Ei (~60g) = ~93
+- Käse: ~350/100g  →  Scheibe (30g) = ~105
+- Pizza Margherita: ~250/100g  →  ganze Pizza (~350g) = ~875
+
+Beispiele für CORRECT add_meal calls:
+- User: "200g Steak"        → name:"200g Steak",     amount:"200g",    calories:500
+- User: "Steak 200 Gramm"   → name:"200g Steak",     amount:"200g",    calories:500
+- User: "200 Steak"         → name:"Steak ~200g",    amount:"~200g",   calories:500  (Menge erkannt + geschätzt)
+- User: "Steak"             → name:"Steak",          amount:"1 Portion", calories:450  (Standardportion schätzen)
+- User: "1 Apfel"           → name:"1 Apfel",        amount:"1 Stück", calories:95
+- User: "500ml Saft"        → name:"500ml Saft",     amount:"500ml",   calories:220
+
+Wenn die calories absurd niedrig wären (Steak < 300, Schnitzel < 350, Burger < 400), STIMMT WAS NICHT — du hast die Menge eingesetzt.
+
+Lieber überschätzen als unterschätzen. NIE 0 oder Zahl == Gramm.
 
 REGELN: Immer Deutsch. 2–4 Sätze. Konkret mit Mengen/Zeiten. Bei Ernährungsfragen Tagesziel + Rest-kcal einbeziehen. Wenn jemand übers Ziel ist: kein Drama, am nächsten Tag flexibel ausgleichen. Termine einbeziehen wenn sinnvoll. Letzte 7 Tage nur wenn Trend relevant. Nie "Als KI". Nie "ich sehe/kenne deinen Kalender".`;
 }
@@ -5054,30 +5080,46 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
           const fullName = (amount && !nameHasAmount) ? `${amount} ${rawName}` : rawName;
 
           // ── ANTI-BUG: Modell hat Menge mit Kalorien verwechselt? ──────────────
-          // Robuste Heuristik: prüft alle Zahlen im Input (Voice-transkribiert
-          // oft uneinheitlich) und matched gegen calories.
-          // Bsp: "200g Steak", "200 Gramm Steak", "Steak 200g", "200 Stück" etc.
+          // Mehr-stufige Heuristik:
+          //  A) cal matched einer Zahl im Input UND es gibt ein Einheits-Wort
+          //  B) cal liegt unter realistischem Mindestwert für ein erkanntes
+          //     Lebensmittel (Lookup-Tabelle) — fängt auch Fälle wo Voice die
+          //     Einheit verschluckt hat ("200 Steak" statt "200g Steak")
           if (cal > 0) {
             const checkText = `${amount} ${rawName}`.toLowerCase();
-            // Erweiterte Einheiten-Regex
             const unitWords = /(g|gramm|gr|kg|ml|milliliter|cl|stk|stueck|stück|scheibe[n]?|scheibchen|portion[en]?|tasse[n]?|glas|gläser|tl|el|löffel|löffe?l)\b/i;
-            // Finde alle Zahlen im Text
             const numbers = [...checkText.matchAll(/(\d+(?:[.,]\d+)?)/g)].map(m => parseFloat(m[1].replace(",",".")));
             const hasUnitWord = unitWords.test(checkText);
-
-            // Fall A: Zahl matched calories UND irgendeine Einheit ist im Text
             const matchesCal = numbers.some(n => Math.abs(n - cal) <= 3 && n >= 30 && n <= 3000);
+
+            // Fall A: Zahl == calories UND irgendeine Einheit im Text
             if (matchesCal && hasUnitWord) {
               return `❌ FEHLER: '${rawName}' enthält eine Mengenangabe – du hast die MENGE (${cal}) statt der echten Kalorien eingetragen. ` +
-                `Realistische Schätzungen für ${cal}g: Rindersteak ≈ 500 kcal, Hähnchen ≈ 330 kcal, Lachs ≈ 410 kcal, Brot ≈ 240 kcal, Apfel ≈ 100 kcal, Reis gekocht ≈ 260 kcal. ` +
-                `Bitte add_meal NOCHMAL aufrufen – setze 'name' = "${fullName}", 'amount' = Mengenangabe, 'calories' = REALISTISCHE Schätzung (NICHT die Menge!), plus protein/carbs/fat.`;
+                `Schätzungen pro 100g: Rindersteak ~250kcal · Hähnchen ~165 · Lachs ~205 · Brot ~245 · Apfel ~52 · Reis gekocht ~130. ` +
+                `Bitte add_meal NOCHMAL aufrufen – setze 'calories' = REALISTISCHE kcal-Schätzung (NICHT die Menge), plus protein/carbs/fat.`;
             }
-            // Fall B: cal ist sehr niedrig (<100) und name enthält typisches Protein-Lebensmittel → unrealistisch
-            const proteinFoods = /\b(steak|fleisch|rind|hähnchen|haehnchen|hühn|huehn|pute|truthahn|lachs|thun|fisch|filet|kotelett|schnitzel|brat|burger|wurst|hack|gulasch)\b/i;
-            if (cal < 100 && proteinFoods.test(checkText)) {
-              return `❌ FEHLER: ${cal} kcal für '${rawName}' ist unrealistisch niedrig. ` +
-                `Selbst 100g mageres Fleisch hat 100-200 kcal, 200g Steak ≈ 500 kcal. ` +
-                `Bitte add_meal NOCHMAL aufrufen mit realistischer kcal-Schätzung.`;
+            // Fall B: Food-kcal-Lookup – realistische Mindestwerte für typische
+            // Hauptmahlzeit-Lebensmittel. Wenn cal drunter → Modell hat Mist gemacht.
+            const FOOD_MINIMUMS = [
+              { pat:/\bsteak\b/i,                       min:300, name:"Steak" },
+              { pat:/\b(rind|rinder|beef)\b/i,           min:200, name:"Rindfleisch" },
+              { pat:/\b(schnitzel|kotelett)\b/i,         min:350, name:"Schnitzel/Kotelett" },
+              { pat:/\b(hähnchen|haehnchen|hühn|huehn|chicken|pute|truthahn)\b/i, min:180, name:"Geflügel" },
+              { pat:/\b(lachs|thunfisch|forelle|kabeljau)\b/i, min:200, name:"Fisch" },
+              { pat:/\b(burger|cheeseburger|hamburger)\b/i, min:400, name:"Burger" },
+              { pat:/\b(pizza)\b/i,                      min:500, name:"Pizza" },
+              { pat:/\b(pasta|nudel|spaghetti|lasagne|carbonara|bolognese)\b/i, min:400, name:"Pasta-Gericht" },
+              { pat:/\b(reis|risotto|paella)\b/i,        min:250, name:"Reisgericht" },
+              { pat:/\b(brot|brötchen|sandwich|wrap|baguette)\b/i, min:150, name:"Brot/Backware" },
+              { pat:/\b(salat)\b/i,                      min:80,  name:"Salat" },
+              { pat:/\b(suppe|eintopf)\b/i,              min:120, name:"Suppe" },
+              { pat:/\b(fleisch|filet|braten|gulasch|wurst|hack|bratwurst)\b/i, min:200, name:"Fleisch" },
+            ];
+            const match = FOOD_MINIMUMS.find(f => f.pat.test(checkText));
+            if (match && cal < match.min) {
+              return `❌ FEHLER: ${cal} kcal für '${rawName}' ist unrealistisch niedrig — ${match.name} hat realistisch mindestens ${match.min} kcal pro Portion. ` +
+                `Bitte add_meal NOCHMAL aufrufen mit realistischer kcal-Schätzung. ` +
+                `(Vermutlich hast du die Gramm-Menge als calories eingetragen – ${cal} ist die MENGE, nicht die Energie.)`;
             }
           }
           setLog(l => ({...l, meals: [...l.meals, {
