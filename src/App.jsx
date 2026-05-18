@@ -632,6 +632,16 @@ AKTIONEN: Du hast Tools um direkt im Leben des Users Sachen zu tun:
 - add_event → Termin in den Kalender
 - add_shopping_item, check_shopping_item → Einkaufsliste pflegen
 - add_todo, complete_todo, remove_todo, set_todo_priority → Aufgaben verwalten
+- update_plan_preferences → Plan-Vorlieben ändern (Frühstück fix, kein Frühstück, Favoriten, Dislikes)
+- modify_plan_meal → einzelne Mahlzeit im aktuellen Plan ersetzen (z.B. 'Mittag Mittwoch zu Pasta')
+
+PLAN-ÄNDERUNGEN: Wenn der User sagt "ich esse kein Frühstück", "ich mag keine Pilze", "Frühstück immer Müsli", "lass Mittag Mittwoch zu Pasta" — IMMER tool nutzen, nicht nur zustimmen. Beispiele:
+- "ich esse kein Frühstück" → update_plan_preferences({skipBreakfast:true})
+- "jeden Tag Müsli zum Frühstück" → update_plan_preferences({breakfastFixed:"Müsli mit Joghurt", breakfastVariety:"same"})
+- "ich mag keine Pilze und keinen Sellerie" → update_plan_preferences({dislikes:"Pilze, Sellerie"})
+- "mehr Bowls beim Mittag" → update_plan_preferences({addFavoriteLunch:"Bowl mit Quinoa + Gemüse"})
+- "Mittag Mittwoch zu Pasta tauschen" → modify_plan_meal({day:"Mittwoch", slot:"lunch", meal:"Pasta mit Tomatensauce"})
+- "Frühstück Montag weg" → modify_plan_meal({day:"Montag", slot:"breakfast", meal:"—"})
 - find_free_slot → Lücke im Kalender finden ("wann hab ich 90min Zeit für Yoga?")
 - move_event → Termin verschieben ("schieb meinen 10-Uhr-Call auf 11")
 - delete_event → Termin löschen
@@ -5187,6 +5197,35 @@ const EYLA_TOOLS = [
     }
   },
   {
+    name: "update_plan_preferences",
+    description: "Aktualisiere die Plan-Präferenzen (was der User gerne/nicht isst, Frühstücks-Routine). Nutzen wenn User sagt 'ich esse kein Frühstück', 'jeden Tag Müsli zum Frühstück', 'ich mag keine Pilze', 'Mittag oft Bowl', etc. WICHTIG: nach Update sagen dass der User den Plan neu erstellen sollte (Profil → Plan-Wizard → 'Plan erstellen' oder einfach im Plan-Tab den 'Plan erstellen'-Button drücken).",
+    input_schema: {
+      type: "object",
+      properties: {
+        skipBreakfast:    { type: "boolean", description: "true wenn User KEIN Frühstück isst" },
+        breakfastFixed:   { type: "string",  description: "Wenn User jeden Tag dasselbe Frühstück will – als Text" },
+        breakfastVariety: { type: "string",  description: "'same' | 'rotate' | 'varied'" },
+        addFavoriteLunch: { type: "string",  description: "Eine Mahlzeit zu Mittag-Favoriten hinzufügen" },
+        addFavoriteDinner:{ type: "string",  description: "Eine Mahlzeit zu Abend-Favoriten hinzufügen" },
+        dislikes:         { type: "string",  description: "Was der User nicht mag (komma-getrennt, ersetzt bisherige)" },
+        quickOption:      { type: "string",  description: "Schnell-Mahlzeit wenn keine Zeit" }
+      }
+    }
+  },
+  {
+    name: "modify_plan_meal",
+    description: "Ändere eine einzelne Mahlzeit im aktuellen Plan. Nutzen wenn User sagt 'tausch Mittag am Mittwoch zu Pasta' oder 'lass Frühstück Montag weg'.",
+    input_schema: {
+      type: "object",
+      properties: {
+        day:  { type: "string", description: "Montag | Dienstag | Mittwoch | Donnerstag | Freitag | Samstag | Sonntag" },
+        slot: { type: "string", description: "breakfast | lunch | dinner | snack" },
+        meal: { type: "string", description: "Neue Mahlzeit (oder '—' zum Leeren)" }
+      },
+      required: ["day", "slot", "meal"]
+    }
+  },
+  {
     name: "log_period_start",
     description: "Trag den Start der Periode ein. Default heute. Nutzen wenn User sagt 'meine Periode hat angefangen', 'Tag 1 heute', 'mens hat begonnen'.",
     input_schema: {
@@ -5788,6 +5827,60 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
           await persist("eyla_local_events_v2", arr);
           window.dispatchEvent(new Event("eyla_events_changed"));
           return `🗑 Termin gelöscht: "${removed}"`;
+        }
+        case "update_plan_preferences": {
+          let prof = null;
+          try { prof = JSON.parse(localStorage.getItem("eyla_profile_v3")||"null"); } catch {}
+          if (!prof) return "Profil nicht gefunden";
+          const cur = prof.planPreferences || {};
+          const next = { ...cur };
+          if (typeof input.skipBreakfast === "boolean") next.skipBreakfast = input.skipBreakfast;
+          if (input.breakfastFixed !== undefined) {
+            next.breakfastFixed = String(input.breakfastFixed);
+            next.breakfastVariety = "same";
+          }
+          if (input.breakfastVariety) next.breakfastVariety = String(input.breakfastVariety);
+          if (input.addFavoriteLunch) {
+            const arr = Array.isArray(cur.favoriteLunches) ? cur.favoriteLunches : [];
+            if (!arr.includes(input.addFavoriteLunch)) next.favoriteLunches = [...arr, input.addFavoriteLunch];
+          }
+          if (input.addFavoriteDinner) {
+            const arr = Array.isArray(cur.favoriteDinners) ? cur.favoriteDinners : [];
+            if (!arr.includes(input.addFavoriteDinner)) next.favoriteDinners = [...arr, input.addFavoriteDinner];
+          }
+          if (input.dislikes !== undefined) next.dislikes = String(input.dislikes);
+          if (input.quickOption !== undefined) next.quickOption = String(input.quickOption);
+          next.completedAt = next.completedAt || new Date().toISOString();
+          prof.planPreferences = next;
+          try { localStorage.setItem("eyla_profile_v3", JSON.stringify(prof)); } catch {}
+          window.dispatchEvent(new Event("eyla_profile_changed"));
+          const changes = [];
+          if (input.skipBreakfast === true) changes.push("Frühstück aus");
+          if (input.breakfastFixed) changes.push(`Frühstück: ${input.breakfastFixed}`);
+          if (input.addFavoriteLunch) changes.push(`Mittag: + ${input.addFavoriteLunch}`);
+          if (input.addFavoriteDinner) changes.push(`Abend: + ${input.addFavoriteDinner}`);
+          if (input.dislikes !== undefined) changes.push(`Meiden: ${input.dislikes}`);
+          if (input.quickOption !== undefined) changes.push(`Quick: ${input.quickOption}`);
+          return `✓ Plan-Präferenzen aktualisiert: ${changes.join(" · ")||"OK"}. Im Plan-Tab 'Plan erstellen' für neuen Plan tippen.`;
+        }
+        case "modify_plan_meal": {
+          let plan = null;
+          try { plan = JSON.parse(localStorage.getItem("eyla_plan_v1")||"null"); } catch {}
+          if (!plan || !Array.isArray(plan.days)) return "Kein Plan vorhanden — erst Plan erstellen.";
+          const dayName = String(input.day||"").toLowerCase();
+          const slot = String(input.slot||"").toLowerCase();
+          const slotMap = { breakfast:"breakfast", frühstück:"breakfast", fruehstueck:"breakfast",
+            lunch:"lunch", mittag:"lunch",
+            dinner:"dinner", abend:"dinner",
+            snack:"snack" };
+          const slotKey = slotMap[slot];
+          if (!slotKey) return `Slot "${input.slot}" nicht erkannt — breakfast/lunch/dinner/snack`;
+          const dayIdx = plan.days.findIndex(d => d.day?.toLowerCase().includes(dayName));
+          if (dayIdx < 0) return `Tag "${input.day}" nicht im Plan.`;
+          plan.days[dayIdx] = { ...plan.days[dayIdx], [slotKey]: String(input.meal||"—") };
+          try { localStorage.setItem("eyla_plan_v1", JSON.stringify(plan)); } catch {}
+          window.dispatchEvent(new Event("eyla_plan_changed"));
+          return `✓ ${plan.days[dayIdx].day} ${slotKey}: ${input.meal}`;
         }
         case "log_period_start": {
           const date = String(input.date || isoToday());
@@ -6452,6 +6545,7 @@ function PlanScreen({ profile, onUpdateProfile }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [loaded, setLoaded] = useState(false);
+  const [showWizard, setShowWizard] = useState(false);
   // Swap-Modus: welche Mahlzeit gerade ersetzt wird (id "dayIdx:slot")
   const [swappingKey, setSwappingKey] = useState(null);
   // Favoriten – Set von normalisierten Mahlzeit-Namen
@@ -6561,6 +6655,17 @@ Mahlzeiten passend zu Profil (${prefs}, ${ct.type === "abnehmen" ? "Defizit" : c
       }
       setLoaded(true);
     });
+    // Live-Sync: wenn EYLA via Tool den Plan ändert, neu laden
+    function onPlanChange() {
+      retrieve("eyla_plan_v1", null).then(saved => {
+        if (saved && Array.isArray(saved.days)) {
+          setDays(saved.days);
+          setIntro(saved.intro || "");
+        }
+      });
+    }
+    window.addEventListener("eyla_plan_changed", onPlanChange);
+    return () => window.removeEventListener("eyla_plan_changed", onPlanChange);
   }, []);
 
   // Plan persistieren wenn er sich ändert
@@ -6629,7 +6734,33 @@ TIPP: [Konkreter Hinweis für diesen Tag – Timing, Zubereitung, Variation. Nic
         ? "Koche nur für mich – Portion 1."
         : `Koche für ${persons} Personen.${profile.householdNote?` Besonderheit: ${profile.householdNote}.`:""} Plan-Mengen für ${persons} Personen, kcal-Angaben pro Portion (also pro Person).`;
 
-      const userPrompt = `Profil: ${profile.name||"Phil"}, ${sexLabel}, ${profile.age||35}J, ${profile.weight||79}kg, ${profile.height||183}cm. Aktivität: ${profile.activity||"5x Woche Beweglichkeit"}. Vorlieben: ${profile.preferences?.join(", ")||"wenig Fleisch, proteinreich, mediterran"}. ${intolSatz} ${zielKontext} ${personsSatz} Erstelle den 7-Tage-Plan.`;
+      // Plan-Präferenzen aus dem Wizard
+      const pp = profile.planPreferences || {};
+      const prefStrings = [];
+      if (pp.breakfastVariety === "same" && pp.breakfastFixed) {
+        prefStrings.push(`FRÜHSTÜCK FIX (jeden Tag dasselbe): "${pp.breakfastFixed}"`);
+      } else if (pp.breakfastVariety === "rotate") {
+        prefStrings.push(`Frühstück rotiert (2-3 verschiedene über die Woche).`);
+      } else if (pp.skipBreakfast) {
+        prefStrings.push(`KEIN FRÜHSTÜCK – Frühstück IMMER als "—" lassen. User isst nicht morgens.`);
+      }
+      if (pp.favoriteLunches?.length > 0) {
+        prefStrings.push(`Mittag-Favoriten (Pool, daraus variieren): ${pp.favoriteLunches.join(" · ")}.`);
+      }
+      if (pp.favoriteDinners?.length > 0) {
+        prefStrings.push(`Abend-Favoriten (Pool, daraus variieren): ${pp.favoriteDinners.join(" · ")}.`);
+      }
+      if (pp.quickOption) {
+        prefStrings.push(`Quick-Fallback wenn keine Zeit: "${pp.quickOption}".`);
+      }
+      if (pp.dislikes) {
+        prefStrings.push(`STRIKT MEIDEN (User mag nicht): ${pp.dislikes}.`);
+      }
+      const planPrefsBlock = prefStrings.length > 0
+        ? `\nPLAN-PRÄFERENZEN (HARTE Vorgaben, kein Abweichen):\n${prefStrings.map(s => "- " + s).join("\n")}\n`
+        : "";
+
+      const userPrompt = `Profil: ${profile.name||"Phil"}, ${sexLabel}, ${profile.age||35}J, ${profile.weight||79}kg, ${profile.height||183}cm. Aktivität: ${profile.activity||"5x Woche Beweglichkeit"}. Vorlieben: ${profile.preferences?.join(", ")||"wenig Fleisch, proteinreich, mediterran"}. ${intolSatz} ${zielKontext} ${personsSatz}${planPrefsBlock}\nErstelle den 7-Tage-Plan.`;
 
       const res = await fetch("/api/chat", {
         method: "POST",
@@ -6817,13 +6948,40 @@ TIPP: [Konkreter Hinweis für diesen Tag – Timing, Zubereitung, Variation. Nic
         <Card accent style={{ textAlign:"center", padding:40 }}>
           <div style={{ display:"flex", justifyContent:"center", marginBottom:20 }}><EylaOrb size={60}/></div>
           <p style={{ color:T.mid, fontStyle:"italic", marginBottom:12, fontSize:14, fontFamily:T.serif }}>
-            Ich erstelle dir einen Plan passend zu deinem Training und deinen Vorlieben.
+            {profile.planPreferences?.completedAt
+              ? "Ich erstelle deinen Plan basierend auf deinen Routinen und Vorlieben."
+              : "Damit der Plan zu dir passt, klopfen wir kurz deine Routinen ab — 5 Fragen, eine Minute."}
           </p>
           {error && <p style={{ color:T.red, fontSize:12, fontFamily:T.mono, marginBottom:16, padding:"8px 12px", background:T.red+"11", borderRadius:8 }}>{error}</p>}
-          <button onClick={generate} style={{ background:"linear-gradient(135deg," + T.dim + "," + T.acc + ")", border:"none", borderRadius:12, padding:"12px 28px", color:T.bg, fontFamily:T.serif, fontSize:14, cursor:"pointer", fontWeight:700 }}>
-            Plan erstellen ✦
-          </button>
+          <div style={{ display:"flex", gap:8, justifyContent:"center", flexWrap:"wrap" }}>
+            <button onClick={()=>setShowWizard(true)} style={{
+              background:`linear-gradient(135deg,#78350F,${T.gold})`,
+              border:"none", borderRadius:12, padding:"12px 22px",
+              color:T.bg, fontFamily:T.serif, fontSize:14, cursor:"pointer", fontWeight:700
+            }}>
+              {profile.planPreferences?.completedAt ? "✎ Präferenzen ändern" : "✦ Plan-Wizard starten"}
+            </button>
+            {profile.planPreferences?.completedAt && (
+              <button onClick={generate} style={{ background:"linear-gradient(135deg," + T.dim + "," + T.acc + ")", border:"none", borderRadius:12, padding:"12px 22px", color:T.bg, fontFamily:T.serif, fontSize:14, cursor:"pointer", fontWeight:700 }}>
+                Plan erstellen ✦
+              </button>
+            )}
+          </div>
         </Card>
+      )}
+
+      {/* PLAN-WIZARD MODAL */}
+      {showWizard && (
+        <PlanWizard
+          profile={profile}
+          onCancel={()=>setShowWizard(false)}
+          onSave={(prefs) => {
+            onUpdateProfile?.({ planPreferences: prefs });
+            setShowWizard(false);
+            // Direkt Plan generieren mit den neuen Präferenzen
+            setTimeout(() => generate(), 300);
+          }}
+        />
       )}
       {loading && (
         <Card style={{ textAlign:"center", padding:48 }}>
@@ -10043,6 +10201,51 @@ async function quickAction(toolName, input) {
       const durStr = durMin ? ` (${durMin>=60 ? `${Math.floor(durMin/60)}h${durMin%60?` ${durMin%60}m`:""}` : `${durMin}min`})` : "";
       return `Termin: ${input.title}${input.time?` um ${input.time}`:""}${durStr}`;
     }
+    case "update_plan_preferences": {
+      let prof = null;
+      try { prof = JSON.parse(localStorage.getItem("eyla_profile_v3")||"null"); } catch {}
+      if (!prof) return "Profil nicht gefunden";
+      const cur = prof.planPreferences || {};
+      const next = { ...cur };
+      if (typeof input.skipBreakfast === "boolean") next.skipBreakfast = input.skipBreakfast;
+      if (input.breakfastFixed !== undefined) {
+        next.breakfastFixed = String(input.breakfastFixed);
+        next.breakfastVariety = "same";
+      }
+      if (input.breakfastVariety) next.breakfastVariety = String(input.breakfastVariety);
+      if (input.addFavoriteLunch) {
+        const arr = Array.isArray(cur.favoriteLunches) ? cur.favoriteLunches : [];
+        if (!arr.includes(input.addFavoriteLunch)) next.favoriteLunches = [...arr, input.addFavoriteLunch];
+      }
+      if (input.addFavoriteDinner) {
+        const arr = Array.isArray(cur.favoriteDinners) ? cur.favoriteDinners : [];
+        if (!arr.includes(input.addFavoriteDinner)) next.favoriteDinners = [...arr, input.addFavoriteDinner];
+      }
+      if (input.dislikes !== undefined) next.dislikes = String(input.dislikes);
+      if (input.quickOption !== undefined) next.quickOption = String(input.quickOption);
+      next.completedAt = next.completedAt || new Date().toISOString();
+      prof.planPreferences = next;
+      try { localStorage.setItem("eyla_profile_v3", JSON.stringify(prof)); } catch {}
+      window.dispatchEvent(new Event("eyla_profile_changed"));
+      return `✓ Präferenzen aktualisiert. Im Plan-Tab Plan neu erstellen.`;
+    }
+    case "modify_plan_meal": {
+      let plan = null;
+      try { plan = JSON.parse(localStorage.getItem("eyla_plan_v1")||"null"); } catch {}
+      if (!plan || !Array.isArray(plan.days)) return "Kein Plan da";
+      const dayName = String(input.day||"").toLowerCase();
+      const slot = String(input.slot||"").toLowerCase();
+      const slotMap = { breakfast:"breakfast", frühstück:"breakfast", fruehstueck:"breakfast",
+        lunch:"lunch", mittag:"lunch", dinner:"dinner", abend:"dinner", snack:"snack" };
+      const slotKey = slotMap[slot];
+      if (!slotKey) return `Slot "${input.slot}" unbekannt`;
+      const dayIdx = plan.days.findIndex(d => d.day?.toLowerCase().includes(dayName));
+      if (dayIdx < 0) return `Tag "${input.day}" nicht im Plan`;
+      plan.days[dayIdx] = { ...plan.days[dayIdx], [slotKey]: String(input.meal||"—") };
+      try { localStorage.setItem("eyla_plan_v1", JSON.stringify(plan)); } catch {}
+      window.dispatchEvent(new Event("eyla_plan_changed"));
+      return `✓ ${plan.days[dayIdx].day} ${slotKey}: ${input.meal}`;
+    }
     case "log_period_start": {
       const date = String(input.date || todayIso);
       const arr = loadCycles();
@@ -10594,7 +10797,13 @@ function AppContent() {
               {id:"plan",  label:"Plan",          color:T.gold},
               {id:"liste", label:"Einkaufsliste", color:T.green},
             ]}/>
-            {essenSub==="plan"  && <PlanScreen profile={profile}/>}
+            {essenSub==="plan"  && <PlanScreen profile={profile} onUpdateProfile={(updates) => {
+              setProfile(p => {
+                const next = { ...p, ...updates };
+                persist("eyla_profile_v3", next);
+                return next;
+              });
+            }}/>}
             {essenSub==="liste" && <ShoppingScreen/>}
           </>
         )}
