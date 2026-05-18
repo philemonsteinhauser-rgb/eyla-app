@@ -892,7 +892,21 @@ function VoiceBtn({ toggle, listening, supported }) {
 // ─── ONBOARDING ───────────────────────────────────────────────────────────────
 function Onboarding({ onDone }) {
   const [step, setStep] = useState(0);
-  const [p, setP] = useState({ name:"", sex:"", age:"", weight:"", height:"", goal:[], activity:"", preferences:"", intolerances:"", apps:[], goalType:"halten", targetWeight:"", targetWeeks:"", householdSize:1, householdNote:"" });
+  const [p, setP] = useState({
+    name:"", sex:"", age:"", weight:"", height:"",
+    goal:[], activity:"",
+    preferences:"", intolerances:"", allergies:"",
+    apps:[],
+    goalType:"halten", targetWeight:"", targetWeeks:"",
+    householdSize:1, householdNote:"",
+    // NEU
+    occupation:"", jobActivity:"",
+    wakeTime:"07:00", sleepTime:"23:00", mealPattern:"3normal",
+    waterTargetL:2, sleepTargetH:7,
+    healthNotes:"", about:"",
+    cookTime:"medium", kitchenEquipment:["Pfanne","Ofen"],
+    sportsPreferred:"",
+  });
   const set = (k,v) => setP(prev=>({...prev,[k]:v}));
   const iStyle = { width:"100%", background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:10,
     padding:"12px 16px", color:T.text, fontSize:14, fontFamily:T.serif, outline:"none",
@@ -1023,12 +1037,99 @@ function Onboarding({ onDone }) {
     )},
     { title:"Deine Küche.", sub:"Was liebst du? Was verträgst du nicht?", content:(
       <div>
-        {[["Vorlieben","preferences","z.B. Mediterran, vegetarisch, Meal Prep …"],["Intoleranzen","intolerances","z.B. Laktose, Gluten, Nüsse …"]].map(([l,k,ph])=>(
-          <div key={k} style={{ marginBottom:16 }}>
+        {[
+          ["Vorlieben","preferences","z.B. Mediterran, vegetarisch, Meal Prep …"],
+          ["Intoleranzen","intolerances","z.B. Laktose, Gluten"],
+          ["⚠ Allergien (lebenswichtig)","allergies","z.B. Erdnüsse, Penicillin"],
+        ].map(([l,k,ph])=>(
+          <div key={k} style={{ marginBottom:14 }}>
             <Lbl style={{ marginBottom:8 }}>{l}</Lbl>
             <input value={p[k]} onChange={e=>set(k,e.target.value)} placeholder={ph} style={iStyle}/>
           </div>
         ))}
+      </div>
+    )},
+    { title:"Dein Tagesrhythmus.", sub:"Wann läufst du? Wie isst du?", content:(
+      <div>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:18 }}>
+          <div>
+            <Lbl style={{ marginBottom:8 }}>🌅 Aufstehen</Lbl>
+            <input type="time" value={p.wakeTime} onChange={e=>set("wakeTime",e.target.value)} style={{...iStyle,fontFamily:T.mono,fontStyle:"normal"}}/>
+          </div>
+          <div>
+            <Lbl style={{ marginBottom:8 }}>🌙 Schlafen</Lbl>
+            <input type="time" value={p.sleepTime} onChange={e=>set("sleepTime",e.target.value)} style={{...iStyle,fontFamily:T.mono,fontStyle:"normal"}}/>
+          </div>
+        </div>
+        <Lbl style={{ marginBottom:10 }}>Mahlzeiten-Muster</Lbl>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:18 }}>
+          {[
+            {id:"3normal", label:"🍳 3× normal"},
+            {id:"5small",  label:"🥗 5× klein"},
+            {id:"if168",   label:"⏱ IF 16:8"},
+            {id:"ifother", label:"⏱ IF anders"},
+          ].map(o=>{
+            const sel = p.mealPattern===o.id;
+            return (
+              <button key={o.id} onClick={()=>set("mealPattern",o.id)} style={{
+                background:sel?T.acc+"22":"transparent", border:`1px solid ${sel?T.acc:T.borderS}`,
+                borderRadius:10, padding:"10px 8px", color:sel?T.text:T.muted,
+                fontFamily:T.serif, fontSize:13, cursor:"pointer",
+                fontStyle:sel?"normal":"italic", transition:"all .2s"
+              }}>{o.label}</button>
+            );
+          })}
+        </div>
+        <Lbl style={{ marginBottom:10 }}>Tagesziele</Lbl>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+          <div>
+            <Lbl style={{ marginBottom:6, fontSize:10 }}>💧 Wasser (L)</Lbl>
+            <input type="number" step="0.25" min="0.5" max="5"
+              value={p.waterTargetL} onChange={e=>set("waterTargetL", parseFloat(e.target.value)||2)}
+              style={{...iStyle,fontFamily:T.mono,fontStyle:"normal"}}/>
+          </div>
+          <div>
+            <Lbl style={{ marginBottom:6, fontSize:10 }}>😴 Schlaf (h)</Lbl>
+            <input type="number" step="0.5" min="4" max="12"
+              value={p.sleepTargetH} onChange={e=>set("sleepTargetH", parseFloat(e.target.value)||7)}
+              style={{...iStyle,fontFamily:T.mono,fontStyle:"normal"}}/>
+          </div>
+        </div>
+      </div>
+    )},
+    { title:"Beruf & Gesundheit.", sub:"Optional – hilft EYLA dich besser zu verstehen.", content:(
+      <div>
+        <Lbl style={{ marginBottom:8 }}>Was machst du beruflich?</Lbl>
+        <input value={p.occupation} onChange={e=>set("occupation",e.target.value)}
+          placeholder='z.B. "Software-Entwickler", "Lehrerin"' style={{...iStyle, marginBottom:14}}/>
+        <Lbl style={{ marginBottom:10 }}>Wie aktiv ist dein Job?</Lbl>
+        <div style={{ display:"flex", gap:8, marginBottom:18 }}>
+          {[
+            {id:"sitzend", label:"🪑 Sitzend"},
+            {id:"gemischt", label:"🚶 Gemischt"},
+            {id:"aktiv", label:"💪 Aktiv"},
+          ].map(o=>{
+            const sel = p.jobActivity===o.id;
+            return (
+              <button key={o.id} onClick={()=>set("jobActivity",o.id)} style={{
+                flex:1, background:sel?T.acc+"22":"transparent",
+                border:`1px solid ${sel?T.acc:T.borderS}`, borderRadius:10,
+                padding:"10px 4px", color:sel?T.text:T.muted,
+                fontFamily:T.serif, fontSize:12, cursor:"pointer", transition:"all .2s"
+              }}>{o.label}</button>
+            );
+          })}
+        </div>
+        <Lbl style={{ marginBottom:8 }}>Gesundheits-Notizen (optional)</Lbl>
+        <textarea value={p.healthNotes} onChange={e=>set("healthNotes",e.target.value)}
+          placeholder='z.B. "Knieprobleme rechts", "L-Thyroxin morgens", "Reflux"'
+          rows={3}
+          style={{...iStyle, resize:"vertical", minHeight:60, marginBottom:14}}/>
+        <Lbl style={{ marginBottom:8 }}>Über dich (optional)</Lbl>
+        <textarea value={p.about} onChange={e=>set("about",e.target.value)}
+          placeholder='Alles, was EYLA über dich wissen sollte – Werte, Lebenssituation, was dir wichtig ist...'
+          rows={3}
+          style={{...iStyle, resize:"vertical", minHeight:60}}/>
       </div>
     )},
     { title:"Du kochst für …", sub:"EYLA passt Portionen daran an.", content:(
@@ -1062,27 +1163,14 @@ function Onboarding({ onDone }) {
           placeholder='z.B. "Partner vegetarisch", "2 Kinder unter 10"' style={iStyle}/>
       </div>
     )},
-    { title:"Deine Apps.", sub:"Optional – was nutzt du?", content:(
-      <div>
-        <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
-          {apps.map(a=>{ const sel=p.apps.includes(a); return (
-            <button key={a} onClick={()=>set("apps",sel?p.apps.filter(x=>x!==a):[...p.apps,a])} style={{
-              background:sel?T.acc+"22":"transparent", border:`1px solid ${sel?T.acc:T.borderS}`,
-              borderRadius:20, padding:"8px 16px", color:sel?T.text:T.muted,
-              fontFamily:T.mono, fontSize:11, cursor:"pointer", letterSpacing:1, transition:"all .2s" }}>{a}</button>
-          );})}
-        </div>
-        <p style={{ color:T.muted, fontSize:12, fontStyle:"italic", marginTop:20, fontFamily:T.serif }}>
-          Echte Sync kommt in der nächsten Version.
-        </p>
-      </div>
-    )},
   ];
 
   function finish() {
     const cleaned = {...p,
       preferences:p.preferences.split(",").map(s=>s.trim()).filter(Boolean),
-      intolerances:p.intolerances.split(",").map(s=>s.trim()).filter(Boolean)
+      intolerances:p.intolerances.split(",").map(s=>s.trim()).filter(Boolean),
+      allergies:p.allergies.split(",").map(s=>s.trim()).filter(Boolean),
+      sportsPreferred: typeof p.sportsPreferred === "string" ? p.sportsPreferred.split(",").map(s=>s.trim()).filter(Boolean) : (p.sportsPreferred||[]),
     };
     onDone(cleaned);
   }
@@ -2891,6 +2979,245 @@ function CalVoiceBtn({ onResult }) {
   );
 }
 
+// Health-CSV-Parser: liest CSV mit flexiblen Spalten, gibt Array von Tages-Records zurück.
+// Akzeptierte Spalten (case-insensitive): date/datum/day, sleep/schlaf, weight/gewicht,
+// workout_type/workout, workout_duration/minutes/dauer, steps/schritte
+function parseHealthCSV(text) {
+  const lines = String(text||"").split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 2) return { rows: [], error: "CSV ist leer oder hat keinen Header" };
+  // Header parsen
+  function splitCSV(line) {
+    const out = []; let cur = ""; let inQuote = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') inQuote = !inQuote;
+      else if (c === "," && !inQuote) { out.push(cur); cur = ""; }
+      else cur += c;
+    }
+    out.push(cur);
+    return out.map(s => s.trim().replace(/^"|"$/g, ""));
+  }
+  const headers = splitCSV(lines[0]).map(h => h.toLowerCase().trim());
+  // Spalten-Mapping
+  const colMap = {};
+  headers.forEach((h, i) => {
+    if (/^(date|datum|day|tag)$/.test(h)) colMap.date = i;
+    else if (/^(sleep|schlaf|sleep_h|sleep hours?)/i.test(h)) colMap.sleep = i;
+    else if (/^(weight|gewicht|weight_kg)/i.test(h)) colMap.weight = i;
+    else if (/^(workout_type|workout|sport_type|activity)/i.test(h)) colMap.workoutType = i;
+    else if (/^(workout_duration|minutes|dauer|duration)/i.test(h)) colMap.workoutMin = i;
+    else if (/^(steps|schritte|step count)/i.test(h)) colMap.steps = i;
+  });
+  if (colMap.date === undefined) {
+    return { rows: [], error: "Keine 'date'-Spalte gefunden. Erwarte z.B.: date,sleep,weight,workout_type,workout_duration" };
+  }
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cells = splitCSV(lines[i]);
+    const dateRaw = cells[colMap.date]?.trim();
+    if (!dateRaw) continue;
+    // Datum normalisieren (ISO YYYY-MM-DD oder DD.MM.YYYY akzeptieren)
+    let date;
+    if (/^\d{4}-\d{2}-\d{2}/.test(dateRaw)) date = dateRaw.slice(0,10);
+    else if (/^\d{1,2}\.\d{1,2}\.\d{4}/.test(dateRaw)) {
+      const [d,m,y] = dateRaw.split(".");
+      date = `${y}-${String(m).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+    } else {
+      const d = new Date(dateRaw);
+      if (isNaN(d)) continue;
+      date = d.toISOString().slice(0,10);
+    }
+    const r = { date };
+    if (colMap.sleep !== undefined && cells[colMap.sleep]) {
+      const n = parseFloat(String(cells[colMap.sleep]).replace(",", "."));
+      if (!isNaN(n) && n > 0 && n < 24) r.sleep = n.toFixed(1);
+    }
+    if (colMap.weight !== undefined && cells[colMap.weight]) {
+      const n = parseFloat(String(cells[colMap.weight]).replace(",", "."));
+      if (!isNaN(n) && n > 20 && n < 300) r.weight = n;
+    }
+    if (colMap.workoutType !== undefined && cells[colMap.workoutType] && colMap.workoutMin !== undefined) {
+      const t = cells[colMap.workoutType].trim();
+      const dur = parseInt(cells[colMap.workoutMin]);
+      if (t && dur > 0) r.workout = { type: t, duration: dur };
+    }
+    if (colMap.steps !== undefined && cells[colMap.steps]) {
+      const n = parseInt(cells[colMap.steps]);
+      if (!isNaN(n) && n > 0) r.steps = n;
+    }
+    rows.push(r);
+  }
+  return { rows, columns: Object.keys(colMap) };
+}
+
+// Korrelations-Insights: scannt logsByDate und findet statistische Muster
+// (z.B. an Tagen mit ≥7h Schlaf war Energie X% höher).
+// Returns Array von Insight-Strings, sortiert nach Stärke des Effekts.
+function detectCorrelations(logsByDate) {
+  const entries = Object.values(logsByDate||{}).filter(l => l && l.date);
+  if (entries.length < 7) return []; // mind. 1 Woche Daten
+
+  const energyScore = (e) => {
+    if (!e) return null;
+    const map = {"💤 Erschöpft":1, "😴 Müde":2, "😐 Ok":3, "😊 Gut":4, "⚡ Energiegeladen":5};
+    return map[e] || null;
+  };
+  const sleepNum = (s) => {
+    if (!s) return null;
+    const n = parseFloat(String(s).replace("+",""));
+    return isNaN(n) ? null : n;
+  };
+  const kcalOf = (l) => (l.meals||[]).reduce((s,m)=>s+(m.calories||0),0);
+
+  const insights = [];
+
+  // Schlaf → Energie nächster Tag
+  // Wir nehmen Schlaf von Tag X und Energie von Tag X+1
+  const sorted = [...entries].sort((a,b) => new Date(a.date) - new Date(b.date));
+  const sleepEnergyPairs = [];
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const sleep = sleepNum(sorted[i].sleep);
+    const energy = energyScore(sorted[i+1].energy);
+    if (sleep !== null && energy !== null) sleepEnergyPairs.push({ sleep, energy });
+  }
+  if (sleepEnergyPairs.length >= 5) {
+    const highSleep = sleepEnergyPairs.filter(p => p.sleep >= 7);
+    const lowSleep  = sleepEnergyPairs.filter(p => p.sleep < 7);
+    if (highSleep.length >= 2 && lowSleep.length >= 2) {
+      const highAvg = highSleep.reduce((s,p)=>s+p.energy,0) / highSleep.length;
+      const lowAvg  = lowSleep.reduce((s,p)=>s+p.energy,0) / lowSleep.length;
+      const diffPct = Math.round(((highAvg - lowAvg) / Math.max(0.5, lowAvg)) * 100);
+      if (Math.abs(diffPct) >= 10) {
+        insights.push({
+          strength: Math.abs(diffPct),
+          icon: "😴",
+          text: `An Tagen nach ≥7h Schlaf war deine Energie ${diffPct > 0 ? `${diffPct}% besser` : `${-diffPct}% schlechter`} als nach kürzeren Nächten.`
+        });
+      }
+    }
+  }
+
+  // Workout → Schlaf gleicher Tag
+  const workoutSleepPairs = entries
+    .map(l => ({ hasWorkout: (l.workouts||[]).length > 0, sleep: sleepNum(l.sleep) }))
+    .filter(p => p.sleep !== null);
+  if (workoutSleepPairs.length >= 5) {
+    const withW = workoutSleepPairs.filter(p => p.hasWorkout);
+    const noW   = workoutSleepPairs.filter(p => !p.hasWorkout);
+    if (withW.length >= 2 && noW.length >= 2) {
+      const wAvg = withW.reduce((s,p)=>s+p.sleep,0) / withW.length;
+      const nAvg = noW.reduce((s,p)=>s+p.sleep,0) / noW.length;
+      const diff = +(wAvg - nAvg).toFixed(1);
+      if (Math.abs(diff) >= 0.3) {
+        insights.push({
+          strength: Math.abs(diff) * 30,
+          icon: "🏋",
+          text: `An Trainings-Tagen schläfst du ${diff > 0 ? `${diff}h länger` : `${-diff}h kürzer`} als an Ruhetagen.`
+        });
+      }
+    }
+  }
+
+  // Wasser → Energie gleicher Tag
+  const waterEnergyPairs = entries
+    .map(l => ({ water: l.water||0, energy: energyScore(l.energy) }))
+    .filter(p => p.energy !== null);
+  if (waterEnergyPairs.length >= 5) {
+    const high = waterEnergyPairs.filter(p => p.water >= 6); // ≥1.5L
+    const low  = waterEnergyPairs.filter(p => p.water < 4);  // <1L
+    if (high.length >= 2 && low.length >= 2) {
+      const hAvg = high.reduce((s,p)=>s+p.energy,0) / high.length;
+      const lAvg = low.reduce((s,p)=>s+p.energy,0) / low.length;
+      const diffPct = Math.round(((hAvg - lAvg) / Math.max(0.5, lAvg)) * 100);
+      if (Math.abs(diffPct) >= 10) {
+        insights.push({
+          strength: Math.abs(diffPct),
+          icon: "💧",
+          text: `An Tagen mit ≥1.5L Wasser war deine Energie ${diffPct > 0 ? `${diffPct}% besser` : `${-diffPct}% schlechter`} als bei <1L.`
+        });
+      }
+    }
+  }
+
+  // Kcal → Energie nächster Tag
+  const kcalEnergyPairs = [];
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const k = kcalOf(sorted[i]);
+    const e = energyScore(sorted[i+1].energy);
+    if (k > 100 && e !== null) kcalEnergyPairs.push({ k, e });
+  }
+  if (kcalEnergyPairs.length >= 5) {
+    const avgK = kcalEnergyPairs.reduce((s,p)=>s+p.k,0) / kcalEnergyPairs.length;
+    const high = kcalEnergyPairs.filter(p => p.k > avgK);
+    const low  = kcalEnergyPairs.filter(p => p.k <= avgK);
+    if (high.length >= 2 && low.length >= 2) {
+      const hAvg = high.reduce((s,p)=>s+p.e,0) / high.length;
+      const lAvg = low.reduce((s,p)=>s+p.e,0) / low.length;
+      const diffPct = Math.round(((hAvg - lAvg) / Math.max(0.5, lAvg)) * 100);
+      if (Math.abs(diffPct) >= 15) {
+        insights.push({
+          strength: Math.abs(diffPct),
+          icon: "🍽",
+          text: `An Tagen über deinem Kcal-Schnitt war Energie ${diffPct > 0 ? `${diffPct}% besser` : `${-diffPct}% schlechter`}.`
+        });
+      }
+    }
+  }
+
+  // Sort nach Strength
+  insights.sort((a,b) => b.strength - a.strength);
+  return insights;
+}
+
+// Routine-Erkennung: scannt lokale Events, gruppiert nach (Titel + Wochentag + Stunden-Bucket)
+// 3+ Vorkommen in den letzten 8 Wochen → Routine. Returns Array von Routine-Vorschlägen.
+function detectRoutines(allEvents) {
+  const now = Date.now();
+  const eightWeeksAgo = now - 8 * 7 * 86400000;
+  const items = (allEvents||[])
+    .filter(e => e.date && e.time && !e.recurrence) // nur einmalige
+    .filter(e => {
+      const t = new Date(e.date).getTime();
+      return t >= eightWeeksAgo && t <= now;
+    });
+  // Gruppieren nach lowercased-titel + wochentag + stunden-bucket (2h-Granularität)
+  const groups = new Map();
+  for (const ev of items) {
+    const d = new Date(ev.date);
+    const dow = d.getDay();
+    const [h, m] = (ev.time||"").split(":").map(n=>parseInt(n)||0);
+    const hourBucket = Math.floor(h / 2) * 2;
+    const titleKey = String(ev.title||"").trim().toLowerCase();
+    if (!titleKey) continue;
+    const key = `${titleKey}|${dow}|${hourBucket}`;
+    if (!groups.has(key)) groups.set(key, { title: ev.title, dow, hourBucket, items: [] });
+    groups.get(key).items.push(ev);
+  }
+  // Nur Groups mit ≥3 Vorkommen
+  const routines = [];
+  for (const g of groups.values()) {
+    if (g.items.length < 3) continue;
+    // Durchschnittliche Uhrzeit + Dauer
+    const avgMin = Math.round(g.items.reduce((s,e) => {
+      const [h, m] = (e.time||"").split(":").map(n=>parseInt(n)||0);
+      return s + h*60 + m;
+    }, 0) / g.items.length);
+    const avgDur = Math.round(g.items.reduce((s,e) => s + (parseInt(e.duration)||60), 0) / g.items.length);
+    routines.push({
+      title: g.title,
+      dow: g.dow,
+      dowLabel: ["So","Mo","Di","Mi","Do","Fr","Sa"][g.dow],
+      time: `${String(Math.floor(avgMin/60)).padStart(2,"0")}:${String(avgMin%60).padStart(2,"0")}`,
+      duration: avgDur,
+      count: g.items.length,
+      lastDate: g.items.map(e=>e.date).sort().reverse()[0],
+    });
+  }
+  // Sort: häufigste zuerst
+  routines.sort((a,b)=>b.count-a.count);
+  return routines;
+}
+
 // Termin-Templates für One-Tap-Add
 const EVENT_TEMPLATES = [
   { id:"workout",  label:"Workout",  icon:"🏋", duration:60, defaultTime:"18:00" },
@@ -3900,6 +4227,58 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
         );
       })()}
 
+      {/* ROUTINEN-VORSCHLAG – erkannte Patterns aus History */}
+      {(() => {
+        const routines = detectRoutines(localEvents).slice(0, 3);
+        if (routines.length === 0) return null;
+        return (
+          <Card style={{ marginBottom:12, background:T.gold+"08", border:`1px solid ${T.gold}33` }}>
+            <Lbl color={T.gold} style={{ marginBottom:10 }}>✦ ERKANNTE ROUTINEN</Lbl>
+            <p style={{ color:T.muted, fontSize:11, fontStyle:"italic", fontFamily:T.serif, margin:"0 0 12px", lineHeight:1.5 }}>
+              Du machst diese Sachen regelmäßig — als wöchentliche Routine fixieren?
+            </p>
+            {routines.map((r, i) => (
+              <div key={i} style={{
+                display:"flex", alignItems:"center", gap:10, padding:"8px 0",
+                borderTop: i > 0 ? `1px solid ${T.border}` : "none"
+              }}>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ color:T.text, fontSize:13, fontFamily:T.serif }}>
+                    {r.title}
+                  </div>
+                  <div style={{ color:T.muted, fontSize:11, fontFamily:T.mono, marginTop:2 }}>
+                    {r.dowLabel} · {r.time} · {r.duration}min · {r.count}× in 8 Wochen
+                  </div>
+                </div>
+                <button onClick={()=>{
+                  // Als wöchentlichen Termin am nächsten passenden DOW anlegen
+                  const today = new Date();
+                  const daysUntil = (r.dow - today.getDay() + 7) % 7 || 7;
+                  const startDate = new Date(today);
+                  startDate.setDate(today.getDate() + daysUntil);
+                  saveLocal([...localEvents, {
+                    id: Date.now(),
+                    title: r.title,
+                    time: r.time,
+                    duration: String(r.duration),
+                    date: isoDateKey(startDate),
+                    local: true,
+                    recurrence: "weekly",
+                    travelTime: 0,
+                  }]);
+                  window.dispatchEvent(new Event("eyla_events_changed"));
+                  haptic(20);
+                }} style={{
+                  background:T.gold+"22", border:`1px solid ${T.gold}55`, borderRadius:8,
+                  padding:"5px 12px", color:T.gold, fontFamily:T.mono, fontSize:10,
+                  letterSpacing:1, cursor:"pointer"
+                }}>✓ FIXIEREN</button>
+              </div>
+            ))}
+          </Card>
+        );
+      })()}
+
       {/* Legacy Stunden-Liste (collapsed by default, nur zum Editieren) */}
       <button onClick={()=>setShowLegacyList(s=>!s)} style={{
         width:"100%", background:"transparent", border:"none",
@@ -4293,6 +4672,31 @@ function WeekScreen({ logsByDate, profile }) {
       {insightError && (
         <p style={{ color:T.red, fontSize:11, fontStyle:"italic", margin:"-6px 0 12px", fontFamily:T.serif }}>{insightError}</p>
       )}
+
+      {/* KORRELATIONS-INSIGHTS – statistische Muster aus den Daten */}
+      {(() => {
+        const correlations = detectCorrelations(logsByDate).slice(0, 3);
+        if (correlations.length === 0) return null;
+        return (
+          <Card style={{ marginBottom:12, background:T.rose+"08", border:`1px solid ${T.rose}33` }}>
+            <Lbl color={T.rose} style={{ marginBottom:10 }}>✦ MUSTER IN DEINEN DATEN</Lbl>
+            {correlations.map((c, i) => (
+              <div key={i} style={{
+                display:"flex", alignItems:"flex-start", gap:10, padding:"8px 0",
+                borderTop: i > 0 ? `1px solid ${T.border}` : "none"
+              }}>
+                <span style={{ fontSize:18 }}>{c.icon}</span>
+                <span style={{ color:T.text, fontSize:13, fontFamily:T.serif, fontStyle:"italic", lineHeight:1.5, flex:1 }}>
+                  {c.text}
+                </span>
+              </div>
+            ))}
+            <p style={{ color:T.muted, fontSize:10, fontStyle:"italic", fontFamily:T.serif, margin:"10px 0 0", lineHeight:1.4 }}>
+              Aus deinen letzten Tagen. Je mehr Daten, desto präziser.
+            </p>
+          </Card>
+        );
+      })()}
 
       {/* Habit-Heatmap */}
       <HabitHeatmap habits={profile?.habits || []} days={days} logsByDate={logsByDate}/>
@@ -8003,6 +8407,70 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
         <span>DATEN</span>
         <div style={{ flex:1, height:1, background:T.borderS, opacity:.5 }}/>
       </div>
+
+      {/* Health-CSV-Import */}
+      <Card style={{ marginBottom:12 }}>
+        <Lbl style={{ marginBottom:10 }}>HEALTH-IMPORT (CSV)</Lbl>
+        <p style={{ color:T.muted, fontSize:11, fontStyle:"italic", fontFamily:T.serif, margin:"0 0 12px", lineHeight:1.6 }}>
+          Apple Health / Garmin / andere → CSV exportieren und hier hochladen. EYLA fügt Schlaf, Gewicht und Workouts in deinen Tageslog ein (nicht überschreiben — additiv).
+        </p>
+        <p style={{ color:T.muted, fontSize:10, fontFamily:T.mono, margin:"0 0 12px", lineHeight:1.5 }}>
+          Format: <code>date,sleep,weight,workout_type,workout_duration,steps</code><br/>
+          z.B.: <code>2025-05-17,7.5,79.2,Laufen,30,8200</code>
+        </p>
+        <button onClick={()=>document.getElementById("eyla-health-csv-input")?.click()} style={{
+          background:T.green+"18", border:`1px solid ${T.green}55`, borderRadius:10,
+          padding:"9px 16px", color:T.green, fontFamily:T.serif, fontSize:12,
+          cursor:"pointer", fontStyle:"italic"
+        }}>↑ CSV hochladen</button>
+        <input id="eyla-health-csv-input" type="file" accept=".csv,text/csv" style={{ display:"none" }}
+          onChange={(e)=>{
+            const file = e.target.files?.[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = () => {
+              const result = parseHealthCSV(reader.result);
+              if (result.error) {
+                alert("Konnte CSV nicht parsen: " + result.error);
+                return;
+              }
+              if (result.rows.length === 0) {
+                alert("Keine Zeilen gefunden.");
+                return;
+              }
+              const cols = result.columns.filter(c => c !== "date").join(", ");
+              if (!confirm(`${result.rows.length} Zeilen mit Spalten [${cols}] gefunden. In Tageslog mergen?`)) return;
+              // Merge: pro Zeile ein Tageslog erweitern
+              let map = {};
+              try { map = JSON.parse(localStorage.getItem("eyla_logs_v1")||"{}"); } catch {}
+              let added = 0, updated = 0;
+              for (const row of result.rows) {
+                const dateKey = new Date(row.date + "T12:00:00").toDateString();
+                const existing = map[dateKey] || { meals:[], water:0, energy:"", sleep:"", workouts:[], weight:null, habits:{}, date:dateKey };
+                let changed = false;
+                if (row.sleep && !existing.sleep) { existing.sleep = String(row.sleep); changed = true; }
+                if (row.weight && !existing.weight) { existing.weight = row.weight; changed = true; }
+                if (row.workout) {
+                  const dup = (existing.workouts||[]).some(w => w.type === row.workout.type && w.duration === row.workout.duration);
+                  if (!dup) {
+                    existing.workouts = [...(existing.workouts||[]), { ...row.workout, intensity:"mittel", time:"", importedAt:new Date().toISOString() }];
+                    changed = true;
+                  }
+                }
+                if (row.steps && !existing.steps) { existing.steps = row.steps; changed = true; }
+                if (changed) {
+                  if (map[dateKey]) updated++; else added++;
+                  map[dateKey] = existing;
+                }
+              }
+              localStorage.setItem("eyla_logs_v1", JSON.stringify(map));
+              alert(`Import fertig: ${added} neue Tage angelegt, ${updated} aktualisiert. App lädt neu.`);
+              location.reload();
+            };
+            reader.readAsText(file);
+            e.target.value = "";
+          }}/>
+      </Card>
 
       {/* Backup-Card – jetzt hinter EYLA */}
       <Card style={{ marginBottom:12 }}>
