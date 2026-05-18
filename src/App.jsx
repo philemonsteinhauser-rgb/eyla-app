@@ -638,6 +638,12 @@ AKTIONEN: Du hast Tools um direkt im Leben des Users Sachen zu tun:
 - daily_briefing → Tages-Brief mit Terminen, Todos, freien Slots ("wie sieht heute aus?")
 Wenn der User sagt "trag X ein" / "ich hab Y gegessen" / "noch 0.5L Wasser" / "Termin morgen 14 Uhr Sport" / "Eier auf die Liste" / "ich muss noch Mama anrufen" – nutze die Tools direkt. Kurz bestätigen, nicht ausschweifen. Wenn unklar: nachfragen statt raten.
 
+TERMIN-SPANNEN: Wenn der User eine Zeitspanne sagt ('von 10 bis 14 Uhr', '10-14', 'arbeite 10 bis 14'), trag das als EINEN Termin mit korrekter DAUER ein:
+- "Ich arbeite von 10 bis 14 Uhr" → add_event(title:"Arbeit", time:"10:00", duration:240)
+- "Meeting 14-15:30" → add_event(title:"Meeting", time:"14:00", duration:90)
+- "Deep Work 9 bis 11" → add_event(title:"Deep Work", time:"09:00", duration:120)
+duration ist immer MINUTEN als Zahl. NICHT zwei separate Termine anlegen.
+
 MULTI-STEP-CHAINS: Bei komplexen Anweisungen ruf MEHRERE Tools hintereinander auf — keine Rückfrage zwischendurch. Beispiele:
 - "Plan mir die Woche": find_free_slot mehrfach + add_event mehrfach (Yoga Mo, Workout Mi+Fr, Lunch mit Anna Di)
 - "Ich hatte heute Müsli, Lachs mit Reis und 1.5L Wasser": 2× add_meal + add_water(6)
@@ -2759,6 +2765,31 @@ function MealRow({ meal, onEdit, onDelete, onDuplicate }) {
 }
 
 // ─── SMART-CALENDAR HELPERS ───────────────────────────────────────────────────
+// Flexibler Duration-Parser: akzeptiert Number, "240", "4h", "30min", "1h 30min", "1.5h"
+// Returns: Minuten als Integer. Fallback: 60.
+function parseDurationFlexible(input) {
+  if (input === null || input === undefined || input === "") return 60;
+  if (typeof input === "number" && isFinite(input)) return Math.max(0, Math.round(input));
+  const s = String(input).trim().toLowerCase().replace(",", ".");
+  if (!s) return 60;
+  // Pures "240" / "1.5"
+  if (/^\d+(\.\d+)?$/.test(s)) {
+    const n = parseFloat(s);
+    // Heuristik: wenn < 24 → wahrscheinlich Stunden, sonst Minuten
+    return n <= 12 ? Math.round(n * 60) : Math.round(n);
+  }
+  // "1h 30min", "1h30", "90min", "2h"
+  let total = 0;
+  const hMatch = s.match(/(\d+(?:\.\d+)?)\s*h(our|r)?/);
+  if (hMatch) total += parseFloat(hMatch[1]) * 60;
+  const mMatch = s.match(/(\d+)\s*(min|m)\b/);
+  if (mMatch) total += parseInt(mMatch[1]);
+  // Spezifisch "1h30" ohne min-suffix
+  const combined = s.match(/(\d+)h(\d+)/);
+  if (combined && !mMatch) total = parseInt(combined[1]) * 60 + parseInt(combined[2]);
+  return total > 0 ? Math.round(total) : 60;
+}
+
 // Smart-Duration aus Titel ableiten – sodass EYLA und User nicht jedes Mal
 // die Dauer eintragen müssen wenn klar ist worum es geht.
 function smartDurationFromTitle(title) {
@@ -2788,14 +2819,14 @@ function detectConflicts(newEv, allEvents) {
   if (!newEv.time || !newEv.duration) return [];
   const [h, m] = newEv.time.split(":").map(n => parseInt(n)||0);
   const newStart = h*60 + m;
-  const newEnd = newStart + parseInt(newEv.duration);
+  const newEnd = newStart + parseDurationFlexible(newEv.duration);
   return allEvents.filter(ev => {
     if (!ev.time || !ev.date) return false;
     if (ev.date !== newEv.date) return false;
     if (ev.id === newEv.id) return false; // gleicher Termin
     const [eh, em] = ev.time.split(":").map(n => parseInt(n)||0);
     const evStart = eh*60 + em;
-    const evEnd = evStart + (parseInt(ev.duration)||60);
+    const evEnd = evStart + parseDurationFlexible(ev.duration);
     return newStart < evEnd && newEnd > evStart;
   });
 }
@@ -2808,7 +2839,7 @@ function findFreeSlots(events, dayKey, rangeStart = 7*60, rangeEnd = 22*60, minL
     .map(e => {
       const [h, m] = e.time.split(":").map(n => parseInt(n)||0);
       const start = h*60 + m;
-      const dur = parseInt(e.duration) || 60;
+      const dur = parseDurationFlexible(e.duration);
       return { start, end: start + dur };
     })
     .sort((a, b) => a.start - b.start);
@@ -2872,7 +2903,7 @@ function DayTimeline({ events, dayKey, isToday, onSlotClick, onEventClick, freeS
     .map(e => {
       const [h, m] = e.time.split(":").map(n => parseInt(n)||0);
       const startMin = h*60 + m;
-      const dur = parseInt(e.duration) || 60;
+      const dur = parseDurationFlexible(e.duration);
       const top = (startMin - HOUR_START*60) * (HOUR_HEIGHT/60);
       const height = Math.max(22, dur * (HOUR_HEIGHT/60));
       const travel = parseInt(e.travelTime) || 0;
@@ -3063,7 +3094,7 @@ function WeekTimeline({ events, weekStart, isTodayKey, onDayClick, onEventClick 
                 {dayEvents.map(ev => {
                   const [h, m] = ev.time.split(":").map(n => parseInt(n)||0);
                   const startMin = h*60 + m;
-                  const dur = parseInt(ev.duration) || 60;
+                  const dur = parseDurationFlexible(ev.duration);
                   const top = (startMin - HOUR_START*60) * (HOUR_HEIGHT/60);
                   const height = Math.max(14, dur * (HOUR_HEIGHT/60));
                   const isGoogle = ev.google || ev.source === "google";
@@ -3330,7 +3361,7 @@ function detectRoutines(allEvents) {
       const [h, m] = (e.time||"").split(":").map(n=>parseInt(n)||0);
       return s + h*60 + m;
     }, 0) / g.items.length);
-    const avgDur = Math.round(g.items.reduce((s,e) => s + (parseInt(e.duration)||60), 0) / g.items.length);
+    const avgDur = Math.round(g.items.reduce((s,e) => s + parseDurationFlexible(e.duration), 0) / g.items.length);
     routines.push({
       title: g.title,
       dow: g.dow,
@@ -5161,13 +5192,13 @@ const EYLA_TOOLS = [
   },
   {
     name: "add_event",
-    description: "Trag einen Termin in den Kalender ein. Wenn kein Datum angegeben wird, ist es heute.",
+    description: "Trag einen Termin/Zeit-Block in den Kalender ein. Spannen ('von X bis Y') IMMER als duration in MINUTEN (z.B. 10-14 Uhr = 240min). 'time' ist die START-Zeit.",
     input_schema: {
       type: "object",
       properties: {
-        title: { type: "string" },
-        time: { type: "string", description: "HH:MM" },
-        duration: { type: "string", description: "z.B. '1h', '30min'" },
+        title: { type: "string", description: "Was steht an" },
+        time: { type: "string", description: "Startzeit HH:MM" },
+        duration: { type: "number", description: "Dauer in MINUTEN als Zahl. Bsp: 10-14 Uhr → 240. 'ne Stunde → 60. 30min → 30. Default 60." },
         date: { type: "string", description: "YYYY-MM-DD. Default heute." }
       },
       required: ["title"]
@@ -5784,17 +5815,19 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
         case "add_event": {
           const todayK = isoDateKey(new Date());
           const arr = await retrieve("eyla_local_events_v2", []) || [];
+          const durMin = parseDurationFlexible(input.duration);
           const newEv = {
             id: Date.now(),
             title: input.title,
             time: input.time || "",
-            duration: input.duration || "",
+            duration: durMin || "",
             date: input.date || todayK,
             local: true
           };
           await persist("eyla_local_events_v2", [...arr, newEv]);
           window.dispatchEvent(new Event("eyla_events_changed"));
-          return `Termin: ${input.title}${input.time?` um ${input.time}`:""}${input.date && input.date !== todayK?` (${input.date})`:""}`;
+          const durStr = durMin ? ` (${durMin>=60 ? `${Math.floor(durMin/60)}h${durMin%60?` ${durMin%60}m`:""}` : `${durMin}min`})` : "";
+          return `Termin: ${input.title}${input.time?` um ${input.time}`:""}${durStr}${input.date && input.date !== todayK?` (${input.date})`:""}`;
         }
         case "add_shopping_item": {
           const sh = await retrieve("eyla_shopping_v1", null);
@@ -9717,15 +9750,17 @@ async function quickAction(toolName, input) {
     case "add_event": {
       let arr = [];
       try { arr = JSON.parse(localStorage.getItem("eyla_local_events_v2")||"[]"); } catch {}
+      const durMin = parseDurationFlexible(input.duration);
       const newEv = {
         id: Date.now(), title: input.title, time: input.time||"",
-        duration: input.duration||"", date: input.date || todayIso,
+        duration: durMin || "", date: input.date || todayIso,
         local: true, recurrence: input.recurrence || null, travelTime: parseInt(input.travelTime)||0,
       };
       arr.push(newEv);
       try { localStorage.setItem("eyla_local_events_v2", JSON.stringify(arr)); } catch {}
       window.dispatchEvent(new Event("eyla_events_changed"));
-      return `Termin: ${input.title}${input.time?` um ${input.time}`:""}`;
+      const durStr = durMin ? ` (${durMin>=60 ? `${Math.floor(durMin/60)}h${durMin%60?` ${durMin%60}m`:""}` : `${durMin}min`})` : "";
+      return `Termin: ${input.title}${input.time?` um ${input.time}`:""}${durStr}`;
     }
     case "log_period_start": {
       const date = String(input.date || todayIso);
