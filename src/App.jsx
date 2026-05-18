@@ -2998,15 +2998,15 @@ function parseHealthCSV(text) {
     return out.map(s => s.trim().replace(/^"|"$/g, ""));
   }
   const headers = splitCSV(lines[0]).map(h => h.toLowerCase().trim());
-  // Spalten-Mapping
+  // Spalten-Mapping — spezifischere Patterns ZUERST (workout_duration vor workout)
   const colMap = {};
   headers.forEach((h, i) => {
     if (/^(date|datum|day|tag)$/.test(h)) colMap.date = i;
-    else if (/^(sleep|schlaf|sleep_h|sleep hours?)/i.test(h)) colMap.sleep = i;
-    else if (/^(weight|gewicht|weight_kg)/i.test(h)) colMap.weight = i;
-    else if (/^(workout_type|workout|sport_type|activity)/i.test(h)) colMap.workoutType = i;
-    else if (/^(workout_duration|minutes|dauer|duration)/i.test(h)) colMap.workoutMin = i;
-    else if (/^(steps|schritte|step count)/i.test(h)) colMap.steps = i;
+    else if (/^(sleep_h|sleep hours?|schlaf_h|sleep|schlaf)$/.test(h)) colMap.sleep = i;
+    else if (/^(weight_kg|weight|gewicht)$/.test(h)) colMap.weight = i;
+    else if (/^(workout_duration|workout_min|workout_minutes|minutes|dauer|duration)$/.test(h)) colMap.workoutMin = i;
+    else if (/^(workout_type|workout|sport_type|activity)$/.test(h)) colMap.workoutType = i;
+    else if (/^(steps|schritte|step count|step_count)$/.test(h)) colMap.steps = i;
   });
   if (colMap.date === undefined) {
     return { rows: [], error: "Keine 'date'-Spalte gefunden. Erwarte z.B.: date,sleep,weight,workout_type,workout_duration" };
