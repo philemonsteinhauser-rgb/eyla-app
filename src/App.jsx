@@ -222,6 +222,10 @@ const DEFAULT_PROFILE = {
   sleepTargetH: 7,        // tagesziel schlaf in h
   // Sport-Vorlieben
   sportsPreferred: [],    // ["Yoga", "Laufen", "Krafttraining"]
+  // FLO – Zyklus-Tracking (für Frauen, optional)
+  trackCycle: false,           // master-toggle
+  cycleLengthAvg: 28,           // durchschnittliche Zykluslänge (default 28)
+  periodLengthAvg: 5,           // durchschnittliche Periodendauer
   // Reminder/Notifications
   reminders: {
     enabled: false,                                            // Master-Toggle
@@ -563,7 +567,15 @@ WISSENSCHAFTS-BASIS: Mediterrane Ernährung, Whole Foods (NOVA 1+2), adäquates 
 PROFIL: ${profile.name}, ${profile.age}J, ${profile.weight}kg, ${profile.height}cm${profile.sex?` (${profile.sex==="m"?"♂":profile.sex==="f"?"♀":"⚧"})`:""}
 Aktivität: ${profile.activity||"k.A."} | Ziele: ${Array.isArray(profile.goal) ? (profile.goal.join(", ")||"Wohlbefinden") : (profile.goal||"Wohlbefinden")}
 Vorlieben: ${profile.preferences?.join(", ")||"k.A."} | Intoleranzen: ${profile.intolerances?.join(", ")||"keine"}${profile.allergies?.length>0?`\n⚠ ALLERGIEN (lebenswichtig!): ${profile.allergies.join(", ")}`:""}${profile.occupation||profile.jobActivity?`\nBeruf: ${profile.occupation||"k.A."}${profile.jobActivity?` (${profile.jobActivity})`:""}`:""}${profile.wakeTime||profile.sleepTime?`\nTagesrhythmus: ${profile.wakeTime?`auf ${profile.wakeTime}`:""}${profile.wakeTime&&profile.sleepTime?", ":""}${profile.sleepTime?`bett ${profile.sleepTime}`:""}`:""}${profile.mealPattern&&profile.mealPattern!=="3normal"?`\nMahlzeiten-Pattern: ${profile.mealPattern==="5small"?"5 kleine Mahlzeiten":profile.mealPattern==="if168"?"Intermittent Fasting 16:8":profile.mealPattern==="ifother"?"IF (anderer Rhythmus)":profile.mealPattern}`:""}${profile.cookTime?`\nKochzeit-Präferenz: ${profile.cookTime==="quick"?"≤15min":profile.cookTime==="long"?"30min+":"15-30min"}`:""}${profile.kitchenEquipment?.length>0?`\nKüchenausstattung: ${profile.kitchenEquipment.join(", ")}`:""}${profile.sportsPreferred?.length>0?`\nSport-Vorlieben: ${profile.sportsPreferred.join(", ")}`:""}${profile.healthNotes?`\nGesundheits-Notizen: ${profile.healthNotes}`:""}${profile.about?`\nÜber sich: ${profile.about}`:""}
-Tagesziele: ${profile.waterTargetL||2}L Wasser / ${profile.sleepTargetH||7}h Schlaf
+Tagesziele: ${profile.waterTargetL||2}L Wasser / ${profile.sleepTargetH||7}h Schlaf${profile.trackCycle ? (() => {
+  try {
+    const cycles = JSON.parse(localStorage.getItem("eyla_cycle_v1")||"[]");
+    const status = getCycleStatus(cycles, profile);
+    if (!status.phase) return "";
+    const info = PHASE_INFO[status.phase];
+    return `\nZYKLUS: Tag ${status.dayOfCycle}/${status.cycleLength} – Phase: ${info.label} ("${info.short}"). Empfehlung: ${info.nutrition} · Bewegung: ${info.workout}.${status.nextPeriodIn!==null && status.nextPeriodIn<=3 ? ` Periode in ${status.nextPeriodIn}T.` : ""}`;
+  } catch { return ""; }
+})() : ""}
 
 ERNÄHRUNGSZIEL: ${zielStr}
 
@@ -1884,6 +1896,9 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [] }) {
           onClose={()=>setPerfectDayOpen(false)}
         />
       )}
+      {/* FLO – Zyklus-Status + Phase-Tipps (wenn aktiviert) */}
+      {isToday && profile?.trackCycle && <FloCard profile={profile}/>}
+
       {/* WAS JETZT? – Direkt-Action wenn relevant */}
       {nextAction && (
         <button onClick={nextAction.action} style={{
@@ -5115,6 +5130,19 @@ const EYLA_TOOLS = [
     }
   },
   {
+    name: "log_period_start",
+    description: "Trag den Start der Periode ein. Default heute. Nutzen wenn User sagt 'meine Periode hat angefangen', 'Tag 1 heute', 'mens hat begonnen'.",
+    input_schema: {
+      type: "object",
+      properties: { date: { type: "string", description: "YYYY-MM-DD (default heute)" } }
+    }
+  },
+  {
+    name: "log_period_end",
+    description: "Beende den letzten Periode-Eintrag (setze end-Datum). Nutzen wenn User sagt 'Periode ist vorbei', 'fertig'.",
+    input_schema: { type: "object", properties: {} }
+  },
+  {
     name: "daily_briefing",
     description: "Generiere einen Tages-Brief: was steht heute an (Termine + Todos + Plan + freie Slots). Nutzen wenn User sagt 'wie sieht heute aus', 'gib mir nen Überblick', 'tagesbrief', 'wie ist mein Tag'.",
     input_schema: { type: "object", properties: {} }
@@ -5703,6 +5731,21 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
           await persist("eyla_local_events_v2", arr);
           window.dispatchEvent(new Event("eyla_events_changed"));
           return `🗑 Termin gelöscht: "${removed}"`;
+        }
+        case "log_period_start": {
+          const date = String(input.date || isoToday());
+          const arr = loadCycles();
+          arr.push({ id: Date.now(), start: date, end: null, flow:"medium", symptoms:[] });
+          saveCycles(arr);
+          return `🌸 Periode-Start eingetragen: ${date}`;
+        }
+        case "log_period_end": {
+          const arr = loadCycles();
+          if (arr.length === 0) return "Keine offene Periode gefunden.";
+          const sorted = [...arr].sort((a,b) => b.start.localeCompare(a.start));
+          sorted[0].end = isoToday();
+          saveCycles(arr);
+          return `✓ Periode beendet (${sorted[0].start} → heute)`;
         }
         case "daily_briefing": {
           const todayK = isoDateKey(new Date());
@@ -8011,6 +8054,47 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
             style={{...inputStyle, resize:"vertical", minHeight:80, fontFamily:T.serif, fontStyle:"italic", lineHeight:1.5}}/>
         </Card>
 
+        {/* FLO – Zyklus-Tracking */}
+        <Card style={{ marginBottom:12 }}>
+          <Lbl style={{ marginBottom:10 }}>🌸 FLO – ZYKLUS-TRACKING</Lbl>
+          <p style={{ color:T.muted, fontSize:11, fontStyle:"italic", fontFamily:T.serif, margin:"0 0 14px", lineHeight:1.5 }}>
+            Periode tracken + Empfehlungen pro Zyklusphase. Nur du siehst diese Daten (lokal + dein Cloud-Sync).
+          </p>
+          {/* Master Toggle */}
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"8px 0", marginBottom:8 }}>
+            <span style={{ fontFamily:T.serif, fontSize:13, color:T.text }}>Zyklus tracken</span>
+            <button onClick={()=>set("trackCycle", !draft.trackCycle)} style={{
+              width:42, height:24, borderRadius:14,
+              background: draft.trackCycle ? "#c97a6f" : T.border,
+              border:"none", cursor:"pointer", position:"relative", transition:"background .2s"
+            }}>
+              <span style={{
+                position:"absolute", top:2, left: draft.trackCycle ? 20 : 2,
+                width:20, height:20, borderRadius:"50%", background:T.bg,
+                transition:"left .2s"
+              }}/>
+            </button>
+          </div>
+          {draft.trackCycle && (
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:6 }}>
+              <div>
+                <Lbl style={{ marginBottom:6, fontSize:10 }}>ZYKLUS Ø-LÄNGE (TAGE)</Lbl>
+                <input type="number" min="21" max="40"
+                  value={draft.cycleLengthAvg||28}
+                  onChange={e=>set("cycleLengthAvg", parseInt(e.target.value)||28)}
+                  style={numStyle}/>
+              </div>
+              <div>
+                <Lbl style={{ marginBottom:6, fontSize:10 }}>PERIODEN-DAUER</Lbl>
+                <input type="number" min="2" max="10"
+                  value={draft.periodLengthAvg||5}
+                  onChange={e=>set("periodLengthAvg", parseInt(e.target.value)||5)}
+                  style={numStyle}/>
+              </div>
+            </div>
+          )}
+        </Card>
+
         {/* ERINNERUNGEN */}
         <Card style={{ marginBottom:12 }}>
           <Lbl style={{ marginBottom:10 }}>ERINNERUNGEN</Lbl>
@@ -8894,6 +8978,208 @@ async function fetchJSON(url, opts={}) {
 }
 
 // (Integrations-Code entfernt – wir bauen den Kalender selbst, ohne Google/Strava/Gmail)
+// ─── FLO – Zyklus-Tracking + Phase-Detection ──────────────────────────────────
+// Datenmodell eyla_cycle_v1: Array von Period-Einträgen:
+//   { id, start: "YYYY-MM-DD", end: "YYYY-MM-DD"|null, flow:"light|medium|heavy",
+//     symptoms:[], notes }
+// Phasen klassisch (28-Tage Zyklus):
+//   Tag 1-5:    Menstruation
+//   Tag 6-13:   Follikulär
+//   Tag 14-16:  Ovulation
+//   Tag 17-28:  Luteal (inkl. PMS in den letzten Tagen)
+function loadCycles() {
+  try { return JSON.parse(localStorage.getItem("eyla_cycle_v1")||"[]"); } catch { return []; }
+}
+function saveCycles(arr) {
+  try { localStorage.setItem("eyla_cycle_v1", JSON.stringify(arr)); } catch {}
+  window.dispatchEvent(new Event("eyla_cycle_changed"));
+}
+function isoToday() { return new Date().toISOString().slice(0,10); }
+function daysBetween(isoA, isoB) {
+  return Math.round((new Date(isoB) - new Date(isoA)) / 86400000);
+}
+// Aktueller Zyklus-Status für ein Datum (default heute)
+function getCycleStatus(cycles, profile, refDate = isoToday()) {
+  if (!cycles || cycles.length === 0) return { phase: null, dayOfCycle: null };
+  // Sortiere absteigend nach start
+  const sorted = [...cycles].sort((a,b) => b.start.localeCompare(a.start));
+  // Finde letzten Period-Start der vor refDate liegt
+  const last = sorted.find(c => c.start <= refDate);
+  if (!last) return { phase: null, dayOfCycle: null };
+  const dayOfCycle = daysBetween(last.start, refDate) + 1;
+  const cycleLength = parseInt(profile?.cycleLengthAvg) || 28;
+  const periodLength = parseInt(profile?.periodLengthAvg) || 5;
+  // Wenn end gesetzt: Menstruation bis dahin
+  const periodEnd = last.end ? daysBetween(last.start, last.end) + 1 : periodLength;
+  let phase;
+  if (dayOfCycle <= periodEnd) phase = "menstruation";
+  else if (dayOfCycle <= Math.floor(cycleLength / 2) - 2) phase = "follikular";
+  else if (dayOfCycle <= Math.floor(cycleLength / 2) + 2) phase = "ovulation";
+  else phase = "luteal";
+  const nextPeriodIn = cycleLength - dayOfCycle + 1;
+  return {
+    phase, dayOfCycle, cycleLength,
+    lastStart: last.start,
+    nextPeriodIn: nextPeriodIn > 0 ? nextPeriodIn : null,
+    isOverdue: dayOfCycle > cycleLength + 2,
+  };
+}
+const PHASE_INFO = {
+  menstruation: {
+    label: "Menstruation", icon: "🌙", color: "#c97a6f",
+    short: "Ruhe-Modus", nutrition: "Eisenreich (rotes Fleisch, Linsen, Spinat) · Magnesium · viel Wasser · Wärme",
+    workout: "Sanft: Yoga, Spazieren, Mobility — kein Hardcore",
+  },
+  follikular: {
+    label: "Follikulär", icon: "🌱", color: "#6b8e84",
+    short: "Aufbau-Phase", nutrition: "Frisches Gemüse · Beeren · fermentierte Lebensmittel · genug Protein",
+    workout: "Energie steigt — neue Workouts ausprobieren, Kraft, Cardio",
+  },
+  ovulation: {
+    label: "Ovulation", icon: "✨", color: "#d4a574",
+    short: "Peak-Energie", nutrition: "Antioxidantien · Avocado · Nüsse · genug Wasser (Hitzewallungen)",
+    workout: "Stärkste Zeit — HIIT, Wettkampf, Maximal-Versuche",
+  },
+  luteal: {
+    label: "Luteal / PMS", icon: "🌗", color: "#b09c7a",
+    short: "Rückzug", nutrition: "Komplexe Carbs · Kalzium · weniger Koffein/Salz · Magnesium gegen PMS",
+    workout: "Moderate Cardio · Yoga · Pilates — auf Körper hören",
+  },
+};
+
+// FloCard – Status, Phase, Tipps, Period-Toggle
+function FloCard({ profile }) {
+  const [cycles, setCycles] = useState(loadCycles());
+  const [showTips, setShowTips] = useState(false);
+  useEffect(() => {
+    function onChange() { setCycles(loadCycles()); }
+    window.addEventListener("eyla_cycle_changed", onChange);
+    return () => window.removeEventListener("eyla_cycle_changed", onChange);
+  }, []);
+  const status = getCycleStatus(cycles, profile);
+  const today = isoToday();
+
+  function startPeriod() {
+    const arr = loadCycles();
+    arr.push({ id: Date.now(), start: today, end: null, flow:"medium", symptoms:[] });
+    saveCycles(arr);
+    haptic(15);
+  }
+  function endPeriod() {
+    const arr = loadCycles();
+    if (arr.length === 0) return;
+    const sorted = [...arr].sort((a,b) => b.start.localeCompare(a.start));
+    const last = sorted[0];
+    last.end = today;
+    saveCycles(arr);
+    haptic(15);
+  }
+  function deleteLast() {
+    if (!confirm("Letzten Period-Eintrag löschen?")) return;
+    const arr = loadCycles();
+    const sorted = [...arr].sort((a,b) => b.start.localeCompare(a.start));
+    if (sorted.length === 0) return;
+    const newArr = arr.filter(c => c.id !== sorted[0].id);
+    saveCycles(newArr);
+  }
+
+  // Wenn noch nie ein Period eingetragen: Onboarding-Hint
+  if (!status.phase) {
+    return (
+      <Card style={{ marginBottom:12, background:"#c97a6f0A", border:"1px solid #c97a6f33" }}>
+        <Lbl color="#c97a6f" style={{ marginBottom:8 }}>🌸 FLO – ZYKLUS</Lbl>
+        <p style={{ color:T.mid, fontSize:12, fontStyle:"italic", fontFamily:T.serif, margin:"0 0 10px", lineHeight:1.5 }}>
+          Noch kein Eintrag. Tippe wenn deine Periode heute startet — danach erkennt EYLA die Phase automatisch und passt Empfehlungen an.
+        </p>
+        <button onClick={startPeriod} style={{
+          background:"#c97a6f22", border:"1px solid #c97a6f88", borderRadius:10,
+          padding:"8px 14px", color:"#c97a6f", fontFamily:T.serif, fontSize:12,
+          cursor:"pointer", fontStyle:"italic"
+        }}>🌙 Periode startet heute</button>
+      </Card>
+    );
+  }
+
+  const info = PHASE_INFO[status.phase];
+  const isInPeriod = status.phase === "menstruation";
+  // Letzten Eintrag finden für end-Toggle
+  const last = [...cycles].sort((a,b) => b.start.localeCompare(a.start))[0];
+  const periodIsOpen = isInPeriod && !last?.end;
+
+  return (
+    <Card style={{ marginBottom:12, background: info.color + "0A", border:`1px solid ${info.color}33` }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
+        <Lbl color={info.color}>🌸 FLO · {info.label.toUpperCase()}</Lbl>
+        <span style={{ fontFamily:T.mono, fontSize:10, color:T.muted, letterSpacing:1 }}>
+          TAG {status.dayOfCycle}/{status.cycleLength}
+        </span>
+      </div>
+      <div style={{ display:"flex", alignItems:"flex-start", gap:14, marginBottom:10 }}>
+        <div style={{
+          width:54, height:54, borderRadius:"50%",
+          background: info.color + "22", border:`2px solid ${info.color}88`,
+          display:"flex", alignItems:"center", justifyContent:"center", fontSize:28, flexShrink:0
+        }}>{info.icon}</div>
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ color:T.text, fontSize:14, fontFamily:T.serif, marginBottom:3 }}>
+            {info.short}
+          </div>
+          {status.nextPeriodIn !== null && (
+            <div style={{ color:T.muted, fontSize:11, fontStyle:"italic", fontFamily:T.serif }}>
+              {status.isOverdue
+                ? `Periode ${status.dayOfCycle - status.cycleLength} Tage überfällig`
+                : status.nextPeriodIn <= 3
+                ? `Nächste Periode in ${status.nextPeriodIn} Tag${status.nextPeriodIn===1?"":"en"}`
+                : `Nächste Periode ca. in ${status.nextPeriodIn} Tagen`}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <button onClick={()=>setShowTips(s=>!s)} style={{
+        width:"100%", background:"transparent", border:`1px dashed ${info.color}66`, borderRadius:8,
+        padding:"6px 10px", color:info.color, fontFamily:T.mono, fontSize:10,
+        letterSpacing:1, cursor:"pointer", textAlign:"left", marginBottom:showTips?10:0
+      }}>{showTips?"▾":"▸"} TIPPS FÜR DIESE PHASE</button>
+
+      {showTips && (
+        <div style={{ animation:"fadeUp .2s ease both" }}>
+          <div style={{ marginBottom:8 }}>
+            <Lbl style={{ marginBottom:3, fontSize:9 }}>🍽 ERNÄHRUNG</Lbl>
+            <div style={{ color:T.text, fontSize:12, fontFamily:T.serif, lineHeight:1.6 }}>{info.nutrition}</div>
+          </div>
+          <div>
+            <Lbl style={{ marginBottom:3, fontSize:9 }}>🏋 BEWEGUNG</Lbl>
+            <div style={{ color:T.text, fontSize:12, fontFamily:T.serif, lineHeight:1.6 }}>{info.workout}</div>
+          </div>
+        </div>
+      )}
+
+      {/* Action-Pills */}
+      <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginTop:12 }}>
+        {!periodIsOpen ? (
+          <button onClick={startPeriod} style={{
+            background:info.color+"22", border:`1px solid ${info.color}88`, borderRadius:18,
+            padding:"5px 12px", color:info.color, fontFamily:T.mono, fontSize:10,
+            letterSpacing:1, cursor:"pointer"
+          }}>🌙 PERIODE STARTET</button>
+        ) : (
+          <button onClick={endPeriod} style={{
+            background:info.color+"22", border:`1px solid ${info.color}88`, borderRadius:18,
+            padding:"5px 12px", color:info.color, fontFamily:T.mono, fontSize:10,
+            letterSpacing:1, cursor:"pointer"
+          }}>✓ PERIODE ENDET HEUTE</button>
+        )}
+        <button onClick={deleteLast} title="Letzten Eintrag löschen (falls Fehleingabe)" style={{
+          background:"transparent", border:`1px solid ${T.borderS}`, borderRadius:18,
+          padding:"5px 10px", color:T.muted, fontFamily:T.mono, fontSize:10,
+          letterSpacing:1, cursor:"pointer"
+        }}>↶</button>
+      </div>
+    </Card>
+  );
+}
+
 // ─── GLOBAL SPEECH STOP-PILL ──────────────────────────────────────────────────
 function GlobalSpeechStopPill() {
   const [active, setActive] = useState(false);
@@ -9307,6 +9593,21 @@ async function quickAction(toolName, input) {
       try { localStorage.setItem("eyla_local_events_v2", JSON.stringify(arr)); } catch {}
       window.dispatchEvent(new Event("eyla_events_changed"));
       return `Termin: ${input.title}${input.time?` um ${input.time}`:""}`;
+    }
+    case "log_period_start": {
+      const date = String(input.date || todayIso);
+      const arr = loadCycles();
+      arr.push({ id: Date.now(), start: date, end: null, flow:"medium", symptoms:[] });
+      saveCycles(arr);
+      return `🌸 Periode-Start: ${date}`;
+    }
+    case "log_period_end": {
+      const arr = loadCycles();
+      if (arr.length === 0) return "Keine offene Periode.";
+      const sorted = [...arr].sort((a,b) => b.start.localeCompare(a.start));
+      sorted[0].end = todayIso;
+      saveCycles(arr);
+      return `✓ Periode beendet`;
     }
     case "add_shopping_item": {
       let sh = null;
