@@ -222,6 +222,8 @@ const DEFAULT_PROFILE = {
   sleepTargetH: 7,        // tagesziel schlaf in h
   // Sport-Vorlieben
   sportsPreferred: [],    // ["Yoga", "Laufen", "Krafttraining"]
+  // Schöpfungs-Andacht (optional, morgens)
+  showAndacht: false,
   // FLO – Zyklus-Tracking (für Frauen, optional)
   trackCycle: false,           // master-toggle
   cycleLengthAvg: 28,           // durchschnittliche Zykluslänge (default 28)
@@ -634,7 +636,14 @@ AKTIONEN: Du hast Tools um direkt im Leben des Users Sachen zu tun:
 - move_event → Termin verschieben ("schieb meinen 10-Uhr-Call auf 11")
 - delete_event → Termin löschen
 - daily_briefing → Tages-Brief mit Terminen, Todos, freien Slots ("wie sieht heute aus?")
-Wenn der User sagt "trag X ein" / "ich hab Y gegessen" / "noch 0.5L Wasser" / "Termin morgen 14 Uhr Sport" / "Eier auf die Liste" / "ich muss noch Mama anrufen" / "was kam in der mail?" / "sync mein training" – nutze die Tools direkt. Kurz bestätigen, nicht ausschweifen. Wenn unklar: nachfragen statt raten.
+Wenn der User sagt "trag X ein" / "ich hab Y gegessen" / "noch 0.5L Wasser" / "Termin morgen 14 Uhr Sport" / "Eier auf die Liste" / "ich muss noch Mama anrufen" – nutze die Tools direkt. Kurz bestätigen, nicht ausschweifen. Wenn unklar: nachfragen statt raten.
+
+MULTI-STEP-CHAINS: Bei komplexen Anweisungen ruf MEHRERE Tools hintereinander auf — keine Rückfrage zwischendurch. Beispiele:
+- "Plan mir die Woche": find_free_slot mehrfach + add_event mehrfach (Yoga Mo, Workout Mi+Fr, Lunch mit Anna Di)
+- "Ich hatte heute Müsli, Lachs mit Reis und 1.5L Wasser": 2× add_meal + add_water(6)
+- "Räum meine erledigten Todos auf": mehrfach complete_todo
+- "Ich brauche heute 30min Yoga, 60min Deep Work und 20min Spaziergang": find_free_slot je + add_event je
+Bestätige am Ende KOMPAKT was du gemacht hast, nicht jedes Tool einzeln.
 
 ⚠⚠⚠ KRITISCHE REGEL für add_meal — KEINE Ausnahmen, NIEMALS verletzen:
 
@@ -1896,6 +1905,9 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [] }) {
           onClose={()=>setPerfectDayOpen(false)}
         />
       )}
+      {/* Schöpfungs-Andacht morgens (wenn aktiviert, vor 12 Uhr) */}
+      {isToday && profile?.showAndacht && new Date().getHours() < 12 && <AndachtCard/>}
+
       {/* FLO – Zyklus-Status + Phase-Tipps (wenn aktiviert) */}
       {isToday && profile?.trackCycle && <FloCard profile={profile}/>}
 
@@ -8054,6 +8066,28 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
             style={{...inputStyle, resize:"vertical", minHeight:80, fontFamily:T.serif, fontStyle:"italic", lineHeight:1.5}}/>
         </Card>
 
+        {/* SCHÖPFUNGS-ANDACHT */}
+        <Card style={{ marginBottom:12 }}>
+          <Lbl style={{ marginBottom:10 }}>✦ ANDACHT MORGENS</Lbl>
+          <p style={{ color:T.muted, fontSize:11, fontStyle:"italic", fontFamily:T.serif, margin:"0 0 12px", lineHeight:1.5 }}>
+            Kurzer Bibelvers + Reflexion auf Heute vor 12 Uhr. Wechselt täglich. Sehr unaufdringlich.
+          </p>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"4px 0" }}>
+            <span style={{ fontFamily:T.serif, fontSize:13, color:T.text }}>Andacht anzeigen</span>
+            <button onClick={()=>set("showAndacht", !draft.showAndacht)} style={{
+              width:42, height:24, borderRadius:14,
+              background: draft.showAndacht ? T.gold : T.border,
+              border:"none", cursor:"pointer", position:"relative", transition:"background .2s"
+            }}>
+              <span style={{
+                position:"absolute", top:2, left: draft.showAndacht ? 20 : 2,
+                width:20, height:20, borderRadius:"50%", background:T.bg,
+                transition:"left .2s"
+              }}/>
+            </button>
+          </div>
+        </Card>
+
         {/* FLO – Zyklus-Tracking */}
         <Card style={{ marginBottom:12 }}>
           <Lbl style={{ marginBottom:10 }}>🌸 FLO – ZYKLUS-TRACKING</Lbl>
@@ -9046,6 +9080,70 @@ const PHASE_INFO = {
     workout: "Moderate Cardio · Yoga · Pilates — auf Körper hören",
   },
 };
+
+// ─── ANDACHT-CARD (morgens, Schöpfungs-Perspektive) ─────────────────────────
+// Kurzer Bibelvers + Reflexionsfrage. 30 Verse rotieren über den Tag (deterministisch).
+const ANDACHT_VERSE = [
+  { ref:"Psalm 139,14", text:"Ich danke dir dafür, dass ich wunderbar gemacht bin.", reflect:"Was an dir ist heute Geschenk?" },
+  { ref:"Jesaja 40,31", text:"Die auf den Herrn harren, kriegen neue Kraft.", reflect:"Wo brauchst du heute neue Kraft?" },
+  { ref:"Matthäus 6,34", text:"Sorgt euch nicht um morgen — der morgige Tag wird für das Seine sorgen.", reflect:"Was kannst du heute loslassen?" },
+  { ref:"Psalm 23,1", text:"Der Herr ist mein Hirte, mir wird nichts mangeln.", reflect:"Wofür darfst du heute dankbar sein?" },
+  { ref:"Philipper 4,13", text:"Ich vermag alles durch den, der mich mächtig macht.", reflect:"Was traust du dir heute zu?" },
+  { ref:"Jeremia 29,11", text:"Ich weiß wohl, was ich für Gedanken über euch habe — Gedanken des Friedens.", reflect:"Welchen Frieden suchst du heute?" },
+  { ref:"Sprüche 3,5-6", text:"Verlass dich auf den Herrn von ganzem Herzen.", reflect:"Wo musst du heute loslassen und vertrauen?" },
+  { ref:"Psalm 46,2", text:"Gott ist unsere Zuflucht und Stärke, eine Hilfe in den großen Nöten.", reflect:"Wo brauchst du heute Zuflucht?" },
+  { ref:"1. Korinther 13,4", text:"Die Liebe ist langmütig und freundlich.", reflect:"Wem kannst du heute mit Geduld begegnen?" },
+  { ref:"Galater 5,22", text:"Die Frucht des Geistes ist Liebe, Freude, Friede, Geduld, Freundlichkeit.", reflect:"Welche Frucht möchtest du heute zeigen?" },
+  { ref:"Psalm 90,12", text:"Lehre uns bedenken, dass wir sterben müssen — auf dass wir klug werden.", reflect:"Was zählt heute wirklich?" },
+  { ref:"Römer 12,2", text:"Stellt euch nicht dieser Welt gleich, sondern ändert euch durch Erneuerung eures Sinnes.", reflect:"Was möchtest du heute anders denken?" },
+  { ref:"Psalm 121,1-2", text:"Ich hebe meine Augen auf zu den Bergen. Woher kommt mir Hilfe?", reflect:"Wo schaust du heute hin um Hilfe?" },
+  { ref:"Matthäus 11,28", text:"Kommt her zu mir alle, die ihr mühselig und beladen seid; ich will euch erquicken.", reflect:"Was darfst du heute ablegen?" },
+  { ref:"Josua 1,9", text:"Sei getrost und unverzagt — der Herr, dein Gott, ist mit dir.", reflect:"Was macht dir heute Mut?" },
+  { ref:"Psalm 119,105", text:"Dein Wort ist meines Fußes Leuchte und ein Licht auf meinem Weg.", reflect:"Welches Wort begleitet dich heute?" },
+  { ref:"Römer 8,28", text:"Wir wissen aber, dass denen, die Gott lieben, alle Dinge zum Besten dienen.", reflect:"Wo siehst du heute Gutes — auch im Schweren?" },
+  { ref:"1. Petrus 5,7", text:"Alle eure Sorge werft auf ihn; denn er sorgt für euch.", reflect:"Welche Sorge darfst du heute abgeben?" },
+  { ref:"2. Korinther 12,9", text:"Lass dir an meiner Gnade genügen; denn meine Kraft ist in den Schwachen mächtig.", reflect:"Wo darfst du heute schwach sein?" },
+  { ref:"Psalm 1,3", text:"Er ist wie ein Baum, gepflanzt an den Wasserbächen, der seine Frucht bringt zu seiner Zeit.", reflect:"Wo bist du heute verwurzelt?" },
+];
+function AndachtCard() {
+  const [open, setOpen] = useState(false);
+  // Deterministisch: Tag-Index → Verse-Index
+  const dayOfYear = (() => {
+    const start = new Date(new Date().getFullYear(), 0, 0);
+    const diff = (new Date() - start) + ((start.getTimezoneOffset() - new Date().getTimezoneOffset()) * 60000);
+    return Math.floor(diff / 86400000);
+  })();
+  const v = ANDACHT_VERSE[dayOfYear % ANDACHT_VERSE.length];
+  return (
+    <Card style={{ marginBottom:12, background:T.gold+"08", border:`1px solid ${T.gold}33` }}>
+      <button onClick={()=>setOpen(o=>!o)} style={{
+        width:"100%", background:"transparent", border:"none", padding:0,
+        textAlign:"left", cursor:"pointer", display:"flex",
+        alignItems:"flex-start", gap:10
+      }}>
+        <span style={{ fontSize:18 }}>✦</span>
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ fontFamily:T.mono, fontSize:9, color:T.gold, letterSpacing:1.5, marginBottom:3 }}>
+            ANDACHT · {v.ref.toUpperCase()}
+          </div>
+          <div style={{ color:T.text, fontSize:13, fontFamily:T.serif, fontStyle:"italic", lineHeight:1.55 }}>
+            „{v.text}"
+          </div>
+          {open && (
+            <div style={{
+              marginTop:10, padding:"8px 12px",
+              background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:8,
+              color:T.mid, fontSize:12, fontFamily:T.serif, fontStyle:"italic"
+            }}>
+              ✦ {v.reflect}
+            </div>
+          )}
+        </div>
+        <span style={{ color:T.muted, fontFamily:T.mono, fontSize:14 }}>{open?"▾":"▸"}</span>
+      </button>
+    </Card>
+  );
+}
 
 // FloCard – Status, Phase, Tipps, Period-Toggle
 function FloCard({ profile }) {
