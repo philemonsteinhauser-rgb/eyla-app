@@ -1631,10 +1631,12 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [] }) {
   const [konfetti, setKonfetti] = useState(false);
   const [konfettiMode, setKonfettiMode] = useState("normal"); // "normal" | "super"
   const [perfectDayOpen, setPerfectDayOpen] = useState(false);
-  const prevWaterRef = useRef(0);
-  const prevKcalReachedRef = useRef(false);
-  const prevAllReachedRef = useRef(false);
-  const prevTodoAllDoneRef = useRef(false);
+  // WICHTIG: Refs lazy initialisieren mit dem aktuellen Wert beim ersten Mount,
+  // sonst feuert das Konfetti bei jedem Tab-Wechsel weil from-0-rüber gerechnet wird.
+  const prevWaterRef = useRef(null);          // lazy: erst beim ersten Effekt-Lauf gesetzt
+  const prevKcalReachedRef = useRef(null);
+  const prevAllReachedRef = useRef(null);
+  const prevTodoAllDoneRef = useRef(null);
 
   // Datum-Navigator: User kann auch andere Tage nachtragen
   const [tagDate, setTagDate] = useState(()=>new Date());
@@ -1649,21 +1651,23 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [] }) {
   function nextDay() { const d = new Date(tagDate); d.setDate(d.getDate()+1); setTagDate(d); }
   function goToday() { setTagDate(new Date()); }
 
-  // Konfetti-Trigger: wenn Wasser-Ziel oder Kcal-Ziel erstmalig erreicht
+  // Konfetti-Trigger: wenn Wasser-Ziel oder Kcal-Ziel erstmalig erreicht.
+  // WICHTIG: beim ersten Effect-Lauf (ref===null) NUR initialisieren, nicht feuern.
   useEffect(() => {
     const wTarget = waterTargetUnits(profile);
-    if (prevWaterRef.current < wTarget && (log.water||0) >= wTarget) {
+    const cur = log.water || 0;
+    if (prevWaterRef.current !== null && prevWaterRef.current < wTarget && cur >= wTarget) {
       setKonfettiMode("normal");
       setKonfetti(true);
       haptic(60);
     }
-    prevWaterRef.current = log.water||0;
+    prevWaterRef.current = cur;
   }, [log.water, profile]);
   useEffect(() => {
     const totalKcal = (log.meals||[]).reduce((s,m)=>s+(m.calories||0),0);
     const target = calorieTarget(profile).target;
     const reached = totalKcal >= target;
-    if (!prevKcalReachedRef.current && reached) {
+    if (prevKcalReachedRef.current !== null && !prevKcalReachedRef.current && reached) {
       setKonfettiMode("normal");
       setKonfetti(true);
       haptic(60);
@@ -1677,6 +1681,11 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [] }) {
     const todayTodos = todos.filter(t => (t.priority||"today")==="today");
     if (todayTodos.length === 0) { prevTodoAllDoneRef.current = false; return; }
     const allDone = todayTodos.every(t => t.status === "done");
+    // Erste Init: nur setzen, nicht feuern (sonst spam bei jedem Tab-Wechsel)
+    if (prevTodoAllDoneRef.current === null) {
+      prevTodoAllDoneRef.current = allDone;
+      return;
+    }
     if (allDone && !prevTodoAllDoneRef.current) {
       setKonfettiMode("normal");
       setKonfetti(true);
@@ -1706,6 +1715,11 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [] }) {
     const storageKey = `eyla_perfectday_${tagKey}`;
     const alreadyCelebrated = !!localStorage.getItem(storageKey);
 
+    // Erste Init: nur setzen, nicht feuern
+    if (prevAllReachedRef.current === null) {
+      prevAllReachedRef.current = allReached;
+      return;
+    }
     if (allReached && !prevAllReachedRef.current && !alreadyCelebrated) {
       try { localStorage.setItem(storageKey, "1"); } catch {}
       setKonfettiMode("super");
@@ -6165,7 +6179,274 @@ function ChatScreen({ profile, log, events, logsByDate, setLog }) {
 }
 
 // ─── PLAN SCREEN ──────────────────────────────────────────────────────────────
-function PlanScreen({ profile }) {
+// Standard-Vorschläge für den Plan-Wizard (Multi-Select-Pool)
+const PLAN_LUNCH_OPTIONS = [
+  "Bowl mit Quinoa + Gemüse + Protein",
+  "Salat mit Hähnchen + Avocado",
+  "Pasta mit Tomatensauce + Gemüse",
+  "Wraps mit Hummus + Falafel",
+  "Asiatischer Reis mit Tofu + Gemüse",
+  "Suppe + Vollkornbrot",
+  "Linsenpfanne mit Reis",
+  "Brot mit Aufstrich + Salat",
+  "Mediterraner Teller (Falafel, Hummus, Salat)",
+  "Ofengemüse mit Halloumi",
+  "Couscous-Salat mit Kichererbsen",
+  "Käse-Brot mit Tomatensalat",
+];
+const PLAN_DINNER_OPTIONS = [
+  "Lachs mit Reis + Gemüse",
+  "Steak mit Süßkartoffel + Brokkoli",
+  "Ofengemüse mit Halloumi",
+  "Stir-Fry mit Hühnchen + Reis",
+  "Linsen-Dal mit Reis",
+  "Pasta mit Pesto + Mozzarella",
+  "Frittata mit Salat",
+  "Buddha Bowl",
+  "Suppe + Vollkornbrot",
+  "Pizza vom Blech",
+  "Curry mit Reis",
+  "Wraps + Salat",
+];
+
+function PlanWizard({ profile, onSave, onCancel }) {
+  const existing = profile?.planPreferences || {};
+  const [step, setStep] = useState(0);
+  const [prefs, setPrefs] = useState({
+    breakfastFixed:    existing.breakfastFixed || "",
+    breakfastVariety:  existing.breakfastVariety || "same",  // "same" | "rotate" | "varied"
+    favoriteLunches:   existing.favoriteLunches || [],
+    favoriteDinners:   existing.favoriteDinners || [],
+    quickOption:       existing.quickOption || "",
+    dislikes:          existing.dislikes || "",
+    customLunch:       "",
+    customDinner:      "",
+  });
+  function patch(p) { setPrefs(x => ({...x, ...p})); }
+  function toggle(key, value) {
+    setPrefs(x => {
+      const arr = x[key] || [];
+      return {...x, [key]: arr.includes(value) ? arr.filter(v => v !== value) : [...arr, value]};
+    });
+  }
+  function addCustomLunch() {
+    const v = prefs.customLunch.trim();
+    if (!v) return;
+    patch({ favoriteLunches: [...(prefs.favoriteLunches||[]), v], customLunch:"" });
+  }
+  function addCustomDinner() {
+    const v = prefs.customDinner.trim();
+    if (!v) return;
+    patch({ favoriteDinners: [...(prefs.favoriteDinners||[]), v], customDinner:"" });
+  }
+
+  const steps = [
+    { title:"Lass uns deine Routinen abklopfen", sub:"5 kurze Fragen — dann passt der Plan zu dir, nicht andersrum." },
+    { title:"Frühstück", sub:"Hast du eines das du oft isst?" },
+    { title:"Mittag-Favoriten", sub:"Was magst du am häufigsten? (max 5 wählen)" },
+    { title:"Abend-Favoriten", sub:"Und abends? (max 5)" },
+    { title:"Schnell-Optionen", sub:"Wenn keine Zeit oder Lust — was geht dann?" },
+    { title:"Letzte Frage", sub:"Was magst du gar nicht?" },
+  ];
+
+  function finish() {
+    onSave({
+      breakfastFixed: prefs.breakfastFixed.trim() || null,
+      breakfastVariety: prefs.breakfastVariety,
+      favoriteLunches: prefs.favoriteLunches.slice(0, 5),
+      favoriteDinners: prefs.favoriteDinners.slice(0, 5),
+      quickOption: prefs.quickOption.trim() || null,
+      dislikes: prefs.dislikes.trim() || null,
+      completedAt: new Date().toISOString(),
+    });
+  }
+
+  const iStyle = { width:"100%", background:T.bg, border:`1px solid ${T.borderS}`, borderRadius:10,
+    padding:"10px 14px", color:T.text, fontSize:13, fontFamily:T.serif, fontStyle:"italic",
+    outline:"none", boxSizing:"border-box" };
+
+  const cur = steps[step];
+
+  return (
+    <div onClick={onCancel} style={{
+      position:"fixed", inset:0, zIndex:1200, background:"rgba(0,0,0,0.75)",
+      backdropFilter:"blur(10px)", display:"flex", alignItems:"center", justifyContent:"center", padding:20,
+      animation:"fadeUp .3s ease both"
+    }}>
+      <div onClick={e=>e.stopPropagation()} style={{
+        background:T.bg2, border:`1px solid ${T.gold}55`, borderRadius:16,
+        padding:24, maxWidth:440, width:"100%", maxHeight:"85vh", overflowY:"auto",
+        boxShadow:`0 10px 60px ${T.gold}33`
+      }}>
+        {/* Progress */}
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:6 }}>
+          <Lbl color={T.gold}>PLAN-WIZARD · {step+1}/{steps.length}</Lbl>
+          {step > 0 && (
+            <span style={{ fontFamily:T.mono, fontSize:10, color:T.muted }}>{Math.round(step/(steps.length-1)*100)}%</span>
+          )}
+        </div>
+        <div style={{ height:3, background:T.bg, borderRadius:2, marginBottom:14, overflow:"hidden" }}>
+          <div style={{ width:`${(step/(steps.length-1))*100}%`, height:"100%", background:T.gold, transition:"width .3s" }}/>
+        </div>
+
+        <h2 style={{ fontSize:20, fontWeight:300, color:T.text, margin:"0 0 4px", fontFamily:T.serif }}>{cur.title}</h2>
+        <p style={{ color:T.mid, fontSize:12, fontStyle:"italic", fontFamily:T.serif, margin:"0 0 18px" }}>{cur.sub}</p>
+
+        {step === 0 && (
+          <div style={{ textAlign:"center", padding:"10px 0" }}>
+            <div style={{ fontSize:42, marginBottom:10 }}>✦</div>
+            <p style={{ color:T.text, fontSize:14, fontFamily:T.serif, lineHeight:1.7 }}>
+              Statt jeden Tag ein Zufallsplan — sag mir was du wirklich isst.<br/>
+              Dann wird der Plan langweilig genug um durchgehalten zu werden.
+            </p>
+          </div>
+        )}
+
+        {step === 1 && (
+          <div>
+            <Lbl style={{ marginBottom:10 }}>VARIATION</Lbl>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6, marginBottom:14 }}>
+              {[
+                {id:"same",   label:"Jeden Tag gleich"},
+                {id:"rotate", label:"2-3 rotieren"},
+                {id:"varied", label:"Variiert"},
+              ].map(o => {
+                const sel = prefs.breakfastVariety===o.id;
+                return (
+                  <button key={o.id} onClick={()=>patch({breakfastVariety:o.id})} style={{
+                    background:sel?T.gold+"22":"transparent", border:`1px solid ${sel?T.gold:T.borderS}`,
+                    borderRadius:10, padding:"10px 4px", color:sel?T.text:T.muted,
+                    fontFamily:T.serif, fontSize:11, cursor:"pointer", fontStyle:sel?"normal":"italic"
+                  }}>{o.label}</button>
+                );
+              })}
+            </div>
+            {prefs.breakfastVariety === "same" && (
+              <>
+                <Lbl style={{ marginBottom:8 }}>WAS GENAU?</Lbl>
+                <input value={prefs.breakfastFixed} onChange={e=>patch({breakfastFixed:e.target.value})}
+                  placeholder='z.B. "Müsli mit Joghurt und Beeren"' style={iStyle}/>
+              </>
+            )}
+          </div>
+        )}
+
+        {step === 2 && (
+          <div>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:14 }}>
+              {[...PLAN_LUNCH_OPTIONS, ...prefs.favoriteLunches.filter(x => !PLAN_LUNCH_OPTIONS.includes(x))].map(opt => {
+                const sel = prefs.favoriteLunches.includes(opt);
+                return (
+                  <button key={opt} onClick={()=>toggle("favoriteLunches", opt)} style={{
+                    background:sel?T.gold+"22":"transparent", border:`1px solid ${sel?T.gold:T.borderS}`,
+                    borderRadius:18, padding:"5px 12px", color:sel?T.text:T.muted,
+                    fontFamily:T.serif, fontSize:12, cursor:"pointer", fontStyle:sel?"normal":"italic"
+                  }}>{sel?"✓ ":""}{opt}</button>
+                );
+              })}
+            </div>
+            <div style={{ display:"flex", gap:6 }}>
+              <input value={prefs.customLunch} onChange={e=>patch({customLunch:e.target.value})}
+                onKeyDown={e=>e.key==="Enter"&&addCustomLunch()}
+                placeholder="Eigenes hinzufügen" style={{...iStyle, flex:1}}/>
+              <button onClick={addCustomLunch} disabled={!prefs.customLunch.trim()} style={{
+                background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:10,
+                padding:"0 14px", color:prefs.customLunch.trim()?T.gold:T.muted,
+                fontFamily:T.mono, fontSize:14, cursor:prefs.customLunch.trim()?"pointer":"default"
+              }}>+</button>
+            </div>
+            <p style={{ color:T.muted, fontSize:10, fontStyle:"italic", marginTop:8, fontFamily:T.serif }}>
+              {prefs.favoriteLunches.length}/5 ausgewählt
+            </p>
+          </div>
+        )}
+
+        {step === 3 && (
+          <div>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:14 }}>
+              {[...PLAN_DINNER_OPTIONS, ...prefs.favoriteDinners.filter(x => !PLAN_DINNER_OPTIONS.includes(x))].map(opt => {
+                const sel = prefs.favoriteDinners.includes(opt);
+                return (
+                  <button key={opt} onClick={()=>toggle("favoriteDinners", opt)} style={{
+                    background:sel?T.gold+"22":"transparent", border:`1px solid ${sel?T.gold:T.borderS}`,
+                    borderRadius:18, padding:"5px 12px", color:sel?T.text:T.muted,
+                    fontFamily:T.serif, fontSize:12, cursor:"pointer", fontStyle:sel?"normal":"italic"
+                  }}>{sel?"✓ ":""}{opt}</button>
+                );
+              })}
+            </div>
+            <div style={{ display:"flex", gap:6 }}>
+              <input value={prefs.customDinner} onChange={e=>patch({customDinner:e.target.value})}
+                onKeyDown={e=>e.key==="Enter"&&addCustomDinner()}
+                placeholder="Eigenes hinzufügen" style={{...iStyle, flex:1}}/>
+              <button onClick={addCustomDinner} disabled={!prefs.customDinner.trim()} style={{
+                background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:10,
+                padding:"0 14px", color:prefs.customDinner.trim()?T.gold:T.muted,
+                fontFamily:T.mono, fontSize:14, cursor:prefs.customDinner.trim()?"pointer":"default"
+              }}>+</button>
+            </div>
+            <p style={{ color:T.muted, fontSize:10, fontStyle:"italic", marginTop:8, fontFamily:T.serif }}>
+              {prefs.favoriteDinners.length}/5 ausgewählt
+            </p>
+          </div>
+        )}
+
+        {step === 4 && (
+          <div>
+            <textarea value={prefs.quickOption} onChange={e=>patch({quickOption:e.target.value})}
+              placeholder='z.B. "Wraps mit Hummus", "Pasta einfach", "Brot mit Käse + Tomate"'
+              rows={3}
+              style={{...iStyle, resize:"vertical", minHeight:80}}/>
+            <p style={{ color:T.muted, fontSize:10, fontStyle:"italic", marginTop:8, fontFamily:T.serif, lineHeight:1.5 }}>
+              EYLA nutzt das als Fallback wenn ein Tag eng wird oder du keine Lust hast.
+            </p>
+          </div>
+        )}
+
+        {step === 5 && (
+          <div>
+            <textarea value={prefs.dislikes} onChange={e=>patch({dislikes:e.target.value})}
+              placeholder='z.B. "Pilze, Sellerie, Innereien, Kohl"'
+              rows={3}
+              style={{...iStyle, resize:"vertical", minHeight:80}}/>
+            <p style={{ color:T.muted, fontSize:10, fontStyle:"italic", marginTop:8, fontFamily:T.serif, lineHeight:1.5 }}>
+              Was nie im Plan auftauchen soll. EYLA hält sich dran.
+            </p>
+          </div>
+        )}
+
+        <div style={{ display:"flex", gap:8, marginTop:20 }}>
+          {step > 0 && (
+            <button onClick={()=>setStep(s=>s-1)} style={{
+              background:"transparent", border:`1px solid ${T.borderS}`, borderRadius:10,
+              padding:"10px 16px", color:T.muted, fontFamily:T.serif, fontSize:13, cursor:"pointer"
+            }}>← Zurück</button>
+          )}
+          {step < steps.length - 1 ? (
+            <button onClick={()=>setStep(s=>s+1)} style={{
+              flex:1, background:`linear-gradient(135deg,#78350F,${T.gold})`,
+              border:"none", borderRadius:10, padding:"10px 16px",
+              color:T.bg, fontFamily:T.serif, fontSize:13, fontWeight:700, cursor:"pointer"
+            }}>{step === 0 ? "Los geht's →" : "Weiter →"}</button>
+          ) : (
+            <button onClick={finish} style={{
+              flex:1, background:`linear-gradient(135deg,${T.gold},${T.acc})`,
+              border:"none", borderRadius:10, padding:"10px 16px",
+              color:T.bg, fontFamily:T.serif, fontSize:13, fontWeight:700, cursor:"pointer"
+            }}>✓ Speichern + Plan erstellen</button>
+          )}
+          <button onClick={onCancel} style={{
+            background:"transparent", border:`1px solid ${T.borderS}`, borderRadius:10,
+            padding:"10px 14px", color:T.muted, fontFamily:T.serif, fontSize:12,
+            fontStyle:"italic", cursor:"pointer"
+          }}>✕</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PlanScreen({ profile, onUpdateProfile }) {
   const [days, setDays] = useState([]);
   const [intro, setIntro] = useState("");
   const [loading, setLoading] = useState(false);
