@@ -1595,7 +1595,7 @@ function ActivityRings({ water, waterTarget, sleep, sleepTarget, kcal, kcalTarge
   );
 }
 
-function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [] }) {
+function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [], initialDate }) {
   // Todos im Heute-Screen sichtbar machen (Live-Sync via storage + custom event)
   const [todos, setTodos] = useState([]);
   const [localEvents, setLocalEvents] = useState([]);
@@ -1649,7 +1649,17 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [] }) {
   const prevTodoAllDoneRef = useRef(null);
 
   // Datum-Navigator: User kann auch andere Tage nachtragen
-  const [tagDate, setTagDate] = useState(()=>new Date());
+  const [tagDate, setTagDate] = useState(() => initialDate || new Date());
+  // Wenn initialDate von außen kommt (z.B. Woche-Tag-Tap): tagDate updaten
+  const lastInitialRef = useRef(initialDate ? initialDate.toDateString() : null);
+  useEffect(() => {
+    if (!initialDate) return;
+    const k = initialDate.toDateString();
+    if (k !== lastInitialRef.current) {
+      lastInitialRef.current = k;
+      setTagDate(initialDate);
+    }
+  }, [initialDate]);
   const tagKey = tagDate.toDateString();
   const todayKey = new Date().toDateString();
   const isToday = tagKey === todayKey;
@@ -4578,7 +4588,7 @@ function HabitHeatmap({ habits, days, logsByDate }) {
   );
 }
 
-function WeekScreen({ logsByDate, profile }) {
+function WeekScreen({ logsByDate, profile, onJumpToDay }) {
   const days = lastNDays(7);
   const targetK = calorieTarget(profile || {}).target;
   const [insight, setInsight] = useState(null);
@@ -4908,10 +4918,12 @@ function WeekScreen({ logsByDate, profile }) {
           const empty = !l || ((l.meals?.length||0)===0 && !l.water && !l.sleep && !l.energy);
           const isToday = idx === 0;
           return (
-            <Card key={dateKey} style={{
+            <Card key={dateKey} onClick={()=>onJumpToDay?.(new Date(dateKey))} style={{
               opacity: empty ? 0.55 : 1,
               borderColor: isToday ? T.acc+"55" : T.borderS,
-              padding:"14px 18px"
+              padding:"14px 18px",
+              cursor: onJumpToDay ? "pointer" : "default",
+              transition: "all .15s"
             }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:10 }}>
                 <div style={{ minWidth:0, flex:"0 0 auto" }}>
@@ -10863,12 +10875,16 @@ function AppContent() {
               {id:"kalender", label:"Kalender", color:T.gold},
               {id:"todo",     label:"To-do",    color:T.rose},
             ]}/>
-            {tagSub==="heute"    && <TodayScreen profile={profile} setLog={setLog} logsByDate={logsByDate} events={events}/>}
+            {tagSub==="heute"    && <TodayScreen profile={profile} setLog={setLog} logsByDate={logsByDate} events={events} initialDate={heuteDate}/>}
             {tagSub==="kalender" && <KalenderScreen events={events} eventsLoading={eventsLoading} onRefresh={loadCalendar} profile={profile} log={log}/>}
             {tagSub==="todo"     && <TodoScreen profile={profile}/>}
           </>
         )}
-        {screen==="woche" && <WeekScreen logsByDate={logsByDate} profile={profile}/>}
+        {screen==="woche" && <WeekScreen logsByDate={logsByDate} profile={profile} onJumpToDay={(d) => {
+          setHeuteDate(d);
+          setTagSub("heute");
+          setScreen("tag");
+        }}/>}
         {screen==="chat"  && <ChatScreen profile={profile} log={log} events={events} logsByDate={logsByDate} setLog={setLog}/>}
         {screen==="essen" && (
           <>
