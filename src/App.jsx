@@ -2016,59 +2016,7 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [] }) {
         );
       })()}
 
-      {/* JARVIS-BRIEFING – Free-Slot + nächster Termin (nur wenn heute) */}
-      {isToday && (() => {
-        const todayKey = isoDateKey(new Date());
-        const allEv = [...(events||[]), ...localEvents].map(e => ({...e, date: e.date || todayKey}));
-        const briefing = generateBriefing(allEv, todayKey, true);
-        if (!briefing) return null;
-        return (
-          <div style={{
-            padding:"6px 12px", marginBottom:10, fontSize:11,
-            color:T.mid, fontStyle:"italic", fontFamily:T.serif,
-            background:T.acc+"06", border:`1px solid ${T.acc}1A`, borderRadius:8,
-            display:"flex", alignItems:"center", gap:6
-          }}>
-            <span style={{ color:T.acc, fontSize:10 }}>✦</span>
-            <span>{briefing}</span>
-          </div>
-        );
-      })()}
-
-      {/* WAS PASST JETZT REIN – wenn aktuell ≥30min frei sind */}
-      {isToday && (() => {
-        const todayKey = isoDateKey(new Date());
-        const allEv = [...(events||[]), ...localEvents].map(e => ({...e, date: e.date || todayKey}));
-        const nowMin = new Date().getHours()*60 + new Date().getMinutes();
-        const slots = findFreeSlots(allEv, todayKey, 7*60, 22*60, 15);
-        const currentSlot = slots.find(s => s.start <= nowMin && s.end > nowMin);
-        if (!currentSlot) return null;
-        const restMin = currentSlot.end - nowMin;
-        if (restMin < 15) return null;
-        // Vorschlag basierend auf Restzeit
-        const suggestion =
-          restMin >= 90 ? { icon:"🧠", label:"Deep Work", action:"Fokus-Block" } :
-          restMin >= 60 ? { icon:"🏋", label:"Workout", action:"Bewegung" } :
-          restMin >= 30 ? { icon:"🧘", label:"Stretching", action:"15min Beweglichkeit" } :
-                         { icon:"💧", label:"Wasser-Pause", action:"Glas Wasser" };
-        return (
-          <div style={{
-            padding:"8px 12px", marginBottom:10,
-            background:T.green+"0A", border:`1px solid ${T.green}33`, borderRadius:10,
-            display:"flex", alignItems:"center", gap:10
-          }}>
-            <span style={{ fontSize:18 }}>{suggestion.icon}</span>
-            <div style={{ flex:1, minWidth:0 }}>
-              <div style={{ fontFamily:T.mono, fontSize:9, color:T.green, letterSpacing:1.5 }}>
-                JETZT FREI · {restMin >= 60 ? `${Math.floor(restMin/60)}h${restMin%60?` ${restMin%60}m`:""}` : `${restMin}min`}
-              </div>
-              <div style={{ color:T.text, fontSize:12, fontFamily:T.serif, fontStyle:"italic" }}>
-                Passt rein: {suggestion.action}.
-              </div>
-            </div>
-          </div>
-        );
-      })()}
+      {/* (Jarvis-Briefing-Zeile und Was-passt-jetzt-rein entfernt – redundant mit Anstehend-Card unten + Smart-Card oben) */}
 
       {/* ANSTEHEND – Termine + Heute-Todos auf einen Blick (nur wenn heute + was zu zeigen) */}
       {isToday && (() => {
@@ -9084,7 +9032,7 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
 
       <VoiceSettings/>
 
-{profile.apps?.length>0&&<Card style={{ marginBottom:12 }}><Lbl style={{ marginBottom:10 }}>VERBUNDENE APPS (alt)</Lbl><div style={{ display:"flex",flexWrap:"wrap",gap:7 }}>{profile.apps.map((a,i)=><div key={i} style={{ display:"flex",alignItems:"center",gap:6,background:T.bg2,border:`1px solid ${T.borderS}`,borderRadius:8,padding:"5px 12px" }}><div style={{ width:5,height:5,borderRadius:"50%",background:T.green,boxShadow:`0 0 5px ${T.green}` }}/><span style={{ color:T.mid,fontFamily:T.mono,fontSize:10 }}>{a}</span></div>)}</div></Card>}
+{/* (alte Verbundene-Apps-Card entfernt – war Onboarding-Stub ohne Funktion) */}
 
       {/* DATEN – Sektion (hinter EYLA, damit Backup nahe Reset) */}
       <div style={{ fontFamily:T.mono, fontSize:9, color:T.muted, letterSpacing:2, margin:"22px 4px 10px", display:"flex", alignItems:"center", gap:8 }}>
