@@ -8408,6 +8408,92 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
         <div style={{ flex:1, height:1, background:T.borderS, opacity:.5 }}/>
       </div>
 
+      {/* DEMO-DATEN – für Live-Test der Insights + Routinen */}
+      <Card style={{ marginBottom:12, background:T.rose+"08", border:`1px solid ${T.rose}33` }}>
+        <Lbl color={T.rose} style={{ marginBottom:10 }}>DEMO-DATEN (TEST)</Lbl>
+        <p style={{ color:T.muted, fontSize:11, fontStyle:"italic", fontFamily:T.serif, margin:"0 0 12px", lineHeight:1.6 }}>
+          Generiert 8 Wochen synthetische Tageslogs + Termine mit erkennbarem Routine-Pattern.
+          So siehst du sofort wie Korrelations-Insights und Routine-Erkennung aussehen.
+          ⚠ Überschreibt deine echten Logs + Events!
+        </p>
+        <button onClick={()=>{
+          if (!confirm("Demo-Daten laden? Das ÜBERSCHREIBT deine echten Tageslogs und Termine.")) return;
+          const logs = {};
+          const events = [];
+          const today = new Date();
+          today.setHours(12,0,0,0);
+          // 8 Wochen × 7 Tage = 56 Tage
+          for (let i = 56; i >= 1; i--) {
+            const d = new Date(today);
+            d.setDate(d.getDate() - i);
+            const dateKey = d.toDateString();
+            const dow = d.getDay();
+            // Schlaf: Wochenende länger, Wochentage variabel
+            const sleep = dow === 0 || dow === 6
+              ? (7.5 + Math.random() * 1.5).toFixed(1)
+              : (5.5 + Math.random() * 3.0).toFixed(1);
+            // Energie: korreliert mit Schlaf (Pattern für Insights!)
+            const sNum = parseFloat(sleep);
+            const energy = sNum >= 7.5 ? "⚡ Energiegeladen"
+                         : sNum >= 6.5 ? "😊 Gut"
+                         : sNum >= 5.5 ? "😐 Ok"
+                         : "😴 Müde";
+            // Wasser: 4-10 Units
+            const water = 4 + Math.floor(Math.random() * 7);
+            // Mahlzeiten
+            const mealCount = 2 + Math.floor(Math.random() * 2);
+            const meals = [];
+            const mealOpts = [
+              {name:"Müsli mit Joghurt", calories:420, protein:18, carbs:60, fat:12, time:"07:30"},
+              {name:"Vollkornbrot mit Avocado", calories:380, protein:12, carbs:42, fat:18, time:"08:00"},
+              {name:"Salat mit Hähnchen", calories:550, protein:42, carbs:25, fat:28, time:"12:30"},
+              {name:"Pasta mit Tomatensauce", calories:620, protein:18, carbs:88, fat:18, time:"13:00"},
+              {name:"Lachs mit Reis", calories:680, protein:38, carbs:55, fat:24, time:"19:00"},
+              {name:"Steak mit Gemüse", calories:580, protein:48, carbs:18, fat:32, time:"19:30"},
+              {name:"Apfel", calories:95, protein:0, carbs:25, fat:0, time:"15:00"},
+              {name:"Nüsse Handvoll", calories:180, protein:6, carbs:8, fat:15, time:"16:00"},
+            ];
+            for (let j = 0; j < mealCount; j++) {
+              const m = mealOpts[Math.floor(Math.random() * mealOpts.length)];
+              meals.push({ id: Date.now() + i*100 + j, ...m });
+            }
+            // Workouts: Mo/Mi/Fr (Routine-Pattern!) + manchmal Wochenende
+            const workouts = [];
+            if (dow === 1 || dow === 3 || dow === 5) {
+              workouts.push({ type:"Beweglichkeit", duration:60, intensity:"mittel", time:"18:00" });
+            }
+            if (dow === 6 && Math.random() > 0.4) {
+              workouts.push({ type:"Cardio", duration:45, intensity:"hart", time:"10:00" });
+            }
+            // Gewicht: 1× pro Woche
+            const weight = i % 7 === 0 ? +(79 - i * 0.03 + (Math.random()-0.5) * 0.4).toFixed(1) : null;
+            logs[dateKey] = {
+              date: dateKey, meals, water, energy, sleep, workouts, weight,
+              habits: {},
+            };
+            // ROUTINE-EVENTS: Yoga jeden Mittwoch + Freitag 18 Uhr
+            const isoDate = d.toISOString().slice(0,10);
+            if (dow === 3) events.push({ id:Date.now()+i*10+1, title:"Yoga", date:isoDate, time:"18:00", duration:"60", local:true, travelTime:0 });
+            if (dow === 5) events.push({ id:Date.now()+i*10+2, title:"Yoga", date:isoDate, time:"18:00", duration:"60", local:true, travelTime:0 });
+            // Optional: Mittagessen mit Anna Dienstags 12:30
+            if (dow === 2) events.push({ id:Date.now()+i*10+3, title:"Lunch mit Anna", date:isoDate, time:"12:30", duration:"60", local:true, travelTime:15 });
+          }
+          // Heute leer lassen damit User selbst tracken kann
+          try {
+            localStorage.setItem("eyla_logs_v1", JSON.stringify(logs));
+            localStorage.setItem("eyla_local_events_v2", JSON.stringify(events));
+            alert(`Demo-Daten geladen: ${Object.keys(logs).length} Tage Logs + ${events.length} Termine.\n\nApp lädt jetzt neu.\n\nSchau:\n• Woche-Tab: 'MUSTER IN DEINEN DATEN' Card (Insights)\n• Kalender: '✦ ERKANNTE ROUTINEN' Card`);
+            location.reload();
+          } catch (e) {
+            alert("Fehler beim Speichern: " + e.message);
+          }
+        }} style={{
+          background:T.rose+"22", border:`1px solid ${T.rose}55`, borderRadius:10,
+          padding:"9px 16px", color:T.rose, fontFamily:T.serif, fontSize:12,
+          cursor:"pointer", fontStyle:"italic"
+        }}>✦ Demo-Daten laden (8 Wochen)</button>
+      </Card>
+
       {/* Health-CSV-Import */}
       <Card style={{ marginBottom:12 }}>
         <Lbl style={{ marginBottom:10 }}>HEALTH-IMPORT (CSV)</Lbl>
