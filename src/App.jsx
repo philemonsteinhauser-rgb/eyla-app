@@ -1941,42 +1941,35 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [] }) {
       {/* FLO – Zyklus-Status + Phase-Tipps (wenn aktiviert) */}
       {isToday && profile?.trackCycle && <FloCard profile={profile}/>}
 
-      {/* WAS JETZT? – Direkt-Action wenn relevant */}
-      {nextAction && (
-        <button onClick={nextAction.action} style={{
-          width:"100%", marginBottom:10, padding:"10px 14px",
-          background: T.gold+"12", border:`1px solid ${T.gold}55`, borderRadius:10,
-          display:"flex", alignItems:"center", gap:10,
-          cursor:"pointer", textAlign:"left",
-          animation:"fadeUp .3s ease both"
-        }}>
-          <span style={{ fontSize:20 }}>{nextAction.icon}</span>
-          <div style={{ flex:1, minWidth:0 }}>
-            <div style={{ fontFamily:T.mono, fontSize:9, color:T.gold, letterSpacing:1.5 }}>
-              WAS JETZT
-            </div>
-            <div style={{ color:T.text, fontSize:12, fontFamily:T.serif, fontStyle:"italic", marginTop:2 }}>
-              {nextAction.hint}
-            </div>
-          </div>
-          <span style={{
-            background:T.gold+"33", border:`1px solid ${T.gold}88`, borderRadius:18,
-            padding:"5px 12px", color:T.gold, fontFamily:T.mono, fontSize:10,
-            letterSpacing:1, whiteSpace:"nowrap"
-          }}>{nextAction.label} →</span>
-        </button>
-      )}
-
-      {/* Smart-Hint von EYLA */}
-      {hint && (
+      {/* SMART-CARD oben: kombiniert Smart-Hint + Direkt-Action wenn beides relevant */}
+      {(hint || nextAction) && (
         <div style={{
-          marginBottom:14, padding:"8px 14px",
-          background: T.acc+"08", border:`1px solid ${T.acc}22`, borderRadius:10,
-          display:"flex", alignItems:"center", gap:8,
+          marginBottom:12, padding:"10px 14px",
+          background: (nextAction ? T.gold : T.acc) + "0A",
+          border:`1px solid ${(nextAction ? T.gold : T.acc)}33`, borderRadius:10,
+          display:"flex", alignItems:"center", gap:10,
           animation:"fadeUp .3s ease both"
         }}>
-          <span style={{ color:T.acc, fontSize:12 }}>✦</span>
-          <span style={{ color:T.mid, fontSize:12, fontStyle:"italic", fontFamily:T.serif, flex:1 }}>{hint}</span>
+          {nextAction && <span style={{ fontSize:18 }}>{nextAction.icon}</span>}
+          {!nextAction && hint && <span style={{ color:T.acc, fontSize:14 }}>✦</span>}
+          <div style={{ flex:1, minWidth:0 }}>
+            {nextAction ? (
+              <span style={{ color:T.text, fontSize:12, fontFamily:T.serif, fontStyle:"italic" }}>
+                {nextAction.hint}
+              </span>
+            ) : (
+              <span style={{ color:T.mid, fontSize:12, fontStyle:"italic", fontFamily:T.serif }}>
+                {hint}
+              </span>
+            )}
+          </div>
+          {nextAction && (
+            <button onClick={nextAction.action} style={{
+              background:T.gold+"33", border:`1px solid ${T.gold}88`, borderRadius:18,
+              padding:"4px 11px", color:T.gold, fontFamily:T.mono, fontSize:10,
+              letterSpacing:1, cursor:"pointer", whiteSpace:"nowrap"
+            }}>{nextAction.label} →</button>
+          )}
         </div>
       )}
 

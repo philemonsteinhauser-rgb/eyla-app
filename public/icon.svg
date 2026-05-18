@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- EYLA App Icon — dunkler Hintergrund, EylaOrb-Style, gold-akzentuiert -->
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="40%" r="65%">
+      <stop offset="0%" stop-color="#1a1c20"/>
+      <stop offset="65%" stop-color="#0d0e10"/>
+      <stop offset="100%" stop-color="#06070a"/>
+    </radialGradient>
+    <radialGradient id="orbGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#d4a574" stop-opacity="0.7"/>
+      <stop offset="35%" stop-color="#b09c7a" stop-opacity="0.35"/>
+      <stop offset="70%" stop-color="#78350F" stop-opacity="0.1"/>
+      <stop offset="100%" stop-color="#78350F" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="coreGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#fff5e0"/>
+      <stop offset="30%" stop-color="#d4a574"/>
+      <stop offset="70%" stop-color="#b09c7a" stop-opacity="0.7"/>
+      <stop offset="100%" stop-color="#78350F" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="softBlur" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3"/>
+    </filter>
+  </defs>
+
+  <!-- Hintergrund mit subtilem Vignette-Effekt -->
+  <rect width="512" height="512" fill="url(#bg)"/>
+
+  <!-- Äußere konzentrische Ringe – sehr subtil, wie Radio-Echo -->
+  <g opacity="0.18" fill="none" stroke="#b09c7a">
+    <circle cx="256" cy="256" r="210" stroke-width="0.8"/>
+    <circle cx="256" cy="256" r="175" stroke-width="0.9"/>
+    <circle cx="256" cy="256" r="140" stroke-width="1.1"/>
+    <circle cx="256" cy="256" r="105" stroke-width="1.4"/>
+  </g>
+
+  <!-- Glow-Aura um den Kern -->
+  <circle cx="256" cy="256" r="150" fill="url(#orbGlow)"/>
+
+  <!-- Zentraler Kern – warmes Licht -->
+  <circle cx="256" cy="256" r="42" fill="url(#coreGlow)"/>
+
+  <!-- Vier-Strahler-Stern (sehr fein, elegant) -->
+  <g fill="#fff5e0" opacity="0.95">
+    <!-- Vertikaler Strahl -->
+    <path d="M 256 184 L 263 250 L 256 256 L 249 250 Z"/>
+    <path d="M 256 328 L 263 262 L 256 256 L 249 262 Z"/>
+    <!-- Horizontaler Strahl -->
+    <path d="M 184 256 L 250 263 L 256 256 L 250 249 Z"/>
+    <path d="M 328 256 L 262 263 L 256 256 L 262 249 Z"/>
+  </g>
+
+  <!-- Heller Mittelpunkt -->
+  <circle cx="256" cy="256" r="6" fill="#ffffff"/>
+  <circle cx="256" cy="256" r="3" fill="#ffffff" opacity="0.9"/>
+
+  <!-- Ganz feine Edge-Highlight -->
+  <rect x="0" y="0" width="512" height="512" fill="none" stroke="#1a1c20" stroke-width="2" opacity="0.5"/>
+</svg>
