@@ -1841,6 +1841,38 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [] }) {
 
   const hint = isToday ? smartHintFor(log, profile, plan) : null;
 
+  // ─── WAS JETZT? — kontextuelle nächste Aktion mit Direkt-Button ─────────
+  const nextAction = (() => {
+    if (!isToday) return null;
+    const hour = new Date().getHours();
+    const eaten = (log.meals||[]).reduce((s,m)=>s+(m.calories||0),0);
+    const water = log.water || 0;
+    const wTarget = waterTargetUnits(profile);
+    const hasWorkout = (log.workouts||[]).length > 0;
+    // Wasser-Lücke nach Mittag → direkter +0.25L Button
+    if (hour >= 13 && water < wTarget / 2) {
+      return {
+        label: `+0.25L Wasser`, icon:"💧", hint:`Erst ${(water*.25).toFixed(2)}L heute.`,
+        action: () => { setLog(l => ({...l, water: Math.min(12, (l.water||0) + 1)})); haptic(15); }
+      };
+    }
+    // Mahlzeit fehlt mittags
+    if (hour >= 12 && hour <= 14 && eaten < 200) {
+      return {
+        label:"Mahlzeit", icon:"🍽", hint:"Mittagspause — was gegessen?",
+        action: () => { document.querySelector('input[placeholder*="Mahlzeit"], input[placeholder*="Was hast du"]')?.focus(); }
+      };
+    }
+    // Bewegung fehlt nachmittags
+    if (hour >= 16 && hour <= 19 && !hasWorkout && new Date().getDay() !== 0) {
+      return {
+        label:"Workout", icon:"🏋", hint:"Heute noch keine Bewegung — 20min reichen.",
+        action: () => { document.querySelector('[data-section="workout"], [placeholder*="workout"], [placeholder*="Sport"]')?.scrollIntoView({behavior:"smooth", block:"center"}); }
+      };
+    }
+    return null;
+  })();
+
   return (
     <div>
       <Confetti show={konfetti} mode={konfettiMode} onDone={()=>setKonfetti(false)}/>
@@ -1852,6 +1884,32 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [] }) {
           onClose={()=>setPerfectDayOpen(false)}
         />
       )}
+      {/* WAS JETZT? – Direkt-Action wenn relevant */}
+      {nextAction && (
+        <button onClick={nextAction.action} style={{
+          width:"100%", marginBottom:10, padding:"10px 14px",
+          background: T.gold+"12", border:`1px solid ${T.gold}55`, borderRadius:10,
+          display:"flex", alignItems:"center", gap:10,
+          cursor:"pointer", textAlign:"left",
+          animation:"fadeUp .3s ease both"
+        }}>
+          <span style={{ fontSize:20 }}>{nextAction.icon}</span>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontFamily:T.mono, fontSize:9, color:T.gold, letterSpacing:1.5 }}>
+              WAS JETZT
+            </div>
+            <div style={{ color:T.text, fontSize:12, fontFamily:T.serif, fontStyle:"italic", marginTop:2 }}>
+              {nextAction.hint}
+            </div>
+          </div>
+          <span style={{
+            background:T.gold+"33", border:`1px solid ${T.gold}88`, borderRadius:18,
+            padding:"5px 12px", color:T.gold, fontFamily:T.mono, fontSize:10,
+            letterSpacing:1, whiteSpace:"nowrap"
+          }}>{nextAction.label} →</span>
+        </button>
+      )}
+
       {/* Smart-Hint von EYLA */}
       {hint && (
         <div style={{
@@ -8880,6 +8938,194 @@ function GlobalSpeechStopPill() {
   );
 }
 
+// ─── WOCHEN-REFLEXION (Sonntagabend) ──────────────────────────────────────────
+// Sonntags ab 19 Uhr: Modal mit geführten Fragen + Wochen-Statistik.
+// Antworten werden als Notiz pro Tag gespeichert + als "weekly_reflections" Liste.
+function WeeklyReflectionModal({ logsByDate, profile, open, onClose }) {
+  const [step, setStep] = useState(0);
+  const [answers, setAnswers] = useState({ highlight:"", challenge:"", learning:"", next_week:"" });
+  if (!open) return null;
+
+  // Wochen-Stats berechnen
+  const stats = (() => {
+    const days = [];
+    const today = new Date();
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      const key = d.toDateString();
+      const l = logsByDate?.[key];
+      if (l) days.push(l);
+    }
+    if (days.length === 0) return null;
+    const meals = days.reduce((s,l)=>s+(l.meals?.length||0),0);
+    const totalKcal = days.reduce((s,l)=>s + (l.meals||[]).reduce((a,m)=>a+(m.calories||0),0), 0);
+    const water = days.reduce((s,l)=>s+(l.water||0),0);
+    const workouts = days.reduce((s,l)=>s+(l.workouts?.length||0),0);
+    const workoutMin = days.reduce((s,l)=>s+(l.workouts||[]).reduce((a,w)=>a+(w.duration||0),0), 0);
+    const sleeps = days.map(l => parseFloat(String(l.sleep||"0").replace("+",""))).filter(n => n > 0);
+    const avgSleep = sleeps.length > 0 ? (sleeps.reduce((s,n)=>s+n,0) / sleeps.length).toFixed(1) : "–";
+    return {
+      meals, kcalAvg: Math.round(totalKcal / Math.max(1, days.length)),
+      waterAvgL: ((water / Math.max(1, days.length)) * 0.25).toFixed(1),
+      workouts, workoutMin, avgSleep, daysTracked: days.length,
+    };
+  })();
+
+  const questions = [
+    { key:"highlight",  q:"Was war diese Woche dein Highlight?", placeholder:"Ein Moment, ein Erfolg, ein gutes Gespräch …" },
+    { key:"challenge",  q:"Was hat dich gefordert?",             placeholder:"Eine schwierige Sache, ein Konflikt, eine Hürde …" },
+    { key:"learning",   q:"Was hast du gelernt?",                placeholder:"Über dich, über andere, über die Welt …" },
+    { key:"next_week",  q:"Was nimmst du dir für nächste Woche vor?", placeholder:"Eine Sache, ein Habit, ein Vorhaben …" },
+  ];
+
+  function save() {
+    const entry = {
+      weekEnding: new Date().toISOString().slice(0,10),
+      stats,
+      ...answers,
+      createdAt: new Date().toISOString(),
+    };
+    let arr = [];
+    try { arr = JSON.parse(localStorage.getItem("eyla_reflections_v1") || "[]"); } catch {}
+    arr.unshift(entry);
+    try { localStorage.setItem("eyla_reflections_v1", JSON.stringify(arr.slice(0, 52))); } catch {}
+    // Marker dass diese Woche reflektiert
+    try { localStorage.setItem("eyla_reflected_" + new Date().toISOString().slice(0,10).slice(0,7), "1"); } catch {}
+    onClose();
+  }
+
+  return (
+    <div onClick={onClose} style={{
+      position:"fixed", inset:0, zIndex:1100, background:"rgba(0,0,0,0.78)",
+      backdropFilter:"blur(10px)", display:"flex", alignItems:"center", justifyContent:"center", padding:20,
+      animation:"fadeUp .3s ease both"
+    }}>
+      <div onClick={e=>e.stopPropagation()} style={{
+        background:T.bg2, border:`1px solid ${T.acc}55`, borderRadius:16,
+        padding:24, maxWidth:420, width:"100%",
+        boxShadow:`0 10px 60px ${T.acc}33`
+      }}>
+        {step === 0 ? (
+          <>
+            <div style={{ textAlign:"center", marginBottom:14 }}>
+              <div style={{ fontSize:36, marginBottom:6 }}>✨</div>
+              <Lbl color={T.acc} style={{ marginBottom:6 }}>WOCHEN-REFLEXION</Lbl>
+              <h2 style={{ fontSize:22, fontWeight:300, color:T.text, margin:"0 0 6px", fontFamily:T.serif }}>
+                Die Woche kurz durchgehen?
+              </h2>
+              <p style={{ color:T.mid, fontSize:12, fontStyle:"italic", fontFamily:T.serif, margin:"0 0 16px", lineHeight:1.6 }}>
+                4 kurze Fragen. Hilft dir den Bogen zu spannen.
+              </p>
+            </div>
+            {stats && (
+              <div style={{ background:T.bg, border:`1px solid ${T.borderS}`, borderRadius:12, padding:14, marginBottom:18 }}>
+                <Lbl style={{ marginBottom:10 }}>DEINE WOCHE</Lbl>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                  <div><span style={{ fontFamily:T.mono, fontSize:18, color:T.gold }}>{stats.meals}</span><span style={{ fontSize:10, color:T.muted, marginLeft:6, fontFamily:T.serif, fontStyle:"italic" }}>Mahlzeiten</span></div>
+                  <div><span style={{ fontFamily:T.mono, fontSize:18, color:T.acc }}>{stats.waterAvgL}L</span><span style={{ fontSize:10, color:T.muted, marginLeft:6, fontFamily:T.serif, fontStyle:"italic" }}>Wasser/Tag</span></div>
+                  <div><span style={{ fontFamily:T.mono, fontSize:18, color:T.green }}>{stats.workouts}</span><span style={{ fontSize:10, color:T.muted, marginLeft:6, fontFamily:T.serif, fontStyle:"italic" }}>Workouts · {stats.workoutMin}min</span></div>
+                  <div><span style={{ fontFamily:T.mono, fontSize:18, color:T.mid }}>{stats.avgSleep}h</span><span style={{ fontSize:10, color:T.muted, marginLeft:6, fontFamily:T.serif, fontStyle:"italic" }}>Schlaf Ø</span></div>
+                </div>
+              </div>
+            )}
+            <div style={{ display:"flex", gap:8 }}>
+              <button onClick={()=>setStep(1)} style={{
+                flex:1, background:`linear-gradient(135deg,${T.dim},${T.acc})`,
+                border:"none", borderRadius:12, padding:"12px 18px",
+                color:T.bg, fontFamily:T.serif, fontSize:14, fontWeight:700, cursor:"pointer"
+              }}>Los geht's →</button>
+              <button onClick={onClose} style={{
+                background:"transparent", border:`1px solid ${T.borderS}`, borderRadius:12,
+                padding:"12px 18px", color:T.muted, fontFamily:T.serif, fontSize:14,
+                fontStyle:"italic", cursor:"pointer"
+              }}>Später</button>
+            </div>
+          </>
+        ) : step <= questions.length ? (() => {
+          const q = questions[step - 1];
+          return (
+            <>
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
+                <Lbl color={T.acc}>FRAGE {step} VON {questions.length}</Lbl>
+                <span style={{ fontFamily:T.mono, fontSize:10, color:T.muted }}>{Math.round((step / questions.length) * 100)}%</span>
+              </div>
+              <div style={{ height:3, background:T.bg, borderRadius:2, marginBottom:16, overflow:"hidden" }}>
+                <div style={{ width:`${(step / questions.length) * 100}%`, height:"100%", background:T.acc, transition:"width .3s" }}/>
+              </div>
+              <h3 style={{ fontSize:18, fontWeight:300, color:T.text, margin:"0 0 14px", fontFamily:T.serif }}>
+                {q.q}
+              </h3>
+              <textarea value={answers[q.key]} onChange={e=>setAnswers(a=>({...a, [q.key]:e.target.value}))}
+                placeholder={q.placeholder} rows={5}
+                style={{
+                  width:"100%", background:T.bg, border:`1px solid ${T.borderS}`,
+                  borderRadius:10, padding:"12px 14px",
+                  color:T.text, fontSize:14, fontFamily:T.serif, fontStyle:"italic",
+                  outline:"none", resize:"vertical", minHeight:100, lineHeight:1.6,
+                  boxSizing:"border-box", marginBottom:14
+                }} autoFocus/>
+              <div style={{ display:"flex", gap:8 }}>
+                {step > 1 && (
+                  <button onClick={()=>setStep(s=>s-1)} style={{
+                    background:"transparent", border:`1px solid ${T.borderS}`, borderRadius:10,
+                    padding:"10px 16px", color:T.muted, fontFamily:T.serif, fontSize:13, cursor:"pointer"
+                  }}>← Zurück</button>
+                )}
+                {step < questions.length ? (
+                  <button onClick={()=>setStep(s=>s+1)} style={{
+                    flex:1, background:`linear-gradient(135deg,${T.dim},${T.acc})`,
+                    border:"none", borderRadius:10, padding:"10px 16px",
+                    color:T.bg, fontFamily:T.serif, fontSize:13, fontWeight:700, cursor:"pointer"
+                  }}>Weiter →</button>
+                ) : (
+                  <button onClick={save} style={{
+                    flex:1, background:`linear-gradient(135deg,${T.gold},${T.acc})`,
+                    border:"none", borderRadius:10, padding:"10px 16px",
+                    color:T.bg, fontFamily:T.serif, fontSize:13, fontWeight:700, cursor:"pointer"
+                  }}>✓ Speichern</button>
+                )}
+              </div>
+            </>
+          );
+        })() : null}
+      </div>
+    </div>
+  );
+}
+
+function WeeklyReflectionTrigger({ logsByDate, profile }) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const now = new Date();
+    if (now.getDay() !== 0) return; // nur Sonntag
+    if (now.getHours() < 19 || now.getHours() > 23) return;
+    const weekKey = "eyla_reflected_" + now.toISOString().slice(0,10).slice(0,7) + "_" + Math.floor(now.getDate() / 7);
+    if (localStorage.getItem(weekKey)) return;
+    // Nur triggern wenn es überhaupt Daten gibt
+    const hasData = Object.keys(logsByDate||{}).length >= 3;
+    if (!hasData) return;
+    // Nach 4s automatisch öffnen (App-Settling)
+    const t = setTimeout(() => setOpen(true), 4000);
+    return () => clearTimeout(t);
+  }, [logsByDate]);
+  return (
+    <WeeklyReflectionModal
+      logsByDate={logsByDate}
+      profile={profile}
+      open={open}
+      onClose={() => {
+        setOpen(false);
+        try {
+          const now = new Date();
+          const weekKey = "eyla_reflected_" + now.toISOString().slice(0,10).slice(0,7) + "_" + Math.floor(now.getDate() / 7);
+          localStorage.setItem(weekKey, "1");
+        } catch {}
+      }}
+    />
+  );
+}
+
 // ─── AUTO-MORGENS-BRIEFING ────────────────────────────────────────────────────
 // Beim ersten Öffnen pro Tag spricht EYLA das Tagesbriefing automatisch
 // (wenn Voice on UND Tageszeit zwischen 6-12 Uhr UND noch nicht heute gebrieft).
@@ -9304,6 +9550,15 @@ function useReminders(profile, log) {
         if (hasPermission && typeof Notification !== "undefined") {
           try { new Notification(`EYLA · ${msg.title}`, { body: msg.body, icon:"/icon-192.png", tag:`eyla-${type}-${dateKey}` }); } catch {}
         }
+        // EYLA spricht den Reminder vor wenn Voice an
+        try {
+          const voiceOn = JSON.parse(localStorage.getItem("eyla_chat_voice_v1") || "true");
+          if (voiceOn && typeof speechSynthesis !== "undefined") {
+            const u = new SpeechSynthesisUtterance(`${msg.title}. ${msg.body}`);
+            u.lang = "de-DE"; u.rate = 1.05;
+            speechSynthesis.speak(u);
+          }
+        } catch {}
         try { localStorage.setItem(reminderMarkerKey(type, dateKey), "1"); } catch {}
         haptic(40);
         return; // ein Reminder pro Check
@@ -9509,6 +9764,9 @@ function AppContent() {
 
       {/* Morgens-Briefing — wenn Voice an + erstes App-Open heute zwischen 6-12 */}
       <AutoMorningBriefing/>
+
+      {/* Wochen-Reflexion — Sonntag 19-23 Uhr automatisch */}
+      <WeeklyReflectionTrigger logsByDate={logsByDate} profile={profile}/>
 
       {/* Top bar – feiner Akzent von Section-Color am unteren Rand. Safe-Area für iPhone-Notch. */}
       <div style={{ position:"sticky",top:0,zIndex:40,background:T.bg+"F0",
