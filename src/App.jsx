@@ -1865,6 +1865,49 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [] }) {
         </div>
       )}
 
+      {/* DAILY-STORY – Abendzusammenfassung ab 21 Uhr */}
+      {isToday && (() => {
+        const hour = new Date().getHours();
+        if (hour < 21 && hour !== 0) return null;
+        // Story-Teile
+        const eaten = (log.meals||[]).reduce((s,m)=>s+(m.calories||0),0);
+        const waterL = ((log.water||0)*.25).toFixed(2);
+        const sleep = log.sleep || "";
+        const workoutMin = (log.workouts||[]).reduce((s,w)=>s+(w.duration||0),0);
+        const habitsArr = profile?.habits || [];
+        const doneHabits = habitsArr.filter(h => log.habits?.[h.id]).length;
+        const parts = [];
+        if (log.meals?.length > 0) parts.push(`${log.meals.length} Mahlzeit${log.meals.length>1?"en":""} · ${eaten} kcal`);
+        if (log.water > 0) parts.push(`${waterL}L Wasser`);
+        if (workoutMin > 0) parts.push(`${workoutMin}min Bewegung`);
+        if (doneHabits > 0) parts.push(`${doneHabits}/${habitsArr.length} Gewohnheiten`);
+        if (parts.length === 0) return null; // nichts zu erzählen
+
+        // Reflexion-Frage
+        const sleepNum = parseFloat(String(sleep).replace("+","")) || 0;
+        const reflectionQ = !log.note
+          ? (sleepNum >= 7 ? "Wie war heute?" : "Was nimmst du in den Schlaf mit?")
+          : null;
+
+        return (
+          <Card style={{ marginBottom:12, background:T.gold+"08", border:`1px solid ${T.gold}33` }}>
+            <Lbl color={T.gold} style={{ marginBottom:8 }}>🌙 HEUTE</Lbl>
+            <div style={{ color:T.text, fontSize:13, fontFamily:T.serif, lineHeight:1.7 }}>
+              {parts.join(" · ")}.
+            </div>
+            {reflectionQ && (
+              <div style={{
+                marginTop:10, padding:"8px 12px",
+                background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:8,
+                color:T.mid, fontSize:12, fontFamily:T.serif, fontStyle:"italic"
+              }}>
+                ✦ {reflectionQ}
+              </div>
+            )}
+          </Card>
+        );
+      })()}
+
       {/* JARVIS-BRIEFING – Free-Slot + nächster Termin (nur wenn heute) */}
       {isToday && (() => {
         const todayKey = isoDateKey(new Date());
@@ -8794,8 +8837,6 @@ async function fetchJSON(url, opts={}) {
 
 // (Integrations-Code entfernt – wir bauen den Kalender selbst, ohne Google/Strava/Gmail)
 // ─── GLOBAL SPEECH STOP-PILL ──────────────────────────────────────────────────
-// Sticky-Pill unten rechts, sichtbar wenn EYLA spricht – egal auf welchem Tab.
-// User berichtet: er muss sonst die Seite reloaden um die Stimme zu stoppen.
 function GlobalSpeechStopPill() {
   const [active, setActive] = useState(false);
   useEffect(() => {
@@ -8836,6 +8877,357 @@ function GlobalSpeechStopPill() {
       </span>
       ⏹ STUMM
     </button>
+  );
+}
+
+// ─── AUTO-MORGENS-BRIEFING ────────────────────────────────────────────────────
+// Beim ersten Öffnen pro Tag spricht EYLA das Tagesbriefing automatisch
+// (wenn Voice on UND Tageszeit zwischen 6-12 Uhr UND noch nicht heute gebrieft).
+function AutoMorningBriefing() {
+  useEffect(() => {
+    const hour = new Date().getHours();
+    if (hour < 6 || hour > 12) return; // nur morgens
+    const todayKey = new Date().toDateString();
+    const lastKey = "eyla_briefed_" + todayKey;
+    if (localStorage.getItem(lastKey)) return; // schon heute gebrieft
+
+    // Prüfe ob Voice an + Settings da
+    let voiceOn = true;
+    try { voiceOn = JSON.parse(localStorage.getItem("eyla_chat_voice_v1") || "true"); } catch {}
+    if (!voiceOn) return;
+
+    // Brief generieren
+    const todayIso = new Date().toISOString().slice(0,10);
+    let events = [];
+    try { events = JSON.parse(localStorage.getItem("eyla_local_events_v2")||"[]"); } catch {}
+    let todos = [];
+    try { todos = JSON.parse(localStorage.getItem("eyla_todos_v1")||"[]"); } catch {}
+    let profile = null;
+    try { profile = JSON.parse(localStorage.getItem("eyla_profile_v3")||"null"); } catch {}
+    const firstName = profile?.name?.split(" ")[0] || "";
+
+    const todayEvents = events
+      .filter(e => e.date === todayIso || (e.recurrence === "daily") ||
+        (e.recurrence === "weekly" && e.date && new Date(e.date).getDay() === new Date().getDay()))
+      .filter(e => e.time)
+      .sort((a,b) => (a.time||"").localeCompare(b.time||""));
+    const openTodos = todos.filter(t => t.status==="open" && (t.priority||"today")==="today");
+
+    // Briefing-Text bauen
+    const parts = [];
+    const greeting = hour < 9 ? "Guten Morgen" : hour < 12 ? "Hallo" : "Hi";
+    parts.push(`${greeting}${firstName ? `, ${firstName}` : ""}.`);
+
+    if (todayEvents.length === 0 && openTodos.length === 0) {
+      parts.push("Heute ist offen. Dein Tag, dein Tempo.");
+    } else {
+      if (todayEvents.length > 0) {
+        if (todayEvents.length === 1) {
+          const e = todayEvents[0];
+          parts.push(`Heute steht an: ${e.title} um ${e.time}.`);
+        } else {
+          const top = todayEvents.slice(0, 3).map(e => `${e.time} ${e.title}`).join(", ");
+          parts.push(`${todayEvents.length} Termine heute: ${top}.`);
+        }
+      }
+      if (openTodos.length > 0) {
+        parts.push(`${openTodos.length} Aufgabe${openTodos.length>1?"n":""} offen.`);
+      }
+    }
+
+    const briefText = parts.join(" ");
+
+    // Verzögert sprechen (warten bis App settled ist + Audio entsperrt)
+    setTimeout(() => {
+      // Versuche zu sprechen über window-Bridge oder fallback Browser-TTS
+      try {
+        if (typeof speechSynthesis !== "undefined") {
+          const u = new SpeechSynthesisUtterance(briefText);
+          u.lang = "de-DE";
+          u.rate = 1.1;
+          u.pitch = 1.0;
+          speechSynthesis.speak(u);
+          localStorage.setItem(lastKey, "1");
+        }
+      } catch {}
+    }, 1500);
+
+    // Lass-Marker auch wenn nicht gesprochen wurde (nicht spammig)
+    localStorage.setItem(lastKey, "1");
+  }, []);
+  return null;
+}
+
+// ─── QUICK-ACTION für Whisper-Mode ──────────────────────────────────────────
+// Standalone Tool-Executor der direkt auf localStorage arbeitet.
+// Wird vom Whisper-Mode genutzt damit man nicht erst den Chat öffnen muss.
+async function quickAction(toolName, input) {
+  const today = new Date();
+  const todayKey = today.toDateString();
+  const todayIso = today.toISOString().slice(0,10);
+
+  function updateTodayLog(updater) {
+    let map = {};
+    try { map = JSON.parse(localStorage.getItem("eyla_logs_v1")||"{}"); } catch {}
+    const empty = { meals:[], water:0, energy:"", sleep:"", workouts:[], weight:null, habits:{}, date:todayKey };
+    const prev = map[todayKey] || empty;
+    const next = { ...updater(prev), date:todayKey };
+    map[todayKey] = next;
+    try { localStorage.setItem("eyla_logs_v1", JSON.stringify(map)); } catch {}
+    window.dispatchEvent(new Event("eyla_logs_changed"));
+  }
+
+  switch (toolName) {
+    case "add_meal": {
+      const cal = parseInt(input.calories) || 0;
+      const fullName = input.amount && !String(input.name||"").toLowerCase().includes(String(input.amount).toLowerCase().replace(/\s+/g,""))
+        ? `${input.amount} ${input.name}` : (input.name||"Mahlzeit");
+      updateTodayLog(l => ({...l, meals:[...(l.meals||[]), {
+        id: Date.now(), name: fullName,
+        amount: input.amount, calories: cal,
+        protein: parseInt(input.protein)||0,
+        carbs: parseInt(input.carbs)||0,
+        fat: parseInt(input.fat)||0,
+        time: new Date().toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})
+      }]}));
+      return `Mahlzeit: ${fullName}${cal>0?` (${cal} kcal)`:""}`;
+    }
+    case "set_water": {
+      const u = Math.max(0, Math.min(12, parseInt(input.units ?? input.glasses)||0));
+      updateTodayLog(l => ({...l, water: u}));
+      return `Wasser gesetzt auf ${(u*.25).toFixed(2)}L`;
+    }
+    case "add_water": {
+      const delta = parseInt(input.delta)||0;
+      updateTodayLog(l => ({...l, water: Math.max(0, Math.min(12, (l.water||0) + delta))}));
+      return `Wasser ${delta>=0?"+":""}${(delta*.25).toFixed(2)}L`;
+    }
+    case "set_sleep": {
+      updateTodayLog(l => ({...l, sleep: String(input.hours||"")}));
+      return `Schlaf: ${input.hours}h`;
+    }
+    case "set_energy": {
+      updateTodayLog(l => ({...l, energy: String(input.mood||"")}));
+      return `Energie: ${input.mood}`;
+    }
+    case "set_weight": {
+      const kg = parseFloat(input.kg) || 0;
+      updateTodayLog(l => ({...l, weight: kg}));
+      return `Gewicht: ${kg}kg`;
+    }
+    case "add_workout": {
+      updateTodayLog(l => ({...l, workouts: [...(l.workouts||[]), {
+        type: input.type, duration: parseInt(input.duration)||0,
+        intensity: input.intensity||"mittel",
+        time: new Date().toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"}),
+      }]}));
+      return `Workout: ${input.type} ${input.duration}min`;
+    }
+    case "add_todo": {
+      let arr = [];
+      try { arr = JSON.parse(localStorage.getItem("eyla_todos_v1")||"[]"); } catch {}
+      const priority = ["today","week","later"].includes(input.priority) ? input.priority : "today";
+      const newTodo = {
+        id: `t_${Date.now()}_${Math.random().toString(36).slice(2,8)}`,
+        text: String(input.text||"").trim(),
+        priority, status:"open",
+        createdAt: new Date().toISOString(), completedAt: null, notes:"",
+      };
+      arr.unshift(newTodo);
+      try { localStorage.setItem("eyla_todos_v1", JSON.stringify(arr)); } catch {}
+      window.dispatchEvent(new Event("eyla_todos_changed"));
+      return `📝 To-do: ${newTodo.text}`;
+    }
+    case "complete_todo": {
+      let arr = [];
+      try { arr = JSON.parse(localStorage.getItem("eyla_todos_v1")||"[]"); } catch {}
+      const q = String(input.match||"").toLowerCase();
+      const idx = arr.findIndex(t => t.status==="open" && t.text.toLowerCase().includes(q));
+      if (idx < 0) return `Kein Todo mit "${input.match}"`;
+      arr[idx] = {...arr[idx], status:"done", completedAt:new Date().toISOString()};
+      try { localStorage.setItem("eyla_todos_v1", JSON.stringify(arr)); } catch {}
+      window.dispatchEvent(new Event("eyla_todos_changed"));
+      return `✓ ${arr[idx].text}`;
+    }
+    case "add_event": {
+      let arr = [];
+      try { arr = JSON.parse(localStorage.getItem("eyla_local_events_v2")||"[]"); } catch {}
+      const newEv = {
+        id: Date.now(), title: input.title, time: input.time||"",
+        duration: input.duration||"", date: input.date || todayIso,
+        local: true, recurrence: input.recurrence || null, travelTime: parseInt(input.travelTime)||0,
+      };
+      arr.push(newEv);
+      try { localStorage.setItem("eyla_local_events_v2", JSON.stringify(arr)); } catch {}
+      window.dispatchEvent(new Event("eyla_events_changed"));
+      return `Termin: ${input.title}${input.time?` um ${input.time}`:""}`;
+    }
+    case "add_shopping_item": {
+      let sh = null;
+      try { sh = JSON.parse(localStorage.getItem("eyla_shopping_v1")||"null"); } catch {}
+      if (!sh || !Array.isArray(sh.aisles)) return "Keine Einkaufsliste — zuerst Liste anlegen";
+      const aisle = input.gang || (sh.aisles[sh.aisles.length-1]?.name) || sh.aisles[0]?.name;
+      const next = { ...sh, aisles: sh.aisles.map(a => a.name === aisle
+        ? { ...a, items: [...a.items, { name: input.name, menge: input.menge || "1 Stk" }] } : a) };
+      try { localStorage.setItem("eyla_shopping_v1", JSON.stringify(next)); } catch {}
+      window.dispatchEvent(new Event("eyla_shopping_changed"));
+      return `🛒 ${input.name} → ${aisle}`;
+    }
+    default:
+      return null; // Tool nicht von Quick-Action unterstützt → Modell antwortet textuell
+  }
+}
+
+// ─── JARVIS WHISPER MODE — globaler Voice-Capture ────────────────────────────
+// Floating Mic-Pill auf jedem Screen. Tap → sprechen → EYLA klassifiziert
+// (Todo/Mahlzeit/Event/Notiz/Wasser/...) → führt sofort aus per Tool-Call.
+function WhisperModePill() {
+  const v = useVoice((text) => {
+    if (text && text.trim()) handleWhisper(text.trim());
+  });
+  const [status, setStatus] = useState("idle"); // idle | listening | thinking | done | error
+  const [resultMsg, setResultMsg] = useState(null);
+  const [speakingActive, setSpeakingActive] = useState(false);
+
+  useEffect(() => {
+    function on() { setSpeakingActive(true); }
+    function off() { setSpeakingActive(false); }
+    window.addEventListener("eyla_speech_start", on);
+    window.addEventListener("eyla_speech_end", off);
+    return () => {
+      window.removeEventListener("eyla_speech_start", on);
+      window.removeEventListener("eyla_speech_end", off);
+    };
+  }, []);
+
+  // Status-Pill verschwindet nach 3s wenn done
+  useEffect(() => {
+    if (status === "done" || status === "error") {
+      const t = setTimeout(() => { setStatus("idle"); setResultMsg(null); }, 3200);
+      return () => clearTimeout(t);
+    }
+  }, [status]);
+
+  async function handleWhisper(text) {
+    setStatus("thinking");
+    setResultMsg(`„${text.slice(0, 60)}${text.length > 60 ? "…" : ""}"`);
+    try {
+      // Kurzer Claude-Call zur Klassifikation + Tool-Call
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-5",
+          max_tokens: 400,
+          tools: EYLA_TOOLS,
+          messages: [{ role:"user", content: text }],
+          system: `Du bist EYLA im Whisper-Mode. Der User flüstert dir eine kurze Anweisung zu. Klassifiziere und führe SOFORT das passende Tool aus – keine Rückfragen, keine Erklärungen. Antworte mit max 1 Satz Bestätigung.
+
+JETZT: ${new Date().toLocaleString("de-DE",{weekday:"long",year:"numeric",month:"long",day:"numeric",hour:"2-digit",minute:"2-digit"})}
+
+Beispiele:
+- "Mama anrufen" → add_todo(text:"Mama anrufen", priority:"today")
+- "ich hab nen Apfel gegessen" → add_meal(name:"Apfel", calories:95)
+- "morgen 14 Uhr Friseur" → add_event(title:"Friseur", date:<morgens ISO>, time:"14:00")
+- "noch 0,5L Wasser getrunken" → add_water(delta:2)
+- "8h geschlafen" → set_sleep(hours:"8")
+- "müde" → set_energy(mood:"😴 Müde")
+- "Eier auf die Liste" → add_shopping_item(name:"Eier", gang:"Kühlung")
+- "200g Steak gegessen" → add_meal(name:"200g Steak", amount:"200g", calories:500) — NICHT 200 kcal!
+
+WICHTIG: nur EIN Tool. Bei Mengen IMMER realistische Kalorien schätzen, NIE die Gramm-Zahl als kcal nehmen.`,
+        })
+      });
+      if (!res.ok) throw new Error("API");
+      const data = await res.json();
+      // Versuche Tool-Call-Result oder Text
+      let confirmation = "";
+      const blocks = data.content || [];
+      for (const b of blocks) {
+        if (b.type === "text") confirmation += b.text;
+      }
+      // Tool-Use direkt per quickAction (standalone, kein ChatScreen nötig)
+      const toolUses = blocks.filter(b => b.type === "tool_use");
+      const results = [];
+      for (const tu of toolUses) {
+        try {
+          const r = await quickAction(tu.name, tu.input);
+          if (r) results.push(r);
+        } catch (e) { results.push(`Fehler: ${e.message}`); }
+      }
+      setResultMsg(results.length > 0 ? results.join(" · ") : (confirmation.trim() || "OK"));
+      setStatus("done");
+      haptic(20);
+    } catch (e) {
+      setResultMsg("Fehler — versuchs nochmal");
+      setStatus("error");
+    }
+  }
+
+  // Versteckt während EYLA-Sprechen (sonst Konflikt mit Stop-Pill)
+  if (speakingActive) return null;
+
+  const showResult = (status === "thinking" || status === "done" || status === "error") && resultMsg;
+  const isListening = v.listening;
+
+  return (
+    <>
+      {/* Result-Toast über der Pill */}
+      {showResult && (
+        <div style={{
+          position:"fixed", right:14,
+          bottom:"calc(155px + env(safe-area-inset-bottom, 0px))",
+          zIndex:201, maxWidth:280,
+          background: status==="error" ? T.red+"EE" : T.bg2+"F0",
+          backdropFilter:"blur(10px)",
+          border:`1px solid ${status==="error" ? T.red : T.acc+"66"}`,
+          borderRadius:12, padding:"8px 12px",
+          color: status==="error" ? T.bg : T.text,
+          fontSize:11, fontFamily:T.serif, lineHeight:1.5,
+          animation:"fadeUp .2s ease both",
+          boxShadow:`0 6px 20px rgba(0,0,0,.3)`
+        }}>
+          <div style={{ fontFamily:T.mono, fontSize:8, letterSpacing:1.5, opacity:.7, marginBottom:3 }}>
+            {status === "thinking" ? "EYLA …" : status === "error" ? "FEHLER" : "✓ ERLEDIGT"}
+          </div>
+          <div>{resultMsg}</div>
+        </div>
+      )}
+
+      {/* Floating Mic-Pill */}
+      <button
+        onClick={() => { if (status === "idle") v.toggle(); }}
+        disabled={!v.supported || status === "thinking"}
+        title={isListening ? "Stopp" : "EYLA flüstern"}
+        style={{
+          position:"fixed", right:14,
+          bottom:"calc(96px + env(safe-area-inset-bottom, 0px))",
+          zIndex:200,
+          width:56, height:56, borderRadius:"50%",
+          background: isListening
+            ? `linear-gradient(135deg, ${T.green}, ${T.green}CC)`
+            : status === "thinking"
+            ? `linear-gradient(135deg, ${T.gold}, ${T.acc})`
+            : `linear-gradient(135deg, ${T.dim}, ${T.acc})`,
+          border:"none", color:T.bg,
+          fontSize:22, fontWeight:700,
+          cursor: v.supported ? "pointer" : "not-allowed",
+          opacity: !v.supported ? 0.4 : 1,
+          boxShadow: isListening
+            ? `0 0 0 0 ${T.green}66, 0 8px 24px ${T.green}88`
+            : `0 8px 24px ${T.acc}66`,
+          animation: isListening ? "micPulse 1.2s ease-in-out infinite" : "none",
+          transition:"all .25s",
+          display:"flex", alignItems:"center", justifyContent:"center"
+        }}>
+        <style>{`@keyframes micPulse {
+          0% { box-shadow: 0 0 0 0 ${T.green}66, 0 8px 24px ${T.green}88; }
+          70% { box-shadow: 0 0 0 18px ${T.green}00, 0 8px 24px ${T.green}88; }
+          100% { box-shadow: 0 0 0 0 ${T.green}00, 0 8px 24px ${T.green}88; }
+        }`}</style>
+        {status === "thinking" ? "…" : isListening ? "■" : "🎙"}
+      </button>
+    </>
   );
 }
 
@@ -9111,6 +9503,12 @@ function AppContent() {
 
       {/* Globale Stop-Pill für EYLA-Stimme — egal auf welchem Screen */}
       <GlobalSpeechStopPill/>
+
+      {/* Jarvis Whisper-Mode — überall sprechen, EYLA klassifiziert + handelt */}
+      <WhisperModePill/>
+
+      {/* Morgens-Briefing — wenn Voice an + erstes App-Open heute zwischen 6-12 */}
+      <AutoMorningBriefing/>
 
       {/* Top bar – feiner Akzent von Section-Color am unteren Rand. Safe-Area für iPhone-Notch. */}
       <div style={{ position:"sticky",top:0,zIndex:40,background:T.bg+"F0",
