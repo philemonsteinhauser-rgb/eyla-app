@@ -4379,17 +4379,143 @@ const PLAN_DINNER_OPTIONS = [
 
 // ─── STUDIO SCREEN (Punkte / Shop / Ranking) ────────────────────────────────
 function StudioScreen({ profile }) {
-  const [sub, setSub] = useState("punkte"); // punkte | shop | ranking
+  const [sub, setSub] = useState("verdienen"); // verdienen | shop | ranking
+  const [points, setPoints] = useState(loadPoints());
+  useEffect(() => {
+    function onChange() { setPoints(loadPoints()); }
+    window.addEventListener("eyla_points_changed", onChange);
+    return () => window.removeEventListener("eyla_points_changed", onChange);
+  }, []);
+
+  const lvl = getLevel(points.total);
+  const mult = getMultiplier(points);
+  const nextLvl = LEVELS.find(l => l.level === lvl.level + 1);
+  const inLevelMin = lvl.min;
+  const inLevelMax = nextLvl ? nextLvl.min : lvl.max;
+  const lvlProgress = nextLvl ? Math.min(100, Math.round(((points.total - inLevelMin) / (inLevelMax - inLevelMin)) * 100)) : 100;
+  const ptsToNext = nextLvl ? Math.max(0, nextLvl.min - points.total) : 0;
+
+  // Heute
+  const today = new Date().toDateString();
+  const todayHist = (points.history || []).filter(h => new Date(h.ts).toDateString() === today);
+  const earnedToday = todayHist.reduce((s, h) => s + (h.points || 0), 0);
+  const doneToday = new Set(todayHist.map(h => h.action));
+  const dailyActions = ["ems_training", "water_goal", "meals_logged", "perfect_day", "social_share", "steps"];
+  const dayIcons = { ems_training:"⚡", water_goal:"💧", meals_logged:"🥗", perfect_day:"✨", social_share:"📸", steps:"👟" };
+  const openToday = dailyActions.filter(a => !doneToday.has(a));
+
+  // Nächste Belohnung
+  const sortedShop = [...SHOP_ITEMS].sort((a, b) => a.pts - b.pts);
+  const nextReward = sortedShop.find(it => it.pts > points.total) || sortedShop[sortedShop.length - 1];
+  const canRedeemNow = points.total >= nextReward.pts;
+  const rewardProgress = Math.min(100, Math.round((points.total / nextReward.pts) * 100));
+  const rewardGap = Math.max(0, nextReward.pts - points.total);
+
+  // Monats-Streak (EMS-Sessions)
+  const thisMonth = new Date().getMonth();
+  const emsThisMonth = (points.history || []).filter(h => h.action === "ems_training" && new Date(h.ts).getMonth() === thisMonth).length;
+  const streakGoal = 8;
+
   return (
     <div>
+      {/* HERO – Level + Punkte + Multiplikator + Fortschritt */}
+      <Card style={{ marginBottom:12, background:`radial-gradient(120% 90% at 100% 0%, ${T.gold}18 0%, transparent 58%), ${T.card}`, border:`1px solid ${T.gold}44` }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10 }}>
+          <div style={{ minWidth:0 }}>
+            <Lbl color={T.gold} style={{ marginBottom:4 }}>LEVEL {lvl.level} · {lvl.name.toUpperCase()}</Lbl>
+            <div style={{ fontSize:30, fontWeight:300, color:T.text, fontFamily:T.mono, lineHeight:1 }}>
+              {points.total.toLocaleString("de-DE")}<span style={{ fontSize:13, color:T.muted, marginLeft:6 }}>Pts</span>
+            </div>
+            <div style={{ fontSize:11, color: earnedToday>0 ? T.green : T.muted, fontFamily:T.serif, fontStyle:"italic", marginTop:5 }}>
+              {earnedToday > 0 ? `heute +${earnedToday} Pts` : "heute noch nichts verdient"}
+            </div>
+          </div>
+          <div style={{ textAlign:"right", flexShrink:0 }}>
+            <div style={{ fontSize:24, fontWeight:900, color:T.gold, fontFamily:T.mono }}>×{mult}</div>
+            <div style={{ fontSize:9, color:T.muted }}>Multiplikator</div>
+          </div>
+        </div>
+        <div style={{ height:6, borderRadius:99, background:T.faint, overflow:"hidden" }}>
+          <div style={{ width:`${lvlProgress}%`, height:"100%", background:`linear-gradient(90deg,${T.gold},${T.acc})`, boxShadow:`0 0 8px ${T.gold}66`, transition:"width .4s" }}/>
+        </div>
+        <div style={{ fontSize:10, color:T.muted, marginTop:6, fontFamily:T.serif, display:"flex", justifyContent:"space-between", gap:8 }}>
+          <span>{nextLvl ? `${ptsToNext.toLocaleString("de-DE")} Pts bis Level ${nextLvl.level} · ${nextLvl.name}` : "Höchstes Level erreicht 🏆"}</span>
+          <span style={{ whiteSpace:"nowrap" }}>Monat {Math.min(emsThisMonth, streakGoal)}/{streakGoal} 🔥</span>
+        </div>
+      </Card>
+
+      {/* HEUTE HOLEN – offene Tagesaktionen */}
+      <Card style={{ marginBottom:12 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+          <Lbl>HEUTE HOLEN</Lbl>
+          <span style={{ fontFamily:T.mono, fontSize:9, color:T.muted, letterSpacing:1 }}>
+            {dailyActions.length - openToday.length}/{dailyActions.length} ✓
+          </span>
+        </div>
+        {openToday.length === 0 ? (
+          <p style={{ color:T.green, fontSize:12, fontFamily:T.serif, fontStyle:"italic", margin:0 }}>
+            Alles für heute geholt. Stark. 🏆
+          </p>
+        ) : (
+          <div style={{ display:"flex", flexDirection:"column", gap:2 }}>
+            {dailyActions.map(a => {
+              const done = doneToday.has(a);
+              return (
+                <div key={a} style={{
+                  display:"flex", alignItems:"center", gap:10, padding:"6px 0",
+                  borderBottom:`1px solid ${T.border}`, opacity: done ? 0.45 : 1
+                }}>
+                  <span style={{ fontSize:15 }}>{dayIcons[a]}</span>
+                  <span style={{ flex:1, fontSize:12, color:T.text, fontFamily:T.serif }}>
+                    {POINT_LABELS[a]}{done ? " ✓" : ""}
+                  </span>
+                  <span style={{ fontFamily:T.mono, fontSize:12, fontWeight:700, color: done ? T.muted : T.gold }}>
+                    +{POINT_VALUES[a]}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <p style={{ color:T.muted, fontSize:10, fontStyle:"italic", fontFamily:T.serif, margin:"10px 0 0", lineHeight:1.5 }}>
+          Training, Wasser & Mahlzeiten zählen automatisch – einfach im Tag eintragen.
+        </p>
+      </Card>
+
+      {/* NÄCHSTE BELOHNUNG */}
+      <Card style={{ marginBottom:16 }}>
+        <Lbl style={{ marginBottom:10 }}>NÄCHSTE BELOHNUNG</Lbl>
+        <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:10 }}>
+          <div style={{ fontSize:28, width:44, height:44, display:"grid", placeItems:"center", background:T.faint, borderRadius:12, flexShrink:0 }}>
+            {nextReward.icon}
+          </div>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontSize:14, color:T.text, fontFamily:T.serif }}>{nextReward.name}</div>
+            <div style={{ fontSize:11, color: canRedeemNow ? T.green : T.muted, fontFamily:T.serif, fontStyle:"italic" }}>
+              {canRedeemNow ? "✓ jetzt einlösbar" : `noch ${rewardGap.toLocaleString("de-DE")} Pts`}
+            </div>
+          </div>
+          <div style={{ fontFamily:T.mono, fontSize:13, fontWeight:700, color:T.gold, flexShrink:0 }}>
+            {nextReward.pts.toLocaleString("de-DE")}
+          </div>
+        </div>
+        <div style={{ height:5, borderRadius:99, background:T.faint, overflow:"hidden", marginBottom:12 }}>
+          <div style={{ width:`${rewardProgress}%`, height:"100%", background: canRedeemNow ? T.green : T.gold, transition:"width .4s" }}/>
+        </div>
+        <button onClick={()=>setSub("shop")} style={{
+          width:"100%", background:T.green+"14", border:`1px solid ${T.green}44`, borderRadius:10,
+          padding:"9px 0", color:T.green, fontFamily:T.mono, fontSize:11, letterSpacing:1.5, cursor:"pointer"
+        }}>ZUM SHOP →</button>
+      </Card>
+
       <SubTabRow current={sub} onChange={setSub} options={[
-        { id:"punkte",  label:"Punkte",  color:T.gold },
-        { id:"shop",    label:"Shop",    color:T.green },
-        { id:"ranking", label:"Ranking", color:T.rose },
+        { id:"verdienen", label:"Verdienen", color:T.gold },
+        { id:"shop",      label:"Shop",      color:T.green },
+        { id:"ranking",   label:"Ranking",   color:T.rose },
       ]}/>
-      {sub==="punkte"  && <PunkteScreen profile={profile}/>}
-      {sub==="shop"    && <ShopScreen profile={profile}/>}
-      {sub==="ranking" && <RankingScreen profile={profile}/>}
+      {sub==="verdienen" && <PunkteScreen profile={profile}/>}
+      {sub==="shop"      && <ShopScreen profile={profile}/>}
+      {sub==="ranking"   && <RankingScreen profile={profile}/>}
     </div>
   );
 }
@@ -4401,13 +4527,7 @@ function PunkteScreen({ profile }) {
     window.addEventListener("eyla_points_changed", onChange);
     return () => window.removeEventListener("eyla_points_changed", onChange);
   }, []);
-  const lvl = getLevel(points.total);
   const mult = getMultiplier(points);
-  const nextLvl = LEVELS.find(l => l.level === lvl.level + 1);
-  const inLevelMin = lvl.min;
-  const inLevelMax = nextLvl ? nextLvl.min : lvl.max;
-  const lvlProgress = nextLvl ? Math.min(100, Math.round(((points.total - inLevelMin) / (inLevelMax - inLevelMin)) * 100)) : 100;
-  const ptsToNext = nextLvl ? Math.max(0, nextLvl.min - points.total) : 0;
   // Monats-Streak: Sessions im aktuellen Monat (aus history ems_training)
   const thisMonth = new Date().getMonth();
   const emsThisMonth = (points.history||[]).filter(h => h.action==="ems_training" && new Date(h.ts).getMonth()===thisMonth).length;
@@ -4415,37 +4535,6 @@ function PunkteScreen({ profile }) {
 
   return (
     <div>
-      <div style={{ display:"flex", alignItems:"center", gap:18, marginBottom:24 }}>
-        <EylaOrb size={48}/>
-        <div style={{ flex:1, minWidth:0 }}>
-          <Lbl style={{ marginBottom:5 }}>PUNKTE</Lbl>
-          <h2 style={{ fontSize:22, fontWeight:300, color:T.text, margin:0 }}>{points.total.toLocaleString("de-DE")} <span style={{ fontSize:13, color:T.muted }}>Punkte</span></h2>
-        </div>
-      </div>
-
-      {/* LEVEL-Card */}
-      <Card style={{ marginBottom:12, background:`radial-gradient(110% 90% at 100% 0%, ${T.gold}14 0%, transparent 55%), ${T.card}`, border:`1px solid ${T.gold}33` }}>
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:8 }}>
-          <div>
-            <Lbl color={T.gold} style={{ marginBottom:3 }}>LEVEL {lvl.level} · {lvl.name.toUpperCase()}</Lbl>
-            <div style={{ fontSize:17, fontWeight:700, color:T.text, fontFamily:T.mono }}>
-              {points.total.toLocaleString("de-DE")}{nextLvl ? ` / ${nextLvl.min.toLocaleString("de-DE")}` : ""} Pts
-            </div>
-          </div>
-          <div style={{ textAlign:"right" }}>
-            <div style={{ fontSize:22, fontWeight:900, color:T.gold, fontFamily:T.mono }}>×{mult}</div>
-            <div style={{ fontSize:9, color:T.muted }}>Multiplikator</div>
-          </div>
-        </div>
-        <div style={{ height:5, borderRadius:99, background:T.faint, overflow:"hidden" }}>
-          <div style={{ width:`${lvlProgress}%`, height:"100%", background:T.gold, boxShadow:`0 0 8px ${T.gold}66` }}/>
-        </div>
-        <div style={{ fontSize:9, color:T.muted, marginTop:5, fontFamily:T.serif }}>
-          {nextLvl ? `${ptsToNext.toLocaleString("de-DE")} Pts bis Level ${nextLvl.level} · ${nextLvl.name}` : "Höchstes Level erreicht 🏆"}
-          {(points.friends?.length>0) && ` · ${points.friends.length} Freund${points.friends.length>1?"e":""} (+${(Math.min(0.5,points.friends.length*0.1)).toFixed(1)}×)`}
-        </div>
-      </Card>
-
       {/* VERDIENEN */}
       <Card style={{ marginBottom:12 }}>
         <Lbl style={{ marginBottom:10 }}>SO VERDIENST DU PUNKTE</Lbl>
