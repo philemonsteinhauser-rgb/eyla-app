@@ -30,8 +30,6 @@ const SYNC_KEYS = [
   "eyla_local_events_v2",
   "eyla_shopping_v1",
   "eyla_plan_v1",
-  "eyla_chat_v1",
-  "eyla_chat_voice_v1",
   "eyla_todos_v1",
   "eyla_points_v1",     // Studio-Punkte
   "eyla_cycle_v1",      // FLO
@@ -139,15 +137,6 @@ async function pullCloudIntoLocal() {
   if (!cloud) return false;
   for (const k of SYNC_KEYS) {
     if (cloud[k] !== undefined && cloud[k] !== null) {
-      // Chat: nur überschreiben wenn Cloud mehr/gleich viele Messages hat
-      if (k === "eyla_chat_v1") {
-        try {
-          const localArr = JSON.parse(localStorage.getItem(k) || "[]");
-          if (Array.isArray(localArr) && Array.isArray(cloud[k]) && localArr.length > cloud[k].length) {
-            continue; // local ist länger → behalten
-          }
-        } catch {}
-      }
       try { localStorage.setItem(k, JSON.stringify(cloud[k])); } catch {}
     }
   }
@@ -2850,9 +2839,8 @@ function isoDateKey(d) {
   return `${y}-${m}-${day}`;
 }
 
-// ─── TODO SCREEN ──────────────────────────────────────────────────────────────
-// Persönliche Aufgaben mit 3 Buckets: heute / woche / später.
-// Quick-Add per Text oder Voice. EYLA kann via Tools manipulieren (in executeTool).
+// ─── TODOS (Datenebene) ───────────────────────────────────────────────────────
+// Werden in der "Anstehend"-Karte auf Heute angezeigt + abgehakt.
 // Speicherung: eyla_todos_v1 (Array von Todo-Objekten)
 
 function loadTodos() {
