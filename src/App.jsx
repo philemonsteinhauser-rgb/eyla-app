@@ -2215,11 +2215,29 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [], init
           </Card>
         );
       })()}
-      <div style={{ marginBottom:14, display:"flex", alignItems:"center", justifyContent:"space-between", gap:14 }}>
+      {/* Header + Datum-Navigation (zusammengefasst) */}
+      <div style={{ marginBottom:18, display:"flex", alignItems:"center", justifyContent:"space-between", gap:14 }}>
         <div style={{ minWidth:0, flex:1 }}>
-          <Lbl style={{ marginBottom:6 }}>
-            {isToday ? "HEUTE" : isPast ? "RÜCKBLICK" : "VORAUS"} · {tagDate.toLocaleDateString("de-DE",{weekday:"long",day:"numeric",month:"long"})}
-          </Lbl>
+          <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:6 }}>
+            <button onClick={prevDay} style={{
+              background:"transparent", border:"none", color:T.muted,
+              fontFamily:T.serif, fontSize:18, cursor:"pointer", lineHeight:1, padding:"0 2px"
+            }}>‹</button>
+            <Lbl style={{ margin:0 }}>
+              {isToday ? "HEUTE" : isPast ? "RÜCKBLICK" : "VORAUS"} · {tagDate.toLocaleDateString("de-DE",{weekday:"short",day:"numeric",month:"short"})}
+            </Lbl>
+            <button onClick={nextDay} style={{
+              background:"transparent", border:"none", color:T.muted,
+              fontFamily:T.serif, fontSize:18, cursor:"pointer", lineHeight:1, padding:"0 2px"
+            }}>›</button>
+            {!isToday && (
+              <button onClick={goToday} style={{
+                background:T.acc+"18", border:`1px solid ${T.acc}44`, borderRadius:14,
+                padding:"2px 10px", color:T.acc, fontFamily:T.mono, fontSize:9,
+                cursor:"pointer", letterSpacing:1, marginLeft:2
+              }}>↺ HEUTE</button>
+            )}
+          </div>
           <h2 style={{ fontSize:20, fontWeight:300, color:T.text, margin:0 }}>
             {isToday
               ? <>Wie geht's dir, <span style={{ color:T.acc }}>{profile.name.split(" ")[0]}</span>?</>
@@ -2232,27 +2250,6 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [], init
           kcal={eaten} kcalTarget={targetKcal}
           workouts={(log.workouts||[]).reduce((s,w)=>s+(w.duration||0),0)}
         />
-      </div>
-
-      {/* Datum-Navigator */}
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8, marginBottom:18 }}>
-        <button onClick={prevDay} style={{
-          background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:10,
-          padding:"6px 12px", color:T.mid, fontFamily:T.serif, fontSize:16, cursor:"pointer", lineHeight:1
-        }}>‹</button>
-        {!isToday ? (
-          <button onClick={goToday} style={{
-            background:T.acc+"18", border:`1px solid ${T.acc}44`, borderRadius:18,
-            padding:"5px 14px", color:T.acc, fontFamily:T.mono, fontSize:10,
-            cursor:"pointer", letterSpacing:1.5
-          }}>↺ HEUTE</button>
-        ) : (
-          <span style={{ color:T.muted, fontFamily:T.mono, fontSize:9, letterSpacing:1 }}>← gestern · morgen →</span>
-        )}
-        <button onClick={nextDay} style={{
-          background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:10,
-          padding:"6px 12px", color:T.mid, fontFamily:T.serif, fontSize:16, cursor:"pointer", lineHeight:1
-        }}>›</button>
       </div>
 
       {/* Energie & Schlaf */}
