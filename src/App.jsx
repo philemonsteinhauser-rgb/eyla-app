@@ -5027,6 +5027,8 @@ function PlanScreen({ profile, onUpdateProfile }) {
   const [error, setError] = useState(null);
   const [loaded, setLoaded] = useState(false);
   const [showWizard, setShowWizard] = useState(false);
+  // "Heute im Fokus": welcher Tag ist gerade ausgewählt (Index in days)
+  const [selDay, setSelDay] = useState(0);
   // Swap-Modus: welche Mahlzeit gerade ersetzt wird (id "dayIdx:slot")
   const [swappingKey, setSwappingKey] = useState(null);
   // Favoriten – Set von normalisierten Mahlzeit-Namen
@@ -5036,6 +5038,13 @@ function PlanScreen({ profile, onUpdateProfile }) {
   const [fridgeIdeas, setFridgeIdeas] = useState(null); // {ingredients, ideas[]}
   const [fridgeError, setFridgeError] = useState(null);
   const fridgeFileRef = useRef(null);
+
+  // Index des heutigen Wochentags im Plan (für "Heute im Fokus"); sonst 0
+  const todayDayIdx = (daysArr) => {
+    const wd = new Date().toLocaleDateString("de-DE", { weekday: "long" }).toLowerCase().slice(0, 2);
+    const i = (daysArr || []).findIndex(d => (d.day || "").toLowerCase().slice(0, 2) === wd);
+    return i >= 0 ? i : 0;
+  };
 
   async function handleFridgeFile(e) {
     const file = e.target.files?.[0];
@@ -5133,6 +5142,7 @@ Mahlzeiten passend zu Profil (${prefs}, ${ct.type === "abnehmen" ? "Defizit" : c
       if (saved && Array.isArray(saved.days) && saved.days.length > 0) {
         setDays(saved.days);
         setIntro(saved.intro || "");
+        setSelDay(todayDayIdx(saved.days));
       }
       setLoaded(true);
     });
@@ -5382,6 +5392,7 @@ TIPP: [Konkreter Hinweis für diesen Tag – Timing, Zubereitung, Variation. Nic
         throw new Error("Konnte Plan nicht lesen");
       }
       setDays(parsed);
+      setSelDay(todayDayIdx(parsed));
     } catch(e) {
       setError("Fehler: " + e.message);
     }
@@ -5539,79 +5550,91 @@ TIPP: [Konkreter Hinweis für diesen Tag – Timing, Zubereitung, Variation. Nic
           <p style={{ color:T.muted, fontSize:12, fontStyle:"italic", fontFamily:T.serif, margin:0 }}>Dauert ca. 15 Sekunden.</p>
         </Card>
       )}
-      {days.length > 0 && (
-        <div>
-          {intro && (
-            <Card accent style={{ marginBottom:16 }}>
-              <p style={{ color:T.mid, fontStyle:"italic", fontSize:14, margin:0, lineHeight:1.7, fontFamily:T.serif }}>✦ {intro}</p>
-            </Card>
-          )}
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(250px,1fr))", gap:12 }}>
-            {days.map((day, i) => (
-              <Card key={i}>
-                <Lbl color={T.acc} style={{ marginBottom:12 }}>{day.day.toUpperCase()}</Lbl>
-                {["breakfast","lunch","dinner","snack"].map(m => {
-                  const swapKey = `${i}:${m}`;
-                  const isSwapping = swappingKey === swapKey;
-                  const isEmpty = !day[m] || day[m] === "—" || day[m] === "–";
-                  return (
-                    <div key={m} style={{ marginBottom:9 }}>
-                      <div style={{ display:"flex", gap:6, alignItems:"center", justifyContent:"space-between" }}>
-                        <div style={{ display:"flex", gap:6, alignItems:"baseline" }}>
-                          <span style={{ fontSize:11 }}>{icons[m]}</span>
-                          <Lbl style={{ fontSize:10 }}>{labels[m]}</Lbl>
-                        </div>
-                        {!isEmpty && (
-                          <div style={{ display:"flex", gap:2 }}>
-                            <button
-                              onClick={()=>toggleFav(day[m])}
-                              title={isFav(day[m]) ? "Aus Favoriten" : "Als Favorit"}
-                              style={{
-                                background:"transparent", border:"none",
-                                color: isFav(day[m]) ? T.gold : T.muted,
-                                cursor:"pointer", padding:"2px 4px",
-                                fontSize:11, opacity: isFav(day[m]) ? 1 : 0.5,
-                                transition:"opacity .15s"
-                              }}
-                              onMouseEnter={e=>{ e.currentTarget.style.opacity="1"; }}
-                              onMouseLeave={e=>{ e.currentTarget.style.opacity = isFav(day[m]) ? "1" : "0.5"; }}
-                            >{isFav(day[m]) ? "★" : "☆"}</button>
-                            <button
-                              onClick={()=>swapMeal(i, m)}
-                              disabled={isSwapping}
-                              title="Vorschlag tauschen"
-                              style={{
-                                background:"transparent", border:"none", color:T.muted,
-                                cursor: isSwapping ? "default" : "pointer", padding:"2px 4px",
-                                fontFamily:T.mono, fontSize:11, opacity: isSwapping ? 1 : 0.5,
-                                transition:"opacity .15s"
-                              }}
-                              onMouseEnter={e=>{ if(!isSwapping) e.currentTarget.style.opacity="1"; e.currentTarget.style.color = T.acc; }}
-                              onMouseLeave={e=>{ if(!isSwapping) e.currentTarget.style.opacity="0.5"; e.currentTarget.style.color = T.muted; }}
-                            >{isSwapping ? "…" : "↻"}</button>
-                          </div>
-                        )}
-                      </div>
-                      <div style={{ color: isSwapping ? T.acc : T.mid, fontSize:12, paddingLeft:18, fontStyle:"italic", fontFamily:T.serif, transition:"color .2s" }}>
-                        {isSwapping ? "Suche Alternative …" : day[m]}
-                      </div>
-                    </div>
-                  );
-                })}
-                {day.tip && day.tip !== "–" && (
-                  <div style={{ marginTop:10, padding:"8px 12px", background:T.acc+"0A", borderRadius:8, borderLeft:"2px solid "+T.acc }}>
-                    <Lbl color={T.acc} style={{ marginBottom:3 }}>EYLA</Lbl>
-                    <div style={{ color:T.muted, fontSize:11, fontStyle:"italic", fontFamily:T.serif }}>{day.tip}</div>
-                  </div>
+      {days.length > 0 && (() => {
+        const day = days[selDay] || days[0];
+        const tIdx = todayDayIdx(days);
+        const isToday = selDay === tIdx;
+        const slots = ["breakfast","lunch","dinner","snack"];
+        return (
+          <div>
+            {/* Wochen-Leiste */}
+            <div style={{ display:"flex", gap:5, marginBottom:14 }}>
+              {days.map((d, i) => {
+                const active = i === selDay;
+                return (
+                  <button key={i} onClick={()=>setSelDay(i)} style={{
+                    flex:1, minWidth:0, padding:"8px 0", borderRadius:10, cursor:"pointer",
+                    background: active ? T.gold+"22" : T.bg2,
+                    border:`1px solid ${active ? T.gold : T.borderS}`,
+                    color: active ? T.gold : T.muted,
+                    fontFamily:T.mono, fontSize:11, letterSpacing:1,
+                    display:"flex", flexDirection:"column", alignItems:"center", gap:4,
+                    transition:"all .15s"
+                  }}>
+                    <span>{(d.day||"").slice(0,2).toUpperCase()}</span>
+                    <span style={{ width:4, height:4, borderRadius:"50%", background: i===tIdx ? T.acc : "transparent" }}/>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Fokus-Tag */}
+            <Card style={{ marginBottom:14 }}>
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14 }}>
+                <h2 style={{ fontSize:20, fontWeight:300, color:T.text, margin:0 }}>{day.day}</h2>
+                {isToday && (
+                  <span style={{ fontFamily:T.mono, fontSize:9, letterSpacing:1.5, color:T.acc,
+                    background:T.acc+"18", border:`1px solid ${T.acc}44`, borderRadius:20, padding:"3px 10px" }}>HEUTE</span>
                 )}
-              </Card>
-            ))}
+              </div>
+              {slots.map((m, mi) => {
+                const isEmpty = !day[m] || day[m] === "—" || day[m] === "–";
+                if (m === "snack" && isEmpty) return null; // leeren Snack ausblenden
+                const isSwapping = swappingKey === `${selDay}:${m}`;
+                const isLast = mi === slots.length - 1 || (m === "dinner" && (!day.snack || day.snack === "–" || day.snack === "—"));
+                return (
+                  <div key={m} style={{ marginBottom:13, paddingBottom:13, borderBottom: isLast ? "none" : `1px solid ${T.border}` }}>
+                    <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:5 }}>
+                      <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+                        <span style={{ fontSize:15 }}>{icons[m]}</span>
+                        <Lbl>{labels[m]}</Lbl>
+                      </div>
+                      {!isEmpty && (
+                        <div style={{ display:"flex", gap:2 }}>
+                          <button onClick={()=>toggleFav(day[m])} title={isFav(day[m]) ? "Aus Favoriten" : "Als Favorit"} style={{
+                            background:"transparent", border:"none", color: isFav(day[m]) ? T.gold : T.muted,
+                            cursor:"pointer", padding:"2px 6px", fontSize:15
+                          }}>{isFav(day[m]) ? "★" : "☆"}</button>
+                          <button onClick={()=>swapMeal(selDay, m)} disabled={isSwapping} title="Tauschen" style={{
+                            background:"transparent", border:"none", color: isSwapping ? T.acc : T.muted,
+                            cursor: isSwapping ? "default" : "pointer", padding:"2px 6px", fontFamily:T.mono, fontSize:14
+                          }}>{isSwapping ? "…" : "↻"}</button>
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ color: isSwapping ? T.acc : T.text, fontSize:15, fontFamily:T.serif, lineHeight:1.5, paddingLeft:23 }}>
+                      {isSwapping ? "Suche Alternative …" : (isEmpty ? "—" : day[m])}
+                    </div>
+                  </div>
+                );
+              })}
+              {day.tip && day.tip !== "–" && (
+                <div style={{ marginTop:4, padding:"10px 12px", background:T.acc+"0A", borderRadius:8, borderLeft:"2px solid "+T.acc }}>
+                  <Lbl color={T.acc} style={{ marginBottom:3 }}>EYLA</Lbl>
+                  <div style={{ color:T.mid, fontSize:12, fontStyle:"italic", fontFamily:T.serif, lineHeight:1.5 }}>{day.tip}</div>
+                </div>
+              )}
+            </Card>
+
+            {intro && (
+              <p style={{ color:T.muted, fontSize:11, fontStyle:"italic", fontFamily:T.serif, lineHeight:1.6, margin:"0 4px 14px", textAlign:"center" }}>✦ {intro}</p>
+            )}
+            <div style={{ textAlign:"center" }}>
+              <button onClick={generate} style={{ background:"transparent", border:"1px solid "+T.borderS, borderRadius:10, padding:"9px 20px", color:T.muted, fontFamily:T.serif, fontSize:12, cursor:"pointer", fontStyle:"italic" }}>Plan neu generieren</button>
+            </div>
           </div>
-          <div style={{ textAlign:"center", marginTop:16 }}>
-            <button onClick={generate} style={{ background:"transparent", border:"1px solid "+T.borderS, borderRadius:10, padding:"9px 20px", color:T.muted, fontFamily:T.serif, fontSize:12, cursor:"pointer", fontStyle:"italic" }}>Neu generieren</button>
-          </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
