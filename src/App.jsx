@@ -186,6 +186,90 @@ const T = {
 
 const GOALS = ["Langfristig fit bleiben","Mehr Energie","Gesünder essen","Gewicht halten","Besser schlafen","Leistung steigern"];
 
+// ─── STUDIO / GAMIFICATION ENGINE (suma-Merge) ───────────────────────────────
+// Punkte-System für EMS-Studio: Training → Punkte → Shop/Freunde-Loop.
+// Speicher: eyla_points_v1 = { total, history:[{action,points,ts,note}], monthStreak,
+//   friends:[{name,mult}], redeemed:[{item,points,ts}] }
+const POINT_VALUES = {
+  ems_training:  50,   // EMS-Session absolviert
+  punctual:      10,   // pünktlich erschienen
+  offpeak:       10,   // Off-Peak-Termin gebucht
+  friend:        100,  // Freund geworben (aktiviert)
+  social_share:  15,   // Story / Post geteilt
+  water_goal:    20,   // Wasserziel erreicht
+  meals_logged:  30,   // alle Mahlzeiten geloggt
+  steps:         25,   // 10.000 Schritte
+  perfect_day:   40,   // alle Tagesziele
+};
+const POINT_LABELS = {
+  ems_training:  "EMS Training",
+  punctual:      "Pünktlich erschienen",
+  offpeak:       "Off-Peak Termin",
+  friend:        "Freund geworben",
+  social_share:  "Social Share",
+  water_goal:    "Wasserziel erreicht",
+  meals_logged:  "Mahlzeiten geloggt",
+  steps:         "10.000 Schritte",
+  perfect_day:   "Perfekter Tag",
+};
+const LEVELS = [
+  { level:1, name:"Starter",   min:0,    max:500,  mult:1.0 },
+  { level:2, name:"Mover",     min:501,  max:1500, mult:1.2 },
+  { level:3, name:"Performer", min:1501, max:3500, mult:1.5 },
+  { level:4, name:"Champion",  min:3501, max:Infinity, mult:2.0 },
+];
+// Shop-Katalog (1000 Pts ≈ 10 €)
+const SHOP_ITEMS = [
+  { id:"riegel",  cat:"A", icon:"🍫", name:"Proteinriegel",     sub:"Auswahl an der Theke",      pts:300,   eur:3 },
+  { id:"shake",   cat:"A", icon:"🥤", name:"Protein Shake",     sub:"1× nach dem Training",      pts:400,   eur:4 },
+  { id:"session", cat:"B", icon:"⚡", name:"Extra EMS Session", sub:"+ 15 € Zuzahlung",          pts:1000,  eur:0, addEur:15 },
+  { id:"hoodie",  cat:"B", icon:"👕", name:"suma Hoodie",       sub:"max. 4.000 Pts anrechenbar", pts:4000, eur:0 },
+  { id:"contract",cat:"C", icon:"🚀", name:"2× Vertrag · 3 Monate", sub:"50 % Rabatt · danach kündbar", pts:10000, eur:0 },
+];
+const SHOP_CAT_LABELS = { A:"Gratis", B:"Upgrade", C:"Upsell" };
+
+function loadPoints() {
+  try {
+    const p = JSON.parse(localStorage.getItem("eyla_points_v1") || "null");
+    if (p && typeof p.total === "number") return p;
+  } catch {}
+  return { total: 0, history: [], monthStreak: 0, friends: [], redeemed: [] };
+}
+function savePoints(p) {
+  try { localStorage.setItem("eyla_points_v1", JSON.stringify(p)); } catch {}
+  window.dispatchEvent(new Event("eyla_points_changed"));
+}
+function getLevel(total) {
+  return LEVELS.find(l => total >= l.min && total <= l.max) || LEVELS[0];
+}
+function getMultiplier(points) {
+  const lvl = getLevel(points.total);
+  const friendBonus = Math.min(0.5, (points.friends?.length || 0) * 0.1);
+  return +(lvl.mult + friendBonus).toFixed(1);
+}
+// Punkte vergeben – mit Multiplikator + Dedup pro Tag für action-Typen die nur 1×/Tag zählen
+const ONCE_PER_DAY = new Set(["water_goal","meals_logged","steps","perfect_day","punctual"]);
+function awardPoints(action, opts = {}) {
+  const base = POINT_VALUES[action];
+  if (base === undefined) return null;
+  const p = loadPoints();
+  const today = new Date().toDateString();
+  // Dedup: manche Aktionen max 1× pro Tag
+  if (ONCE_PER_DAY.has(action)) {
+    const already = (p.history || []).some(h => h.action === action && new Date(h.ts).toDateString() === today);
+    if (already) return null;
+  }
+  const mult = getMultiplier(p);
+  const pts = Math.round(base * (opts.applyMult === false ? 1 : mult));
+  p.total += pts;
+  p.history = [{ action, points: pts, ts: Date.now(), note: opts.note || "" }, ...(p.history || [])].slice(0, 200);
+  savePoints(p);
+  // Visuelles Feedback global
+  window.dispatchEvent(new CustomEvent("eyla_points_awarded", { detail: { action, points: pts, label: POINT_LABELS[action] || action } }));
+  haptic(20);
+  return pts;
+}
+
 const DEFAULT_PROFILE = {
   name: "Phil",
   sex: "m",               // "m" | "f" | "d"
@@ -1680,9 +1764,10 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [], init
       setKonfettiMode("normal");
       setKonfetti(true);
       haptic(60);
+      if (isToday) awardPoints("water_goal"); // Studio-Punkte
     }
     prevWaterRef.current = cur;
-  }, [log.water, profile]);
+  }, [log.water, profile, isToday]);
   useEffect(() => {
     const totalKcal = (log.meals||[]).reduce((s,m)=>s+(m.calories||0),0);
     const target = calorieTarget(profile).target;
@@ -1746,9 +1831,21 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [], init
       setKonfetti(true);
       setPerfectDayOpen(true);
       haptic([50, 80, 50, 80, 120]); // longer pattern
+      if (isToday) awardPoints("perfect_day"); // Studio-Punkte
     }
     prevAllReachedRef.current = allReached;
   }, [log, profile, tagKey, isToday]);
+
+  // Mahlzeiten-Punkte: wenn 3+ Mahlzeiten geloggt (1× pro Tag)
+  const prevMealCountRef = useRef(null);
+  useEffect(() => {
+    if (!isToday) return;
+    const n = (log.meals||[]).length;
+    if (prevMealCountRef.current !== null && prevMealCountRef.current < 3 && n >= 3) {
+      awardPoints("meals_logged");
+    }
+    prevMealCountRef.current = n;
+  }, [log.meals, isToday]);
 
   const eaten = log.meals.reduce((s,m)=>s+(m.calories||0),0);
   const eatenP = log.meals.reduce((s,m)=>s+(m.protein||0),0);
@@ -2255,10 +2352,10 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [], init
             { type:"Kraft",         duration:45, icon:"💪" },
             { type:"Gehen",         duration:45, icon:"🚶" },
           ].map(opt => (
-            <button key={opt.type} onClick={()=>setLog(l=>({...l, workouts:[...(l.workouts||[]), {
+            <button key={opt.type} onClick={()=>{ setLog(l=>({...l, workouts:[...(l.workouts||[]), {
               id:Date.now(), type:opt.type, duration:opt.duration,
               time:new Date().toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})
-            }]}))} style={{
+            }]})); if (isToday) awardPoints("ems_training"); }} style={{
               background:"transparent", border:`1px solid ${T.borderS}`, borderRadius:18,
               padding:"5px 12px", color:T.muted, fontFamily:T.serif, fontSize:12,
               fontStyle:"italic", cursor:"pointer", transition:"all .2s",
@@ -6255,6 +6352,335 @@ const PLAN_DINNER_OPTIONS = [
   "Wraps + Salat",
 ];
 
+// ─── STUDIO SCREEN (Punkte / Shop / Ranking) ────────────────────────────────
+function StudioScreen({ profile }) {
+  const [sub, setSub] = useState("punkte"); // punkte | shop | ranking
+  return (
+    <div>
+      <SubTabRow current={sub} onChange={setSub} options={[
+        { id:"punkte",  label:"Punkte",  color:T.gold },
+        { id:"shop",    label:"Shop",    color:T.green },
+        { id:"ranking", label:"Ranking", color:T.rose },
+      ]}/>
+      {sub==="punkte"  && <PunkteScreen profile={profile}/>}
+      {sub==="shop"    && <ShopScreen profile={profile}/>}
+      {sub==="ranking" && <RankingScreen profile={profile}/>}
+    </div>
+  );
+}
+
+function PunkteScreen({ profile }) {
+  const [points, setPoints] = useState(loadPoints());
+  useEffect(() => {
+    function onChange() { setPoints(loadPoints()); }
+    window.addEventListener("eyla_points_changed", onChange);
+    return () => window.removeEventListener("eyla_points_changed", onChange);
+  }, []);
+  const lvl = getLevel(points.total);
+  const mult = getMultiplier(points);
+  const nextLvl = LEVELS.find(l => l.level === lvl.level + 1);
+  const inLevelMin = lvl.min;
+  const inLevelMax = nextLvl ? nextLvl.min : lvl.max;
+  const lvlProgress = nextLvl ? Math.min(100, Math.round(((points.total - inLevelMin) / (inLevelMax - inLevelMin)) * 100)) : 100;
+  const ptsToNext = nextLvl ? Math.max(0, nextLvl.min - points.total) : 0;
+  // Monats-Streak: Sessions im aktuellen Monat (aus history ems_training)
+  const thisMonth = new Date().getMonth();
+  const emsThisMonth = (points.history||[]).filter(h => h.action==="ems_training" && new Date(h.ts).getMonth()===thisMonth).length;
+  const streakGoal = 8;
+
+  return (
+    <div>
+      <div style={{ display:"flex", alignItems:"center", gap:18, marginBottom:24 }}>
+        <EylaOrb size={48}/>
+        <div style={{ flex:1, minWidth:0 }}>
+          <Lbl style={{ marginBottom:5 }}>PUNKTE</Lbl>
+          <h2 style={{ fontSize:22, fontWeight:300, color:T.text, margin:0 }}>{points.total.toLocaleString("de-DE")} <span style={{ fontSize:13, color:T.muted }}>Punkte</span></h2>
+        </div>
+      </div>
+
+      {/* LEVEL-Card */}
+      <Card style={{ marginBottom:12, background:`radial-gradient(110% 90% at 100% 0%, ${T.gold}14 0%, transparent 55%), ${T.card}`, border:`1px solid ${T.gold}33` }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:8 }}>
+          <div>
+            <Lbl color={T.gold} style={{ marginBottom:3 }}>LEVEL {lvl.level} · {lvl.name.toUpperCase()}</Lbl>
+            <div style={{ fontSize:17, fontWeight:700, color:T.text, fontFamily:T.mono }}>
+              {points.total.toLocaleString("de-DE")}{nextLvl ? ` / ${nextLvl.min.toLocaleString("de-DE")}` : ""} Pts
+            </div>
+          </div>
+          <div style={{ textAlign:"right" }}>
+            <div style={{ fontSize:22, fontWeight:900, color:T.gold, fontFamily:T.mono }}>×{mult}</div>
+            <div style={{ fontSize:9, color:T.muted }}>Multiplikator</div>
+          </div>
+        </div>
+        <div style={{ height:5, borderRadius:99, background:T.faint, overflow:"hidden" }}>
+          <div style={{ width:`${lvlProgress}%`, height:"100%", background:T.gold, boxShadow:`0 0 8px ${T.gold}66` }}/>
+        </div>
+        <div style={{ fontSize:9, color:T.muted, marginTop:5, fontFamily:T.serif }}>
+          {nextLvl ? `${ptsToNext.toLocaleString("de-DE")} Pts bis Level ${nextLvl.level} · ${nextLvl.name}` : "Höchstes Level erreicht 🏆"}
+          {(points.friends?.length>0) && ` · ${points.friends.length} Freund${points.friends.length>1?"e":""} (+${(Math.min(0.5,points.friends.length*0.1)).toFixed(1)}×)`}
+        </div>
+      </Card>
+
+      {/* VERDIENEN */}
+      <Card style={{ marginBottom:12 }}>
+        <Lbl style={{ marginBottom:10 }}>SO VERDIENST DU PUNKTE</Lbl>
+        {Object.entries(POINT_VALUES).map(([action, base]) => {
+          const todayDone = ONCE_PER_DAY.has(action) && (points.history||[]).some(h => h.action===action && new Date(h.ts).toDateString()===new Date().toDateString());
+          const icon = { ems_training:"⚡", punctual:"📅", offpeak:"🌙", friend:"👥", social_share:"📸", water_goal:"💧", meals_logged:"🥗", steps:"👟", perfect_day:"✨" }[action];
+          return (
+            <div key={action} style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderBottom:`1px solid ${T.border}`, opacity: todayDone ? 0.5 : 1 }}>
+              <span style={{ fontSize:15 }}>{icon}</span>
+              <span style={{ flex:1, fontSize:12, color:T.text, fontFamily:T.serif }}>{POINT_LABELS[action]}{todayDone ? " ✓" : ""}</span>
+              <span style={{ fontFamily:T.mono, fontSize:12, fontWeight:700, color:T.gold }}>+{base}</span>
+            </div>
+          );
+        })}
+        <p style={{ color:T.muted, fontSize:10, fontStyle:"italic", fontFamily:T.serif, margin:"10px 0 0", lineHeight:1.5 }}>
+          Punkte werden mit deinem Multiplikator (×{mult}) verrechnet. Training, Wasser & Mahlzeiten zählen automatisch.
+        </p>
+      </Card>
+
+      {/* MONATS-STREAK */}
+      <Card style={{ marginBottom:12 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+          <Lbl>MONATS-STREAK</Lbl>
+          <span style={{ fontFamily:T.mono, fontSize:11, color:T.muted }}>{Math.min(emsThisMonth, streakGoal)} / {streakGoal} 🔥</span>
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(8,1fr)", gap:4 }}>
+          {Array.from({length:streakGoal}).map((_, i) => (
+            <div key={i} style={{
+              aspectRatio:"1", borderRadius:6,
+              background: i < emsThisMonth ? `linear-gradient(${T.dim},${T.acc})` : T.faint,
+              display:"grid", placeItems:"center",
+              color: i < emsThisMonth ? T.gold : T.muted, fontSize:11,
+              boxShadow: i < emsThisMonth ? `0 3px 10px -3px ${T.acc}44` : "none"
+            }}>{i < emsThisMonth ? "⚡" : ""}</div>
+          ))}
+        </div>
+        <div style={{ fontSize:10, color:T.muted, marginTop:7, fontFamily:T.serif }}>
+          {emsThisMonth >= streakGoal ? "Monatsziel erreicht! 🏆" : `Noch ${streakGoal - emsThisMonth} Sessions bis zur Streak-Prämie`}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function ShopScreen({ profile }) {
+  const [points, setPoints] = useState(loadPoints());
+  const [filter, setFilter] = useState("alle");
+  useEffect(() => {
+    function onChange() { setPoints(loadPoints()); }
+    window.addEventListener("eyla_points_changed", onChange);
+    return () => window.removeEventListener("eyla_points_changed", onChange);
+  }, []);
+
+  function redeem(item) {
+    if (points.total < item.pts) { alert(`Dir fehlen ${(item.pts - points.total).toLocaleString("de-DE")} Punkte für ${item.name}.`); return; }
+    const extra = item.addEur ? `\n+ ${item.addEur} € Zuzahlung an der Theke.` : "";
+    if (!confirm(`${item.name} für ${item.pts.toLocaleString("de-DE")} Pts einlösen?${extra}\n\nZeig den Bestätigungs-Screen an der Theke.`)) return;
+    const p = loadPoints();
+    p.total -= item.pts;
+    p.redeemed = [{ item: item.name, points: item.pts, ts: Date.now() }, ...(p.redeemed || [])].slice(0, 50);
+    savePoints(p);
+    haptic(40);
+    alert(`✓ ${item.name} eingelöst! Zeig das dem Studio-Team.`);
+  }
+
+  const cats = ["A","B","C"];
+  const eurValue = (points.total / 100).toFixed(2);
+
+  return (
+    <div>
+      <div style={{ display:"flex", alignItems:"center", gap:18, marginBottom:20 }}>
+        <EylaOrb size={48}/>
+        <div style={{ flex:1, minWidth:0 }}>
+          <Lbl style={{ marginBottom:5 }}>SHOP</Lbl>
+          <h2 style={{ fontSize:22, fontWeight:300, color:T.text, margin:0 }}>Punkte einlösen</h2>
+        </div>
+      </div>
+
+      {/* Wallet */}
+      <Card style={{ marginBottom:12, background:`linear-gradient(90deg, ${T.green}22, ${T.green}06)`, border:`1px solid ${T.green}33`, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+        <div>
+          <Lbl style={{ marginBottom:3 }}>GUTHABEN</Lbl>
+          <div style={{ fontSize:24, fontWeight:800, color:T.green, fontFamily:T.mono }}>{points.total.toLocaleString("de-DE")} <span style={{ fontSize:12 }}>Pts</span></div>
+          <div style={{ fontSize:10, color:T.gold, fontFamily:T.mono }}>≈ {eurValue} €</div>
+        </div>
+        <div style={{ textAlign:"right", fontSize:10, color:T.muted, fontFamily:T.serif, fontStyle:"italic", maxWidth:120 }}>
+          1.000 Pts ≈ 10 €<br/>Punkte verfallen nach 12 Monaten
+        </div>
+      </Card>
+
+      {/* Filter */}
+      <div style={{ display:"flex", gap:6, marginBottom:12, overflowX:"auto" }}>
+        {["alle","A","B","C"].map(c => (
+          <button key={c} onClick={()=>setFilter(c)} style={{
+            padding:"5px 12px", borderRadius:99, whiteSpace:"nowrap",
+            background: filter===c ? T.acc+"22" : "transparent",
+            border:`1px solid ${filter===c ? T.acc : T.borderS}`,
+            color: filter===c ? T.text : T.muted, fontFamily:T.serif, fontSize:11, cursor:"pointer"
+          }}>{c==="alle" ? "Alle" : `${SHOP_CAT_LABELS[c]} (${c})`}</button>
+        ))}
+      </div>
+
+      {cats.filter(c => filter==="alle" || filter===c).map(cat => (
+        <div key={cat} style={{ marginBottom:8 }}>
+          <div style={{ fontFamily:T.mono, fontSize:9, letterSpacing:2, textTransform:"uppercase", color: cat==="A"?T.green:cat==="B"?T.gold:T.rose, margin:"8px 2px 6px" }}>
+            ● Kategorie {cat} — {SHOP_CAT_LABELS[cat]}
+          </div>
+          {SHOP_ITEMS.filter(i => i.cat===cat).map(item => {
+            const affordable = points.total >= item.pts;
+            return (
+              <button key={item.id} onClick={()=>redeem(item)} style={{
+                width:"100%", display:"flex", alignItems:"center", gap:12,
+                background: T.card, border:`1px solid ${affordable ? T.borderS : T.border}`,
+                borderRadius:14, padding:"11px 12px", marginBottom:7, cursor:"pointer",
+                opacity: affordable ? 1 : 0.55, textAlign:"left", transition:"all .15s"
+              }}>
+                <div style={{ width:38, height:38, borderRadius:10, background:T.bg2, display:"grid", placeItems:"center", fontSize:19, flexShrink:0 }}>{item.icon}</div>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:12, fontWeight:600, color:T.text }}>{item.name}</div>
+                  <div style={{ fontSize:9, color:T.muted, marginTop:1, fontFamily:T.serif }}>{item.sub}</div>
+                </div>
+                <div style={{ textAlign:"right", flexShrink:0 }}>
+                  <div style={{ fontFamily:T.mono, fontSize:13, fontWeight:800, color: cat==="A"?T.green:cat==="B"?T.gold:T.rose }}>{item.pts.toLocaleString("de-DE")}</div>
+                  <div style={{ fontSize:8, color:T.muted }}>{item.addEur ? `+${item.addEur} €` : item.eur ? `≈ ${item.eur},00 €` : "Pts"}</div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      ))}
+
+      {/* Eingelöst-History */}
+      {points.redeemed?.length > 0 && (
+        <Card style={{ marginTop:8 }}>
+          <Lbl style={{ marginBottom:8 }}>ZULETZT EINGELÖST</Lbl>
+          {points.redeemed.slice(0, 5).map((r, i) => (
+            <div key={i} style={{ display:"flex", justifyContent:"space-between", padding:"5px 0", borderBottom: i<Math.min(4,points.redeemed.length-1)?`1px solid ${T.border}`:"none", fontSize:11 }}>
+              <span style={{ color:T.text, fontFamily:T.serif }}>{r.item}</span>
+              <span style={{ color:T.muted, fontFamily:T.mono }}>−{r.points} · {new Date(r.ts).toLocaleDateString("de-DE",{day:"2-digit",month:"2-digit"})}</span>
+            </div>
+          ))}
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function RankingScreen({ profile }) {
+  const [points, setPoints] = useState(loadPoints());
+  const [scope, setScope] = useState("monat"); // monat | gesamt | freunde
+  useEffect(() => {
+    function onChange() { setPoints(loadPoints()); }
+    window.addEventListener("eyla_points_changed", onChange);
+    return () => window.removeEventListener("eyla_points_changed", onChange);
+  }, []);
+
+  // Demo-Mitglieder (lokal — echtes Ranking braucht Backend, kommt später)
+  const firstName = (profile?.name || "Du").split(" ")[0];
+  const demoMembers = [
+    { name:"Finn B.",  av:"😎", pts:1940, sub:"Champion · 12 Sessions" },
+    { name:"Lea K.",   av:"💪", pts:1510, sub:"Performer · 10 Sessions" },
+    { name:"Mia S.",   av:"🔥", pts:1330, sub:"Performer · 9 Sessions" },
+    { name:"Tom R.",   av:"⚡", pts:900,  sub:"Mover · 7 Sessions" },
+    { name:"Nora P.",  av:"🌟", pts:840,  sub:"Mover · 6 Sessions" },
+    { name:"Jan W.",   av:"🦾", pts:610,  sub:"Mover · 5 Sessions" },
+    { name:"Kim T.",   av:"✨", pts:420,  sub:"Starter · 4 Sessions" },
+  ];
+  const me = { name:`${firstName} (Du)`, av:firstName[0]?.toUpperCase()||"D", pts:points.total, sub:`${getLevel(points.total).name} · ×${getMultiplier(points)}`, isMe:true };
+  const ranked = [...demoMembers, me].sort((a,b) => b.pts - a.pts);
+  const myRank = ranked.findIndex(m => m.isMe) + 1;
+  const ahead = myRank > 1 ? ranked[myRank-2] : null;
+  const ptsToNext = ahead ? ahead.pts - points.total : 0;
+
+  function shareSession() {
+    const text = `Ich bin auf Platz ${myRank} im Studio-Ranking mit ${points.total} Punkten 💪 #suma`;
+    if (navigator.share) navigator.share({ title:"Mein Studio-Ranking", text }).catch(()=>{});
+    else { navigator.clipboard?.writeText(text); alert("Text kopiert — teil ihn in deiner Story!"); }
+    awardPoints("social_share");
+  }
+
+  return (
+    <div>
+      <div style={{ display:"flex", alignItems:"center", gap:18, marginBottom:20 }}>
+        <EylaOrb size={48}/>
+        <div style={{ flex:1, minWidth:0 }}>
+          <Lbl style={{ marginBottom:5 }}>RANKING</Lbl>
+          <h2 style={{ fontSize:22, fontWeight:300, color:T.text, margin:0 }}>Studio-Wettbewerb</h2>
+        </div>
+      </div>
+
+      <div style={{ display:"flex", gap:6, marginBottom:12 }}>
+        {[["monat","Dieser Monat"],["gesamt","Gesamt"],["freunde","Freunde"]].map(([id,lbl]) => (
+          <button key={id} onClick={()=>setScope(id)} style={{
+            padding:"5px 12px", borderRadius:99,
+            background: scope===id ? T.acc+"22" : "transparent",
+            border:`1px solid ${scope===id ? T.acc : T.borderS}`,
+            color: scope===id ? T.text : T.muted, fontFamily:T.serif, fontSize:11, cursor:"pointer"
+          }}>{lbl}</button>
+        ))}
+      </div>
+
+      {/* Meine Position */}
+      <Card style={{ marginBottom:12, background:`radial-gradient(110% 90% at 100% 0%, ${T.acc}14 0%, transparent 55%), ${T.card}`, border:`1px solid ${T.acc}33` }}>
+        <Lbl style={{ marginBottom:6 }}>DEINE POSITION</Lbl>
+        <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+          <div style={{ fontSize:30, fontWeight:900, color:T.acc, fontFamily:T.mono }}>#{myRank}</div>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:12, fontWeight:700, color:T.text }}>von {ranked.length} Mitgliedern</div>
+            <div style={{ fontSize:9, color:T.muted, marginTop:1, fontFamily:T.serif }}>
+              {ahead ? `${ptsToNext.toLocaleString("de-DE")} Pts bis Platz ${myRank-1} 🎯` : "Du führst! 🏆"}
+            </div>
+          </div>
+          <div style={{ textAlign:"right" }}>
+            <div style={{ fontSize:9, color:T.muted }}>Deine Pts</div>
+            <div style={{ fontSize:18, fontWeight:800, color:T.acc, fontFamily:T.mono }}>{points.total.toLocaleString("de-DE")}</div>
+          </div>
+        </div>
+      </Card>
+
+      {/* Liste */}
+      <Card style={{ marginBottom:12 }}>
+        {ranked.slice(0, 8).map((m, i) => {
+          const rank = i + 1;
+          const medal = rank===1?"🥇":rank===2?"🥈":rank===3?"🥉":String(rank);
+          return (
+            <div key={m.name} style={{
+              display:"flex", alignItems:"center", gap:10, padding:"8px 0",
+              borderBottom: i < Math.min(7, ranked.length-1) ? `1px solid ${T.border}` : "none",
+              ...(m.isMe ? { background:`linear-gradient(90deg, ${T.acc}12, transparent)`, borderRadius:10, margin:"0 -7px", padding:"8px 7px" } : {})
+            }}>
+              <div style={{ width:20, textAlign:"center", fontSize: rank<=3?14:11, fontWeight:800, color: rank<=3?T.gold:T.muted, flexShrink:0 }}>{medal}</div>
+              <div style={{ width:26, height:26, borderRadius:"50%", background: m.isMe?T.dim:T.bg2, display:"grid", placeItems:"center", fontSize:13, color:T.text, flexShrink:0 }}>{m.av}</div>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:11, fontWeight:600, color: m.isMe?T.acc:T.text }}>{m.name}{m.isMe?" 🌟":""}</div>
+                <div style={{ fontSize:9, color:T.muted, fontFamily:T.serif }}>{m.sub}</div>
+              </div>
+              <div style={{ fontFamily:T.mono, fontSize:12, fontWeight:800, color: m.isMe?T.acc:T.mid }}>{m.pts.toLocaleString("de-DE")}</div>
+            </div>
+          );
+        })}
+        <p style={{ color:T.muted, fontSize:9, fontStyle:"italic", fontFamily:T.serif, margin:"10px 0 0", lineHeight:1.5 }}>
+          Demo-Mitglieder. Echtes Studio-Ranking über alle Mitglieder kommt mit dem Backend.
+        </p>
+      </Card>
+
+      {/* Share */}
+      <Card>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+          <Lbl>SESSION TEILEN</Lbl>
+          <span style={{ background:T.gold+"18", border:`1px solid ${T.gold}33`, borderRadius:99, padding:"2px 8px", fontSize:9, color:T.gold, fontFamily:T.mono }}>+{POINT_VALUES.social_share} Pts</span>
+        </div>
+        <button onClick={shareSession} style={{
+          width:"100%", padding:"10px", background:`linear-gradient(135deg,${T.dim},${T.acc})`,
+          border:"none", borderRadius:11, color:T.bg, fontFamily:T.serif, fontSize:13, fontWeight:700, cursor:"pointer"
+        }}>📲 Mein Ranking teilen</button>
+      </Card>
+    </div>
+  );
+}
+
 function PlanWizard({ profile, onSave, onCancel }) {
   const existing = profile?.planPreferences || {};
   const [step, setStep] = useState(0);
@@ -9741,6 +10167,43 @@ function FloCard({ profile }) {
   );
 }
 
+// ─── PUNKTE-AWARD-TOAST (Studio-Feedback) ───────────────────────────────────
+function PointsAwardToast() {
+  const [toast, setToast] = useState(null);
+  useEffect(() => {
+    function onAward(e) {
+      setToast({ ...e.detail, id: Date.now() });
+    }
+    window.addEventListener("eyla_points_awarded", onAward);
+    return () => window.removeEventListener("eyla_points_awarded", onAward);
+  }, []);
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 2600);
+    return () => clearTimeout(t);
+  }, [toast]);
+  if (!toast) return null;
+  return (
+    <div style={{
+      position:"fixed", left:0, right:0,
+      top:"calc(env(safe-area-inset-top, 0px) + 70px)",
+      zIndex:300, display:"flex", justifyContent:"center", padding:"0 14px",
+      pointerEvents:"none", animation:"fadeUp .3s ease both"
+    }}>
+      <div style={{
+        background:`linear-gradient(135deg, ${T.gold}, ${T.goldL})`,
+        color:"#1a1200", borderRadius:99, padding:"8px 16px",
+        fontFamily:T.serif, fontSize:13, fontWeight:700,
+        display:"flex", alignItems:"center", gap:8,
+        boxShadow:`0 8px 28px ${T.gold}66`
+      }}>
+        <span style={{ fontSize:16 }}>⭐</span>
+        +{toast.points} Punkte · {toast.label}
+      </div>
+    </div>
+  );
+}
+
 // ─── GLOBAL SPEECH STOP-PILL ──────────────────────────────────────────────────
 function GlobalSpeechStopPill() {
   const [active, setActive] = useState(false);
@@ -10768,8 +11231,8 @@ function AppContent() {
 
   const nav = [
     {id:"tag",    icon:"◎", label:"Tag"},
-    {id:"woche",  icon:"≡", label:"Woche"},
     {id:"chat",   icon:"✦", label:"EYLA"},
+    {id:"studio", icon:"★", label:"Studio"},
     {id:"essen",  icon:"◈", label:"Essen"},
     {id:"profil", icon:"◉", label:"Profil"},
   ];
@@ -10778,6 +11241,7 @@ function AppContent() {
     screen==="tag" ? (tagSub==="kalender" ? T.gold : T.acc) :
     screen==="woche" ? T.acc :
     screen==="chat" ? T.acc :
+    screen==="studio" ? T.gold :
     screen==="essen" ? (essenSub==="liste" ? T.green : T.gold) :
     T.muted;
 
@@ -10802,6 +11266,9 @@ function AppContent() {
 
       {/* Globale Stop-Pill für EYLA-Stimme — egal auf welchem Screen */}
       <GlobalSpeechStopPill/>
+
+      {/* Studio-Punkte-Award-Toast */}
+      <PointsAwardToast/>
 
       {/* Jarvis Whisper-Mode — überall sprechen, EYLA klassifiziert + handelt */}
       <WhisperModePill/>
@@ -10872,19 +11339,17 @@ function AppContent() {
           <>
             <SubTabRow current={tagSub} onChange={setTagSub} options={[
               {id:"heute",    label:"Heute",    color:T.acc},
+              {id:"woche",    label:"Woche",    color:T.acc},
               {id:"kalender", label:"Kalender", color:T.gold},
               {id:"todo",     label:"To-do",    color:T.rose},
             ]}/>
             {tagSub==="heute"    && <TodayScreen profile={profile} setLog={setLog} logsByDate={logsByDate} events={events} initialDate={heuteDate}/>}
+            {tagSub==="woche"    && <WeekScreen logsByDate={logsByDate} profile={profile} onJumpToDay={(d) => { setHeuteDate(d); setTagSub("heute"); }}/>}
             {tagSub==="kalender" && <KalenderScreen events={events} eventsLoading={eventsLoading} onRefresh={loadCalendar} profile={profile} log={log}/>}
             {tagSub==="todo"     && <TodoScreen profile={profile}/>}
           </>
         )}
-        {screen==="woche" && <WeekScreen logsByDate={logsByDate} profile={profile} onJumpToDay={(d) => {
-          setHeuteDate(d);
-          setTagSub("heute");
-          setScreen("tag");
-        }}/>}
+        {screen==="studio" && <StudioScreen profile={profile}/>}
         {screen==="chat"  && <ChatScreen profile={profile} log={log} events={events} logsByDate={logsByDate} setLog={setLog}/>}
         {screen==="essen" && (
           <>
