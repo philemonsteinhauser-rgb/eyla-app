@@ -2049,7 +2049,7 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [], init
         />
       )}
       {/* Schöpfungs-Andacht morgens (wenn aktiviert, vor 12 Uhr) */}
-      {isToday && profile?.showAndacht && new Date().getHours() < 12 && <AndachtCard/>}
+      {/* Andacht deaktiviert für Studio-App (Code bleibt in AndachtCard) */}
 
       {/* FLO – Zyklus-Status + Phase-Tipps (wenn aktiviert) */}
       {isToday && profile?.trackCycle && <FloCard profile={profile}/>}
@@ -8923,28 +8923,6 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
             style={{...inputStyle, resize:"vertical", minHeight:80, fontFamily:T.serif, fontStyle:"italic", lineHeight:1.5}}/>
         </Card>
 
-        {/* SCHÖPFUNGS-ANDACHT */}
-        <Card style={{ marginBottom:12 }}>
-          <Lbl style={{ marginBottom:10 }}>✦ ANDACHT MORGENS</Lbl>
-          <p style={{ color:T.muted, fontSize:11, fontStyle:"italic", fontFamily:T.serif, margin:"0 0 12px", lineHeight:1.5 }}>
-            Kurzer Bibelvers + Reflexion auf Heute vor 12 Uhr. Wechselt täglich. Sehr unaufdringlich.
-          </p>
-          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"4px 0" }}>
-            <span style={{ fontFamily:T.serif, fontSize:13, color:T.text }}>Andacht anzeigen</span>
-            <button onClick={()=>set("showAndacht", !draft.showAndacht)} style={{
-              width:42, height:24, borderRadius:14,
-              background: draft.showAndacht ? T.gold : T.border,
-              border:"none", cursor:"pointer", position:"relative", transition:"background .2s"
-            }}>
-              <span style={{
-                position:"absolute", top:2, left: draft.showAndacht ? 20 : 2,
-                width:20, height:20, borderRadius:"50%", background:T.bg,
-                transition:"left .2s"
-              }}/>
-            </button>
-          </div>
-        </Card>
-
         {/* FLO – Zyklus-Tracking */}
         <Card style={{ marginBottom:12 }}>
           <Lbl style={{ marginBottom:10 }}>🌸 FLO – ZYKLUS-TRACKING</Lbl>
@@ -11347,12 +11325,10 @@ function AppContent() {
               {id:"heute",    label:"Heute",    color:T.acc},
               {id:"woche",    label:"Woche",    color:T.acc},
               {id:"kalender", label:"Kalender", color:T.gold},
-              {id:"todo",     label:"To-do",    color:T.rose},
             ]}/>
             {tagSub==="heute"    && <TodayScreen profile={profile} setLog={setLog} logsByDate={logsByDate} events={events} initialDate={heuteDate}/>}
             {tagSub==="woche"    && <WeekScreen logsByDate={logsByDate} profile={profile} onJumpToDay={(d) => { setHeuteDate(d); setTagSub("heute"); }}/>}
             {tagSub==="kalender" && <KalenderScreen events={events} eventsLoading={eventsLoading} onRefresh={loadCalendar} profile={profile} log={log}/>}
-            {tagSub==="todo"     && <TodoScreen profile={profile}/>}
           </>
         )}
         {screen==="studio" && <StudioScreen profile={profile}/>}
