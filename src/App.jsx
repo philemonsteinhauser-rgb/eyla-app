@@ -32,6 +32,11 @@ const SYNC_KEYS = [
   "eyla_plan_v1",
   "eyla_chat_v1",
   "eyla_chat_voice_v1",
+  "eyla_todos_v1",
+  "eyla_points_v1",     // Studio-Punkte
+  "eyla_cycle_v1",      // FLO
+  "eyla_reflections_v1",// Wochen-Reflexionen
+  "eyla_favorites_v1",  // Mahlzeit-Favoriten
 ];
 const SYNC_STATE = { status: "idle", lastSyncedAt: null }; // status: idle|syncing|ok|error|off
 const syncListeners = new Set();
@@ -238,6 +243,7 @@ function loadPoints() {
 function savePoints(p) {
   try { localStorage.setItem("eyla_points_v1", JSON.stringify(p)); } catch {}
   window.dispatchEvent(new Event("eyla_points_changed"));
+  try { scheduleSyncUp(); } catch {}
 }
 function getLevel(total) {
   return LEVELS.find(l => total >= l.min && total <= l.max) || LEVELS[0];
