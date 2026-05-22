@@ -1373,25 +1373,35 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [], init
   useEffect(() => {
     const wTarget = waterTargetUnits(profile);
     const cur = log.water || 0;
-    if (prevWaterRef.current !== null && prevWaterRef.current < wTarget && cur >= wTarget) {
+    // Nur heute feiern; vergangene Tage nur Ref setzen
+    if (!isToday) { prevWaterRef.current = cur; return; }
+    // Pro Tag nur EINMAL feiern – verhindert Spam beim Daten-Nachladen (Hydration)
+    const markerKey = `eyla_cele_water_${tagKey}`;
+    let already = false; try { already = !!localStorage.getItem(markerKey); } catch {}
+    if (prevWaterRef.current !== null && prevWaterRef.current < wTarget && cur >= wTarget && !already) {
+      try { localStorage.setItem(markerKey, "1"); } catch {}
       setKonfettiMode("normal");
       setKonfetti(true);
       haptic(60);
-      if (isToday) awardPoints("water_goal"); // Studio-Punkte
+      awardPoints("water_goal"); // Studio-Punkte
     }
     prevWaterRef.current = cur;
-  }, [log.water, profile, isToday]);
+  }, [log.water, profile, isToday, tagKey]);
   useEffect(() => {
     const totalKcal = (log.meals||[]).reduce((s,m)=>s+(m.calories||0),0);
     const target = calorieTarget(profile).target;
     const reached = totalKcal >= target;
-    if (prevKcalReachedRef.current !== null && !prevKcalReachedRef.current && reached) {
+    if (!isToday) { prevKcalReachedRef.current = reached; return; }
+    const markerKey = `eyla_cele_kcal_${tagKey}`;
+    let already = false; try { already = !!localStorage.getItem(markerKey); } catch {}
+    if (prevKcalReachedRef.current !== null && !prevKcalReachedRef.current && reached && !already) {
+      try { localStorage.setItem(markerKey, "1"); } catch {}
       setKonfettiMode("normal");
       setKonfetti(true);
       haptic(60);
     }
     prevKcalReachedRef.current = reached;
-  }, [log.meals, profile]);
+  }, [log.meals, profile, isToday, tagKey]);
 
 // Konfetti wenn der letzte Heute-Todo abgehakt wird (cleaner Subtrigger)
   useEffect(() => {
@@ -1404,13 +1414,16 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [], init
       prevTodoAllDoneRef.current = allDone;
       return;
     }
-    if (allDone && !prevTodoAllDoneRef.current) {
+    const markerKey = `eyla_cele_todos_${tagKey}`;
+    let already = false; try { already = !!localStorage.getItem(markerKey); } catch {}
+    if (allDone && !prevTodoAllDoneRef.current && !already) {
+      try { localStorage.setItem(markerKey, "1"); } catch {}
       setKonfettiMode("normal");
       setKonfetti(true);
       haptic(40);
     }
     prevTodoAllDoneRef.current = allDone;
-  }, [todos, isToday]);
+  }, [todos, isToday, tagKey]);
 
   // ── PERFECT-DAY-Trigger: ALLE Tagesziele erreicht ──────────────────────────
   // Bedingungen: Wasser ≥ Ziel, Schlaf ≥ Ziel, Kcal ≥ 90% Ziel, mind. 1 Workout
