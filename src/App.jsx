@@ -2524,29 +2524,6 @@ function minToHHMM(min) {
   return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
 }
 
-// Generiert einen kurzen Jarvis-Briefing-Text für einen Tag
-function generateBriefing(events, dayKey, isToday) {
-  if (!isToday) return null;
-  const slots = findFreeSlots(events, dayKey, 7*60, 22*60, 60);
-  const topSlot = [...slots].sort((a,b)=>b.duration-a.duration)[0];
-  const evCount = events.filter(e=>e.date===dayKey).length;
-  const nowMin = new Date().getHours()*60 + new Date().getMinutes();
-  if (evCount === 0) {
-    return topSlot ? `Tag offen — größte Lücke ${minToHHMM(topSlot.start)}–${minToHHMM(topSlot.end)}.` : `Tag komplett offen.`;
-  }
-  const next = events
-    .filter(e => e.date===dayKey && e.time)
-    .map(e => { const [h,m] = e.time.split(":").map(n=>parseInt(n)||0); return {ev:e, mins:h*60+m}; })
-    .sort((a,b)=>a.mins-b.mins)
-    .find(e => e.mins >= nowMin);
-  if (next) {
-    const dt = next.mins - nowMin;
-    const inStr = dt <= 0 ? "jetzt" : dt < 60 ? `in ${dt}min` : `in ${Math.floor(dt/60)}h${dt%60?` ${dt%60}m`:""}`;
-    return `Nächstes: ${next.ev.title} um ${next.ev.time} (${inStr})${topSlot ? ` · Frei ${minToHHMM(topSlot.start)}–${minToHHMM(topSlot.end)}` : ""}.`;
-  }
-  return `${evCount} Termin${evCount>1?"e":""} heute alle durch.${topSlot ? ` Lücke noch ${minToHHMM(topSlot.start)}–${minToHHMM(topSlot.end)}.` : ""}`;
-}
-
 // Day-Timeline – visuelle vertikale Zeitleiste eines Tages
 // Stunden 6-22 default. Termine als positionierte Blöcke. Jetzt-Linie wenn heute.
 function DayTimeline({ events, dayKey, isToday, onSlotClick, onEventClick, freeSlots = [], conflictsById = {} }) {
@@ -2784,65 +2761,6 @@ function WeekTimeline({ events, weekStart, isTodayKey, onDayClick, onEventClick 
   );
 }
 
-// Routine-Erkennung: scannt lokale Events, gruppiert nach (Titel + Wochentag + Stunden-Bucket)
-// 3+ Vorkommen in den letzten 8 Wochen → Routine. Returns Array von Routine-Vorschlägen.
-function detectRoutines(allEvents) {
-  const now = Date.now();
-  const eightWeeksAgo = now - 8 * 7 * 86400000;
-  const items = (allEvents||[])
-    .filter(e => e.date && e.time && !e.recurrence) // nur einmalige
-    .filter(e => {
-      const t = new Date(e.date).getTime();
-      return t >= eightWeeksAgo && t <= now;
-    });
-  // Gruppieren nach lowercased-titel + wochentag + stunden-bucket (2h-Granularität)
-  const groups = new Map();
-  for (const ev of items) {
-    const d = new Date(ev.date);
-    const dow = d.getDay();
-    const [h, m] = (ev.time||"").split(":").map(n=>parseInt(n)||0);
-    const hourBucket = Math.floor(h / 2) * 2;
-    const titleKey = String(ev.title||"").trim().toLowerCase();
-    if (!titleKey) continue;
-    const key = `${titleKey}|${dow}|${hourBucket}`;
-    if (!groups.has(key)) groups.set(key, { title: ev.title, dow, hourBucket, items: [] });
-    groups.get(key).items.push(ev);
-  }
-  // Nur Groups mit ≥3 Vorkommen
-  const routines = [];
-  for (const g of groups.values()) {
-    if (g.items.length < 3) continue;
-    // Durchschnittliche Uhrzeit + Dauer
-    const avgMin = Math.round(g.items.reduce((s,e) => {
-      const [h, m] = (e.time||"").split(":").map(n=>parseInt(n)||0);
-      return s + h*60 + m;
-    }, 0) / g.items.length);
-    const avgDur = Math.round(g.items.reduce((s,e) => s + parseDurationFlexible(e.duration), 0) / g.items.length);
-    routines.push({
-      title: g.title,
-      dow: g.dow,
-      dowLabel: ["So","Mo","Di","Mi","Do","Fr","Sa"][g.dow],
-      time: `${String(Math.floor(avgMin/60)).padStart(2,"0")}:${String(avgMin%60).padStart(2,"0")}`,
-      duration: avgDur,
-      count: g.items.length,
-      lastDate: g.items.map(e=>e.date).sort().reverse()[0],
-    });
-  }
-  // Sort: häufigste zuerst
-  routines.sort((a,b)=>b.count-a.count);
-  return routines;
-}
-
-// Termin-Templates für One-Tap-Add
-const EVENT_TEMPLATES = [
-  { id:"workout",  label:"Workout",  icon:"🏋", duration:60, defaultTime:"18:00" },
-  { id:"call",     label:"Call",     icon:"📞", duration:30, defaultTime:"" },
-  { id:"deep",     label:"Deep Work",icon:"🧠", duration:90, defaultTime:"09:00" },
-  { id:"lunch",    label:"Lunch",    icon:"🍽", duration:60, defaultTime:"12:30" },
-  { id:"yoga",     label:"Yoga",     icon:"🧘", duration:60, defaultTime:"" },
-  { id:"friseur",  label:"Friseur",  icon:"✂",  duration:45, defaultTime:"" },
-];
-
 // ─── KALENDER SCREEN ──────────────────────────────────────────────────────────
 // ISO Date Key "YYYY-MM-DD" für Kalender-Speicherung
 function isoDateKey(d) {
@@ -2880,7 +2798,6 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
   const [newDur, setNewDur] = useState("");
   const [newRec, setNewRec] = useState("");  // ""|"daily"|"weekly"
   const [newTravel, setNewTravel] = useState(0); // Vorbereitungszeit in Minuten
-  const [smartSchedule, setSmartSchedule] = useState(null); // {template, start} oder null
   const [showLegacyList, setShowLegacyList] = useState(false); // alte Stunden-Liste collapsed
   const [calView, setCalView] = useState("day"); // "day" | "week"
   const [localEvents, setLocalEvents] = useState([]);
@@ -3255,50 +3172,6 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
         </Card>
       )}
 
-      {/* JARVIS-BRIEFING – nur wenn heute ausgewählt + was zu sagen */}
-      {isToday && (() => {
-        const slots = findFreeSlots(eventsForSelected, selectedKey, 7*60, 22*60, 60);
-        const topSlot = [...slots].sort((a,b)=>b.duration-a.duration)[0];
-        const evCount = eventsForSelected.length;
-        const hours = new Date().getHours();
-        const greetIcon = hours < 12 ? "☀" : hours < 18 ? "✦" : "🌙";
-        const greet = hours < 11 ? "Morgen" : hours < 14 ? "Mittag" : hours < 18 ? "Nachmittag" : "Abend";
-        // Kompaktes Briefing
-        let line;
-        if (evCount === 0) {
-          line = topSlot ? `Tag offen — größte Lücke ${minToHHMM(topSlot.start)}–${minToHHMM(topSlot.end)}.` : `Tag komplett offen.`;
-        } else {
-          const next = eventsForSelected
-            .filter(e => e.time)
-            .map(e => { const [h,m] = e.time.split(":").map(n=>parseInt(n)||0); return {ev:e, mins:h*60+m}; })
-            .find(e => e.mins >= (new Date().getHours()*60 + new Date().getMinutes()));
-          if (next) {
-            const dt = next.mins - (new Date().getHours()*60 + new Date().getMinutes());
-            const inStr = dt <= 0 ? "jetzt" : dt < 60 ? `in ${dt}min` : `in ${Math.floor(dt/60)}h${dt%60?` ${dt%60}m`:""}`;
-            line = `Nächstes: ${next.ev.title} um ${next.ev.time} (${inStr})${topSlot ? ` · größter freier Slot ${minToHHMM(topSlot.start)}–${minToHHMM(topSlot.end)}` : ""}.`;
-          } else {
-            line = `${evCount} Termin${evCount>1?"e":""} heute alle durch.${topSlot ? ` Lücke noch ${minToHHMM(topSlot.start)}–${minToHHMM(topSlot.end)}.` : ""}`;
-          }
-        }
-        return (
-          <div style={{
-            padding:"10px 14px", marginBottom:12,
-            background:T.bg2, border:`1px solid ${T.acc}33`, borderRadius:10,
-            display:"flex", alignItems:"flex-start", gap:10
-          }}>
-            <span style={{ fontSize:14, color:T.acc }}>{greetIcon}</span>
-            <div style={{ flex:1, minWidth:0 }}>
-              <div style={{ fontFamily:T.mono, fontSize:9, color:T.acc, letterSpacing:1.5, marginBottom:3 }}>
-                BRIEFING · {greet.toUpperCase()}
-              </div>
-              <div style={{ color:T.text, fontSize:12, fontFamily:T.serif, fontStyle:"italic", lineHeight:1.5 }}>
-                {line}
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-
       {/* SMART DAY-TIMELINE – visuelle Übersicht für den ausgewählten Tag */}
       {(() => {
         // Konflikte berechnen
@@ -3382,168 +3255,6 @@ function KalenderScreen({ events, eventsLoading, onRefresh, profile, log }) {
                 onEventClick={(ev) => { if (ev.local) startEdit(ev); }}
               />
             )}
-          </Card>
-        );
-      })()}
-
-      {/* Quick-Templates mit SMART-SCHEDULE: Tap → bester Slot wird gefunden + Vorschlag */}
-      <Card style={{ marginBottom:12 }}>
-        <Lbl style={{ marginBottom:8 }}>QUICK-ADD · TAP FÜR SMART-SLOT</Lbl>
-        <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
-          {EVENT_TEMPLATES.map(tpl => (
-            <button key={tpl.id} onClick={()=>{
-              // Smart-Schedule: finde besten Slot für tpl.duration im selectedKey
-              const slots = findFreeSlots(eventsForSelected, selectedKey, 7*60, 22*60, tpl.duration);
-              // Preferenz: defaultTime wenn da und passt, sonst nächster großer Slot
-              let chosenStart = null;
-              if (tpl.defaultTime) {
-                const [h, m] = tpl.defaultTime.split(":").map(n=>parseInt(n)||0);
-                const target = h*60 + m;
-                const fits = slots.find(s => s.start <= target && s.end >= target + tpl.duration);
-                if (fits) chosenStart = target;
-              }
-              if (chosenStart === null) {
-                // Nächster Slot ab jetzt (wenn heute) sonst frühster
-                const nowMin = isToday ? (new Date().getHours()*60 + new Date().getMinutes()) : 0;
-                const futureSlot = slots.find(s => s.end >= nowMin + tpl.duration);
-                if (futureSlot) chosenStart = Math.max(futureSlot.start, nowMin);
-              }
-              if (chosenStart === null) {
-                alert(`Keine ${tpl.duration}min-Lücke an diesem Tag.`);
-                return;
-              }
-              setSmartSchedule({ template: tpl, start: chosenStart });
-            }} style={{
-              background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:18,
-              padding:"5px 12px", color:T.mid, fontFamily:T.serif, fontSize:12,
-              cursor:"pointer", display:"flex", alignItems:"center", gap:5,
-              fontStyle:"italic"
-            }}>
-              <span>{tpl.icon}</span>{tpl.label}
-              <span style={{ color:T.acc, fontSize:9, fontFamily:T.mono, marginLeft:2 }}>{tpl.duration}m</span>
-            </button>
-          ))}
-        </div>
-      </Card>
-
-      {/* SMART-SCHEDULE VORSCHLAG-MODAL */}
-      {smartSchedule && (() => {
-        const tpl = smartSchedule.template;
-        const start = smartSchedule.start;
-        const end = start + tpl.duration;
-        const alternateSlots = findFreeSlots(eventsForSelected, selectedKey, 7*60, 22*60, tpl.duration)
-          .filter(s => s.start !== start)
-          .slice(0, 3);
-        return (
-          <div onClick={()=>setSmartSchedule(null)} style={{
-            position:"fixed", inset:0, zIndex:200, background:"rgba(0,0,0,0.7)",
-            backdropFilter:"blur(6px)", display:"flex", alignItems:"center",
-            justifyContent:"center", padding:20
-          }}>
-            <div onClick={e=>e.stopPropagation()} style={{
-              background:T.bg2, border:`1px solid ${T.acc}55`, borderRadius:14,
-              padding:20, maxWidth:380, width:"100%",
-              boxShadow:`0 10px 60px ${T.acc}33`
-            }}>
-              <div style={{ fontSize:32, textAlign:"center", marginBottom:6 }}>{tpl.icon}</div>
-              <div style={{ fontFamily:T.mono, fontSize:9, color:T.acc, letterSpacing:2, textAlign:"center", marginBottom:6 }}>SMART-SLOT</div>
-              <h3 style={{ fontSize:18, fontWeight:300, color:T.text, margin:"0 0 4px", textAlign:"center", fontFamily:T.serif }}>
-                {tpl.label} um {minToHHMM(start)}
-              </h3>
-              <p style={{ color:T.mid, fontSize:12, fontStyle:"italic", fontFamily:T.serif, margin:"0 0 16px", textAlign:"center" }}>
-                {minToHHMM(start)}–{minToHHMM(end)} · {tpl.duration}min ohne Kollision.
-              </p>
-              <div style={{ display:"flex", gap:8, marginBottom:10 }}>
-                <button onClick={()=>{
-                  // Direkt anlegen
-                  saveLocal([...localEvents, {
-                    id:Date.now(), title:tpl.label, time:minToHHMM(start),
-                    duration:String(tpl.duration), date:selectedKey, local:true,
-                    recurrence:null, travelTime:0
-                  }]);
-                  window.dispatchEvent(new Event("eyla_events_changed"));
-                  haptic(30);
-                  setSmartSchedule(null);
-                }} style={{
-                  flex:1, background:`linear-gradient(135deg,${T.dim},${T.acc})`,
-                  border:"none", borderRadius:10, padding:"11px 18px",
-                  color:T.bg, fontFamily:T.serif, fontSize:14, fontWeight:700, cursor:"pointer"
-                }}>✓ Anlegen</button>
-                <button onClick={()=>setSmartSchedule(null)} style={{
-                  background:"transparent", border:`1px solid ${T.borderS}`, borderRadius:10,
-                  padding:"11px 18px", color:T.muted, fontFamily:T.serif, fontSize:14,
-                  cursor:"pointer", fontStyle:"italic"
-                }}>Abbrechen</button>
-              </div>
-              {alternateSlots.length > 0 && (
-                <div>
-                  <div style={{ fontFamily:T.mono, fontSize:9, color:T.muted, letterSpacing:1.5, marginBottom:6, marginTop:4 }}>
-                    ODER ANDERE ZEIT
-                  </div>
-                  <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
-                    {alternateSlots.map((s, i) => (
-                      <button key={i} onClick={()=>setSmartSchedule({...smartSchedule, start:s.start})} style={{
-                        background:T.bg, border:`1px solid ${T.borderS}`, borderRadius:8,
-                        padding:"4px 10px", color:T.mid, fontFamily:T.mono, fontSize:11,
-                        cursor:"pointer"
-                      }}>{minToHHMM(s.start)}</button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* ROUTINEN-VORSCHLAG – erkannte Patterns aus History */}
-      {(() => {
-        const routines = detectRoutines(localEvents).slice(0, 3);
-        if (routines.length === 0) return null;
-        return (
-          <Card style={{ marginBottom:12, background:T.gold+"08", border:`1px solid ${T.gold}33` }}>
-            <Lbl color={T.gold} style={{ marginBottom:10 }}>✦ ERKANNTE ROUTINEN</Lbl>
-            <p style={{ color:T.muted, fontSize:11, fontStyle:"italic", fontFamily:T.serif, margin:"0 0 12px", lineHeight:1.5 }}>
-              Du machst diese Sachen regelmäßig — als wöchentliche Routine fixieren?
-            </p>
-            {routines.map((r, i) => (
-              <div key={i} style={{
-                display:"flex", alignItems:"center", gap:10, padding:"8px 0",
-                borderTop: i > 0 ? `1px solid ${T.border}` : "none"
-              }}>
-                <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ color:T.text, fontSize:13, fontFamily:T.serif }}>
-                    {r.title}
-                  </div>
-                  <div style={{ color:T.muted, fontSize:11, fontFamily:T.mono, marginTop:2 }}>
-                    {r.dowLabel} · {r.time} · {r.duration}min · {r.count}× in 8 Wochen
-                  </div>
-                </div>
-                <button onClick={()=>{
-                  // Als wöchentlichen Termin am nächsten passenden DOW anlegen
-                  const today = new Date();
-                  const daysUntil = (r.dow - today.getDay() + 7) % 7 || 7;
-                  const startDate = new Date(today);
-                  startDate.setDate(today.getDate() + daysUntil);
-                  saveLocal([...localEvents, {
-                    id: Date.now(),
-                    title: r.title,
-                    time: r.time,
-                    duration: String(r.duration),
-                    date: isoDateKey(startDate),
-                    local: true,
-                    recurrence: "weekly",
-                    travelTime: 0,
-                  }]);
-                  window.dispatchEvent(new Event("eyla_events_changed"));
-                  haptic(20);
-                }} style={{
-                  background:T.gold+"22", border:`1px solid ${T.gold}55`, borderRadius:8,
-                  padding:"5px 12px", color:T.gold, fontFamily:T.mono, fontSize:10,
-                  letterSpacing:1, cursor:"pointer"
-                }}>✓ FIXIEREN</button>
-              </div>
-            ))}
           </Card>
         );
       })()}
