@@ -7145,7 +7145,75 @@ TIPP: [Konkreter Hinweis für diesen Tag – Timing, Zubereitung, Variation. Nic
         ? `\nPLAN-PRÄFERENZEN (HARTE Vorgaben, kein Abweichen):\n${prefStrings.map(s => "- " + s).join("\n")}\n`
         : "";
 
-      const userPrompt = `Profil: ${profile.name||"Phil"}, ${sexLabel}, ${profile.age||35}J, ${profile.weight||79}kg, ${profile.height||183}cm. Aktivität: ${profile.activity||"5x Woche Beweglichkeit"}. Vorlieben: ${profile.preferences?.join(", ")||"wenig Fleisch, proteinreich, mediterran"}. ${intolSatz} ${zielKontext} ${personsSatz}${planPrefsBlock}\nErstelle den 7-Tage-Plan.`;
+      // ── ERWEITERTER KONTEXT: alle Profildaten + Zyklus + Training + Saison ──
+      const ctxLines = [];
+      // Tagesrhythmus → Essfenster
+      if (profile.wakeTime || profile.sleepTime || profile.mealPattern) {
+        const mp = profile.mealPattern==="5small" ? "5 kleine Mahlzeiten" : profile.mealPattern==="if168" ? "Intermittent Fasting 16:8 (Essfenster ~8h)" : profile.mealPattern==="ifother" ? "Intermittent Fasting (eigener Rhythmus)" : "3 Hauptmahlzeiten";
+        ctxLines.push(`Tagesrhythmus: ${profile.wakeTime?`auf ${profile.wakeTime}`:""}${profile.sleepTime?`, Bett ${profile.sleepTime}`:""} · ${mp}. Timing der Mahlzeiten daran anpassen.`);
+      }
+      // Beruf → Aktivitätslevel
+      if (profile.occupation || profile.jobActivity) {
+        const ja = profile.jobActivity==="sitzend" ? "überwiegend sitzend (geringer NEAT)" : profile.jobActivity==="aktiv" ? "körperlich aktiv (höherer Bedarf)" : "gemischt aktiv";
+        ctxLines.push(`Beruf: ${profile.occupation||"k.A."}${profile.jobActivity?` – ${ja}`:""}.`);
+      }
+      // Allergien STRIKT
+      if (profile.allergies?.length > 0) {
+        ctxLines.push(`⚠ ALLERGIEN (LEBENSWICHTIG – absolut NIE verwenden, auch nicht in Spuren): ${profile.allergies.join(", ")}.`);
+      }
+      // Gesundheits-Notizen
+      if (profile.healthNotes) {
+        ctxLines.push(`Gesundheit/Beschwerden berücksichtigen: ${profile.healthNotes}.`);
+      }
+      // Kochzeit + Equipment → Rezept-Komplexität
+      if (profile.cookTime) {
+        const ck = profile.cookTime==="quick" ? "max 15 Min Zubereitung – einfache, schnelle Rezepte" : profile.cookTime==="long" ? "bis 30+ Min ok – auch aufwändigere Gerichte" : "15-30 Min Zubereitung";
+        ctxLines.push(`Kochzeit: ${ck}.`);
+      }
+      if (profile.kitchenEquipment?.length > 0) {
+        ctxLines.push(`Verfügbare Küchengeräte (nur darauf basierende Rezepte): ${profile.kitchenEquipment.join(", ")}.`);
+      }
+      // Sport → Trainingstag-Anpassung
+      if (profile.sportsPreferred?.length > 0) {
+        ctxLines.push(`Trainingsarten: ${profile.sportsPreferred.join(", ")}. An Trainingstagen Kohlenhydrate + Protein erhöhen.`);
+      }
+      // EMS-Studio-Kontext: Trainingstage aus Kalender + Plan
+      try {
+        const evs = JSON.parse(localStorage.getItem("eyla_local_events_v2")||"[]");
+        const emsDays = [...new Set(evs.filter(e => /ems|training|workout|sport|gym/i.test(e.title||"")).map(e => {
+          const d = new Date(e.date); return ["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"][d.getDay()];
+        }))];
+        if (emsDays.length > 0) ctxLines.push(`EMS-/Trainingstage diese Woche: ${emsDays.join(", ")}. An diesen Tagen Protein-Fokus + Post-Workout-Carbs einplanen.`);
+      } catch {}
+      // FLO Zyklus-Phase
+      if (profile.trackCycle) {
+        try {
+          const cycles = JSON.parse(localStorage.getItem("eyla_cycle_v1")||"[]");
+          const status = getCycleStatus(cycles, profile);
+          if (status.phase) {
+            const info = PHASE_INFO[status.phase];
+            ctxLines.push(`Zyklusphase: ${info.label} (Tag ${status.dayOfCycle}). Ernährung anpassen: ${info.nutrition}.`);
+          }
+        } catch {}
+      }
+      // Saisonalität (Monat)
+      const monthName = new Date().toLocaleDateString("de-DE",{month:"long"});
+      ctxLines.push(`Aktueller Monat: ${monthName}. Saisonales/regionales Gemüse & Obst bevorzugen.`);
+      // Gewichtsverlauf-Trend
+      try {
+        const logs = JSON.parse(localStorage.getItem("eyla_logs_v1")||"{}");
+        const weights = Object.values(logs).filter(l=>typeof l?.weight==="number").map(l=>({w:l.weight,t:new Date(l.date).getTime()})).sort((a,b)=>a.t-b.t);
+        if (weights.length >= 3) {
+          const delta = (weights[weights.length-1].w - weights[0].w).toFixed(1);
+          ctxLines.push(`Gewichtstrend: ${delta>0?"+":""}${delta}kg über ${weights.length} Messungen. ${ct.type==="abnehmen" && delta>=0 ? "Defizit greift noch nicht – etwas straffer kalkulieren." : ct.type==="aufbauen" && delta<=0 ? "Aufbau stockt – Kalorien leicht hoch." : "Trend passt."}`);
+        }
+      } catch {}
+
+      const ctxBlock = ctxLines.length > 0
+        ? `\nKONTEXT (für maximale Personalisierung nutzen):\n${ctxLines.map(s => "- " + s).join("\n")}\n`
+        : "";
+
+      const userPrompt = `Profil: ${profile.name||"Phil"}, ${sexLabel}, ${profile.age||35}J, ${profile.weight||79}kg, ${profile.height||183}cm. Aktivität: ${profile.activity||"5x Woche Beweglichkeit"}. Vorlieben: ${profile.preferences?.join(", ")||"wenig Fleisch, proteinreich, mediterran"}. ${intolSatz} ${zielKontext} ${personsSatz}${planPrefsBlock}${ctxBlock}\nErstelle den 7-Tage-Plan – maximal personalisiert auf ALLE oben genannten Faktoren. Jede Mahlzeit mit kcal-Angabe. Variiere sinnvoll, aber respektiere die Präferenzen strikt.`;
 
       const res = await fetch("/api/chat", {
         method: "POST",
