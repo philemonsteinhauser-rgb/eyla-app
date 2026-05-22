@@ -2049,89 +2049,13 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [], init
       {/* FLO – Zyklus-Status + Phase-Tipps (wenn aktiviert) */}
       {isToday && profile?.trackCycle && <FloCard profile={profile}/>}
 
-      {/* SMART-CARD oben: kombiniert Smart-Hint + Direkt-Action wenn beides relevant */}
-      {(hint || nextAction) && (
-        <div style={{
-          marginBottom:12, padding:"10px 14px",
-          background: (nextAction ? T.gold : T.acc) + "0A",
-          border:`1px solid ${(nextAction ? T.gold : T.acc)}33`, borderRadius:10,
-          display:"flex", alignItems:"center", gap:10,
-          animation:"fadeUp .3s ease both"
-        }}>
-          {nextAction && <span style={{ fontSize:18 }}>{nextAction.icon}</span>}
-          {!nextAction && hint && <span style={{ color:T.acc, fontSize:14 }}>✦</span>}
-          <div style={{ flex:1, minWidth:0 }}>
-            {nextAction ? (
-              <span style={{ color:T.text, fontSize:12, fontFamily:T.serif, fontStyle:"italic" }}>
-                {nextAction.hint}
-              </span>
-            ) : (
-              <span style={{ color:T.mid, fontSize:12, fontStyle:"italic", fontFamily:T.serif }}>
-                {hint}
-              </span>
-            )}
-          </div>
-          {nextAction && (
-            <button onClick={nextAction.action} style={{
-              background:T.gold+"33", border:`1px solid ${T.gold}88`, borderRadius:18,
-              padding:"4px 11px", color:T.gold, fontFamily:T.mono, fontSize:10,
-              letterSpacing:1, cursor:"pointer", whiteSpace:"nowrap"
-            }}>{nextAction.label} →</button>
-          )}
-        </div>
-      )}
-
-      {/* DAILY-STORY – Abendzusammenfassung ab 21 Uhr */}
+      {/* HEUTE-ÜBERSICHT – Nudge + Anstehend + Abend-Story in EINER Karte */}
       {isToday && (() => {
-        const hour = new Date().getHours();
-        if (hour < 21 && hour !== 0) return null;
-        // Story-Teile
-        const eaten = (log.meals||[]).reduce((s,m)=>s+(m.calories||0),0);
-        const waterL = ((log.water||0)*.25).toFixed(2);
-        const sleep = log.sleep || "";
-        const workoutMin = (log.workouts||[]).reduce((s,w)=>s+(w.duration||0),0);
-        const habitsArr = profile?.habits || [];
-        const doneHabits = habitsArr.filter(h => log.habits?.[h.id]).length;
-        const parts = [];
-        if (log.meals?.length > 0) parts.push(`${log.meals.length} Mahlzeit${log.meals.length>1?"en":""} · ${eaten} kcal`);
-        if (log.water > 0) parts.push(`${waterL}L Wasser`);
-        if (workoutMin > 0) parts.push(`${workoutMin}min Bewegung`);
-        if (doneHabits > 0) parts.push(`${doneHabits}/${habitsArr.length} Gewohnheiten`);
-        if (parts.length === 0) return null; // nichts zu erzählen
+        // 1) Nudge (Smart-Hint oder Direkt-Action)
+        const hasNudge = !!(hint || nextAction);
 
-        // Reflexion-Frage
-        const sleepNum = parseFloat(String(sleep).replace("+","")) || 0;
-        const reflectionQ = !log.note
-          ? (sleepNum >= 7 ? "Wie war heute?" : "Was nimmst du in den Schlaf mit?")
-          : null;
-
-        return (
-          <Card style={{ marginBottom:12, background:T.gold+"08", border:`1px solid ${T.gold}33` }}>
-            <Lbl color={T.gold} style={{ marginBottom:8 }}>🌙 HEUTE</Lbl>
-            <div style={{ color:T.text, fontSize:13, fontFamily:T.serif, lineHeight:1.7 }}>
-              {parts.join(" · ")}.
-            </div>
-            {reflectionQ && (
-              <div style={{
-                marginTop:10, padding:"8px 12px",
-                background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:8,
-                color:T.mid, fontSize:12, fontFamily:T.serif, fontStyle:"italic"
-              }}>
-                ✦ {reflectionQ}
-              </div>
-            )}
-          </Card>
-        );
-      })()}
-
-      {/* (Jarvis-Briefing-Zeile und Was-passt-jetzt-rein entfernt – redundant mit Anstehend-Card unten + Smart-Card oben) */}
-
-      {/* ANSTEHEND – Termine + Heute-Todos auf einen Blick (nur wenn heute + was zu zeigen) */}
-      {isToday && (() => {
-        const todoKey = tagKey;
-        // Heute-Todos (status open)
+        // 2) Anstehend – Termine + Heute-Todos
         const todayTodos = todos.filter(t => t.status==="open" && (t.priority||"today")==="today");
-        // Events von heute (Recurring expansion: täglich/wöchentlich)
         const todayKey = isoDateKey(new Date());
         const todayDow = new Date().getDay();
         const allEv = [...(events||[]), ...localEvents];
@@ -2144,73 +2068,140 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [], init
           }
           return false;
         }).sort((a,b)=>(a.time||"").localeCompare(b.time||""));
+        const hasAgenda = todayTodos.length > 0 || todayEvents.length > 0;
 
-        if (todayTodos.length === 0 && todayEvents.length === 0) return null;
+        // 3) Abend-Story (ab 21 Uhr)
+        const hour = new Date().getHours();
+        const isEvening = hour >= 21 || hour === 0;
+        const eatenStory = (log.meals||[]).reduce((s,m)=>s+(m.calories||0),0);
+        const waterL = ((log.water||0)*.25).toFixed(2);
+        const workoutMin = (log.workouts||[]).reduce((s,w)=>s+(w.duration||0),0);
+        const habitsArr = profile?.habits || [];
+        const doneHabits = habitsArr.filter(h => log.habits?.[h.id]).length;
+        const storyParts = [];
+        if (log.meals?.length > 0) storyParts.push(`${log.meals.length} Mahlzeit${log.meals.length>1?"en":""} · ${eatenStory} kcal`);
+        if (log.water > 0) storyParts.push(`${waterL}L Wasser`);
+        if (workoutMin > 0) storyParts.push(`${workoutMin}min Bewegung`);
+        if (doneHabits > 0) storyParts.push(`${doneHabits}/${habitsArr.length} Gewohnheiten`);
+        const sleepNum = parseFloat(String(log.sleep||"").replace("+","")) || 0;
+        const reflectionQ = !log.note
+          ? (sleepNum >= 7 ? "Wie war heute?" : "Was nimmst du in den Schlaf mit?")
+          : null;
+        const hasStory = isEvening && storyParts.length > 0;
+
+        if (!hasNudge && !hasAgenda && !hasStory) return null;
+
+        const divider = { height:1, background:T.border, margin:"12px 0" };
+
         return (
           <Card style={{ marginBottom:14 }}>
-            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
-              <Lbl>ANSTEHEND</Lbl>
-              <span style={{ fontFamily:T.mono, fontSize:9, color:T.muted, letterSpacing:1 }}>
-                {todayEvents.length}T · {todayTodos.length}TODO
-              </span>
-            </div>
-            {/* Termine zuerst */}
-            {todayEvents.length > 0 && (
-              <div style={{ marginBottom: todayTodos.length > 0 ? 10 : 0 }}>
-                {todayEvents.slice(0, 5).map((ev, i) => (
-                  <div key={ev.id||i} style={{
-                    display:"flex", alignItems:"center", gap:10, padding:"5px 0",
-                    borderBottom: i < Math.min(4, todayEvents.length-1) ? `1px solid ${T.border}` : "none"
-                  }}>
-                    <span style={{ fontFamily:T.mono, fontSize:11, color:T.gold, minWidth:42 }}>
-                      {ev.time || "–"}
-                    </span>
-                    <span style={{ flex:1, color:T.text, fontSize:13, fontFamily:T.serif }}>{ev.title}</span>
-                    {ev.duration && <span style={{ fontFamily:T.mono, fontSize:9, color:T.muted }}>{ev.duration}min</span>}
-                  </div>
-                ))}
-                {todayEvents.length > 5 && (
-                  <div style={{ fontSize:10, color:T.muted, fontStyle:"italic", fontFamily:T.serif, marginTop:4 }}>
-                    +{todayEvents.length-5} weitere Termine
-                  </div>
+            {/* Nudge */}
+            {hasNudge && (
+              <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                {nextAction && <span style={{ fontSize:18 }}>{nextAction.icon}</span>}
+                {!nextAction && <span style={{ color:T.acc, fontSize:14 }}>✦</span>}
+                <div style={{ flex:1, minWidth:0 }}>
+                  <span style={{ color: nextAction ? T.text : T.mid, fontSize:12, fontFamily:T.serif, fontStyle:"italic" }}>
+                    {nextAction ? nextAction.hint : hint}
+                  </span>
+                </div>
+                {nextAction && (
+                  <button onClick={nextAction.action} style={{
+                    background:T.gold+"33", border:`1px solid ${T.gold}88`, borderRadius:18,
+                    padding:"4px 11px", color:T.gold, fontFamily:T.mono, fontSize:10,
+                    letterSpacing:1, cursor:"pointer", whiteSpace:"nowrap"
+                  }}>{nextAction.label} →</button>
                 )}
               </div>
             )}
-            {/* Todos heute (Quick-Toggle) */}
-            {todayTodos.length > 0 && (
-              <div style={{
-                paddingTop: todayEvents.length > 0 ? 8 : 0,
-                borderTop: todayEvents.length > 0 ? `1px dashed ${T.border}` : "none"
-              }}>
-                {todayTodos.slice(0, 6).map((t, i) => (
-                  <div key={t.id} style={{
-                    display:"flex", alignItems:"center", gap:10, padding:"6px 0",
-                    borderBottom: i < Math.min(5, todayTodos.length-1) ? `1px solid ${T.border}` : "none"
-                  }}>
-                    <button onClick={()=>{
-                      const arr = loadTodos();
-                      const idx = arr.findIndex(x => x.id === t.id);
-                      if (idx >= 0) {
-                        arr[idx] = {...arr[idx], status:"done", completedAt:new Date().toISOString()};
-                        saveTodos(arr);
-                        setTodos(arr);
-                        window.dispatchEvent(new Event("eyla_todos_changed"));
-                        haptic(15);
-                      }
-                    }} style={{
-                      width:20, height:20, borderRadius:5,
-                      border:`1.5px solid ${T.rose}88`, background:"transparent",
-                      cursor:"pointer", padding:0, flexShrink:0
-                    }}/>
-                    <span style={{ flex:1, color:T.text, fontSize:13, fontFamily:T.serif }}>{t.text}</span>
-                  </div>
-                ))}
-                {todayTodos.length > 6 && (
-                  <div style={{ fontSize:10, color:T.muted, fontStyle:"italic", fontFamily:T.serif, marginTop:4 }}>
-                    +{todayTodos.length-6} weitere offen
+
+            {/* Anstehend */}
+            {hasAgenda && (
+              <>
+                {hasNudge && <div style={divider}/>}
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
+                  <Lbl>ANSTEHEND</Lbl>
+                  <span style={{ fontFamily:T.mono, fontSize:9, color:T.muted, letterSpacing:1 }}>
+                    {todayEvents.length}T · {todayTodos.length}TODO
+                  </span>
+                </div>
+                {todayEvents.length > 0 && (
+                  <div style={{ marginBottom: todayTodos.length > 0 ? 10 : 0 }}>
+                    {todayEvents.slice(0, 5).map((ev, i) => (
+                      <div key={ev.id||i} style={{
+                        display:"flex", alignItems:"center", gap:10, padding:"5px 0",
+                        borderBottom: i < Math.min(4, todayEvents.length-1) ? `1px solid ${T.border}` : "none"
+                      }}>
+                        <span style={{ fontFamily:T.mono, fontSize:11, color:T.gold, minWidth:42 }}>
+                          {ev.time || "–"}
+                        </span>
+                        <span style={{ flex:1, color:T.text, fontSize:13, fontFamily:T.serif }}>{ev.title}</span>
+                        {ev.duration && <span style={{ fontFamily:T.mono, fontSize:9, color:T.muted }}>{ev.duration}min</span>}
+                      </div>
+                    ))}
+                    {todayEvents.length > 5 && (
+                      <div style={{ fontSize:10, color:T.muted, fontStyle:"italic", fontFamily:T.serif, marginTop:4 }}>
+                        +{todayEvents.length-5} weitere Termine
+                      </div>
+                    )}
                   </div>
                 )}
-              </div>
+                {todayTodos.length > 0 && (
+                  <div style={{
+                    paddingTop: todayEvents.length > 0 ? 8 : 0,
+                    borderTop: todayEvents.length > 0 ? `1px dashed ${T.border}` : "none"
+                  }}>
+                    {todayTodos.slice(0, 6).map((t, i) => (
+                      <div key={t.id} style={{
+                        display:"flex", alignItems:"center", gap:10, padding:"6px 0",
+                        borderBottom: i < Math.min(5, todayTodos.length-1) ? `1px solid ${T.border}` : "none"
+                      }}>
+                        <button onClick={()=>{
+                          const arr = loadTodos();
+                          const idx = arr.findIndex(x => x.id === t.id);
+                          if (idx >= 0) {
+                            arr[idx] = {...arr[idx], status:"done", completedAt:new Date().toISOString()};
+                            saveTodos(arr);
+                            setTodos(arr);
+                            window.dispatchEvent(new Event("eyla_todos_changed"));
+                            haptic(15);
+                          }
+                        }} style={{
+                          width:20, height:20, borderRadius:5,
+                          border:`1.5px solid ${T.rose}88`, background:"transparent",
+                          cursor:"pointer", padding:0, flexShrink:0
+                        }}/>
+                        <span style={{ flex:1, color:T.text, fontSize:13, fontFamily:T.serif }}>{t.text}</span>
+                      </div>
+                    ))}
+                    {todayTodos.length > 6 && (
+                      <div style={{ fontSize:10, color:T.muted, fontStyle:"italic", fontFamily:T.serif, marginTop:4 }}>
+                        +{todayTodos.length-6} weitere offen
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* Abend-Story */}
+            {hasStory && (
+              <>
+                {(hasNudge || hasAgenda) && <div style={divider}/>}
+                <Lbl color={T.gold} style={{ marginBottom:8 }}>🌙 HEUTE</Lbl>
+                <div style={{ color:T.text, fontSize:13, fontFamily:T.serif, lineHeight:1.7 }}>
+                  {storyParts.join(" · ")}.
+                </div>
+                {reflectionQ && (
+                  <div style={{
+                    marginTop:10, padding:"8px 12px",
+                    background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:8,
+                    color:T.mid, fontSize:12, fontFamily:T.serif, fontStyle:"italic"
+                  }}>
+                    ✦ {reflectionQ}
+                  </div>
+                )}
+              </>
             )}
           </Card>
         );
