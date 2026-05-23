@@ -35,6 +35,8 @@ const SYNC_KEYS = [
   "eyla_cycle_v1",      // FLO
   "eyla_reflections_v1",// Wochen-Reflexionen
   "eyla_favorites_v1",  // Mahlzeit-Favoriten
+  "eyla_measurements_v1",// Körpermaße
+  "eyla_ref_code_v1",   // persönlicher Werbe-Code
 ];
 const SYNC_STATE = { status: "idle", lastSyncedAt: null }; // status: idle|syncing|ok|error|off
 const syncListeners = new Set();
@@ -263,6 +265,188 @@ function awardPoints(action, opts = {}) {
   window.dispatchEvent(new CustomEvent("eyla_points_awarded", { detail: { action, points: pts, label: POINT_LABELS[action] || action } }));
   haptic(20);
   return pts;
+}
+
+// ─── SHARE: hübsche Story-Karte als Bild (Canvas) + Web-Share ────────────────
+const APP_URL = "https://eyla-app.vercel.app";
+// Zeichnet eine 1080×1350-Karte im EYLA-Look, gibt ein PNG-Blob zurück.
+function buildShareCard({ eyebrow = "", big = "", sub = "", footer = "", accent } = {}) {
+  return new Promise((resolve) => {
+    const W = 1080, H = 1350;
+    const c = document.createElement("canvas");
+    c.width = W; c.height = H;
+    const x = c.getContext("2d");
+    const acc = accent || T.acc;
+    // Hintergrund
+    x.fillStyle = T.bg; x.fillRect(0, 0, W, H);
+    let g = x.createRadialGradient(W/2, 330, 40, W/2, 330, 760);
+    g.addColorStop(0, acc + "33"); g.addColorStop(1, "transparent");
+    x.fillStyle = g; x.fillRect(0, 0, W, H);
+    g = x.createRadialGradient(W/2, H-120, 20, W/2, H-120, 620);
+    g.addColorStop(0, T.gold + "1A"); g.addColorStop(1, "transparent");
+    x.fillStyle = g; x.fillRect(0, 0, W, H);
+    // Rahmen
+    x.strokeStyle = acc + "44"; x.lineWidth = 3;
+    x.strokeRect(40, 40, W-80, H-80);
+    x.textAlign = "center";
+    // Wordmark
+    x.fillStyle = T.muted; x.font = "600 30px 'Courier New', monospace";
+    x.fillText("E Y L A   ·   S T U D I O", W/2, 150);
+    // Orb
+    g = x.createRadialGradient(W/2, 360, 10, W/2, 360, 120);
+    g.addColorStop(0, acc + "EE"); g.addColorStop(0.55, acc + "55"); g.addColorStop(1, "transparent");
+    x.fillStyle = g; x.beginPath(); x.arc(W/2, 360, 120, 0, Math.PI*2); x.fill();
+    x.strokeStyle = acc + "AA"; x.lineWidth = 4;
+    x.beginPath(); x.arc(W/2, 360, 92, 0, Math.PI*2); x.stroke();
+    // Eyebrow
+    if (eyebrow) {
+      x.fillStyle = T.gold; x.font = "700 34px 'Courier New', monospace";
+      x.fillText(eyebrow.toUpperCase(), W/2, 660);
+    }
+    // Big (auto-fit Schriftgröße)
+    x.fillStyle = "#FFFFFF";
+    let size = 150; x.font = `800 ${size}px 'Palatino Linotype','Georgia',serif`;
+    while (x.measureText(big).width > W-160 && size > 60) { size -= 6; x.font = `800 ${size}px 'Palatino Linotype','Georgia',serif`; }
+    x.fillText(big, W/2, 800);
+    // Sub
+    if (sub) {
+      x.fillStyle = acc; x.font = "400 46px 'Palatino Linotype','Georgia',serif";
+      // Zeilenumbruch falls nötig
+      const words = sub.split(" "); let line = "", y = 900;
+      for (const w of words) {
+        const test = line ? line + " " + w : w;
+        if (x.measureText(test).width > W-200 && line) { x.fillText(line, W/2, y); line = w; y += 60; }
+        else line = test;
+      }
+      x.fillText(line, W/2, y);
+    }
+    // Footer
+    x.fillStyle = T.muted; x.font = "400 30px 'Palatino Linotype','Georgia',serif";
+    x.fillText(footer || APP_URL.replace("https://", ""), W/2, H-110);
+    c.toBlob(b => resolve(b), "image/png", 0.92);
+  });
+}
+// Teilt Bild + Text; Fallback: Download + Text in Zwischenablage.
+async function shareCard(cardOpts, text, title = "EYLA Studio") {
+  try {
+    const blob = await buildShareCard(cardOpts);
+    const file = blob ? new File([blob], "eyla-studio.png", { type: "image/png" }) : null;
+    if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], text, title });
+      return true;
+    }
+    if (navigator.share) { await navigator.share({ text, title }); return true; }
+    // Fallback: Bild herunterladen + Text kopieren
+    if (blob) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url; a.download = "eyla-studio.png"; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    }
+    try { await navigator.clipboard?.writeText(text); } catch {}
+    alert("Bild gespeichert & Text kopiert — teil es in deiner Story!");
+    return true;
+  } catch (e) { return false; }
+}
+
+// ─── WERBEN: persönlicher Code ───────────────────────────────────────────────
+function getRefCode(profile) {
+  try { const s = JSON.parse(localStorage.getItem("eyla_ref_code_v1") || "null"); if (s) return s; } catch {}
+  const initials = (profile?.name || "EYLA").replace(/[^A-Za-zÄÖÜäöü]/g, "").slice(0, 3).toUpperCase() || "FIT";
+  const rand = (Date.now().toString(36) + Math.random().toString(36).slice(2)).toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
+  const code = `${initials}-${rand}`;
+  try { localStorage.setItem("eyla_ref_code_v1", JSON.stringify(code)); } catch {}
+  try { scheduleSyncUp(); } catch {}
+  return code;
+}
+// Geworbenen Freund eintragen → Freunde-Liste (Multiplikator) + 500 Pts
+function awardFriend(name) {
+  const p = loadPoints();
+  p.friends = [...(p.friends || []), { name: name || "Freund", mult: 0.1, ts: Date.now() }];
+  savePoints(p);                       // Freund zählt jetzt in getMultiplier
+  return awardPoints("friend", { note: name || "" });
+}
+
+// ─── KÖRPERMASSE ─────────────────────────────────────────────────────────────
+const METRIC_DEFS = [
+  { key:"weight",  label:"Gewicht",      unit:"kg", aliases:["gewicht","weight","kg","masse","körpergewicht","koerpergewicht"] },
+  { key:"bodyfat", label:"Körperfett",   unit:"%",  aliases:["körperfett","koerperfett","kfa","bodyfat","body fat","fett","fat","%"] },
+  { key:"muscle",  label:"Muskelmasse",  unit:"kg", aliases:["muskel","muscle","muskelmasse","lbm","muskelanteil"] },
+  { key:"waist",   label:"Taille",       unit:"cm", aliases:["taille","waist","bauch","bauchumfang"] },
+  { key:"hips",    label:"Hüfte",        unit:"cm", aliases:["hüfte","huefte","hips","po","gesäß","gesaess","hip"] },
+  { key:"chest",   label:"Brust",        unit:"cm", aliases:["brust","chest","brustumfang","oberkörper","oberkoerper"] },
+  { key:"arm",     label:"Oberarm",      unit:"cm", aliases:["arm","oberarm","bizeps","biceps","armumfang"] },
+  { key:"thigh",   label:"Oberschenkel", unit:"cm", aliases:["oberschenkel","thigh","bein","schenkel","beinumfang"] },
+  { key:"calf",    label:"Wade",         unit:"cm", aliases:["wade","calf","waden","wadenumfang"] },
+];
+function loadMeasurements() {
+  try { const m = JSON.parse(localStorage.getItem("eyla_measurements_v1") || "null"); if (Array.isArray(m)) return m; } catch {}
+  return [];
+}
+function saveMeasurements(arr) {
+  const clean = (arr || []).filter(e => e && e.date).sort((a,b) => a.date.localeCompare(b.date));
+  try { localStorage.setItem("eyla_measurements_v1", JSON.stringify(clean)); } catch {}
+  window.dispatchEvent(new Event("eyla_measurements_changed"));
+  try { scheduleSyncUp(); } catch {}
+  return clean;
+}
+function normMetricDate(raw) {
+  if (!raw) return null;
+  const s = String(raw).trim();
+  let m = s.match(/^(\d{4})[-./](\d{1,2})[-./](\d{1,2})/);            // YYYY-MM-DD
+  if (m) return `${m[1]}-${m[2].padStart(2,"0")}-${m[3].padStart(2,"0")}`;
+  m = s.match(/^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{2,4})/);            // DD.MM.YYYY
+  if (m) { let y = m[3]; if (y.length === 2) y = "20" + y; return `${y}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}`; }
+  const d = new Date(s); if (!isNaN(d)) return d.toISOString().slice(0,10);
+  return null;
+}
+function parseMetricNum(raw) {
+  if (raw == null) return null;
+  const s = String(raw).replace(/[^\d,.\-]/g, "").replace(",", ".");
+  if (!s || s === "-" || s === ".") return null;
+  const n = parseFloat(s); return isNaN(n) ? null : n;
+}
+function metricKeyFromHeader(h) {
+  const clean = String(h).toLowerCase().replace(/\(.*?\)|\[.*?\]/g, "").replace(/[._]/g, " ").trim();
+  for (const def of METRIC_DEFS) {
+    if (def.aliases.some(a => clean === a || clean.includes(a))) return def.key;
+  }
+  return null;
+}
+// Wandelt CSV/TSV-Text (Excel-Export oder eingefügt) in Mess-Einträge.
+function parseMeasurementsCSV(text) {
+  const lines = String(text).split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  if (lines.length < 2) return { entries: [], cols: [] };
+  const delim = [";", "\t", ","].sort((a,b) => (lines[0].split(b).length) - (lines[0].split(a).length))[0];
+  const split = (l) => l.split(delim).map(c => c.trim().replace(/^"|"$/g, ""));
+  const header = split(lines[0]);
+  let dateIdx = header.findIndex(h => /datum|date|tag|day/i.test(h));
+  if (dateIdx < 0) dateIdx = 0;
+  const colMap = header.map((h, i) => i === dateIdx ? "__date" : metricKeyFromHeader(h));
+  const usedKeys = new Set();
+  const entries = [];
+  for (let r = 1; r < lines.length; r++) {
+    const cells = split(lines[r]);
+    const date = normMetricDate(cells[dateIdx]);
+    if (!date) continue;
+    const values = {};
+    colMap.forEach((key, i) => {
+      if (!key || key === "__date") return;
+      const n = parseMetricNum(cells[i]);
+      if (n != null) { values[key] = n; usedKeys.add(key); }
+    });
+    if (Object.keys(values).length) entries.push({ id: "imp_" + date, date, values });
+  }
+  return { entries, cols: [...usedKeys] };
+}
+// Mischt neue Einträge in vorhandene (Datum als Schlüssel, Werte werden gemerged).
+function mergeMeasurements(existing, incoming) {
+  const byDate = {};
+  for (const e of existing || []) byDate[e.date] = { ...e, values: { ...e.values } };
+  for (const e of incoming || []) {
+    if (byDate[e.date]) byDate[e.date].values = { ...byDate[e.date].values, ...e.values };
+    else byDate[e.date] = { ...e, values: { ...e.values } };
+  }
+  return Object.values(byDate);
 }
 
 const DEFAULT_PROFILE = {
@@ -4239,6 +4423,236 @@ function StudioScreen({ profile }) {
   );
 }
 
+function WerbenCard({ profile }) {
+  const [code] = useState(() => getRefCode(profile));
+  const [points, setPoints] = useState(loadPoints());
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    const on = () => setPoints(loadPoints());
+    window.addEventListener("eyla_points_changed", on);
+    return () => window.removeEventListener("eyla_points_changed", on);
+  }, []);
+  const friends = points.friends || [];
+  const shareText = `Komm mit mir ins EYLA Studio! 💪 Mit meinem Code ${code} bekommst du ein Probetraining. ${APP_URL}`;
+  function doShare() {
+    shareCard(
+      { eyebrow:"Trainier mit mir", big:code, sub:"Code beim Probetraining zeigen", footer:APP_URL.replace("https://",""), accent:T.gold },
+      shareText, "EYLA Studio – Einladung"
+    );
+  }
+  function copyCode() {
+    try { navigator.clipboard?.writeText(code); } catch {}
+    setCopied(true); haptic(20); setTimeout(() => setCopied(false), 1400);
+  }
+  function logFriend() {
+    const name = prompt("Wen hast du geworben? (Name – nur für deine Übersicht)", "");
+    if (name === null) return;
+    const pts = awardFriend(name.trim());
+    haptic(40);
+    alert(pts ? `🎉 +${pts} Pkt fürs Werben!${name.trim() ? " " + name.trim() : ""} ist eingetragen.\n\nDein Studio bestätigt die Werbung beim Probetraining.` : "Eingetragen.");
+  }
+  return (
+    <Card style={{ marginBottom:12, background:`radial-gradient(120% 90% at 0% 0%, ${T.gold}14 0%, transparent 55%), ${T.card}`, border:`1px solid ${T.gold}33` }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+        <Lbl>FREUNDE WERBEN</Lbl>
+        <span style={{ background:T.gold+"18", border:`1px solid ${T.gold}33`, borderRadius:99, padding:"2px 8px", fontSize:9, color:T.gold, fontFamily:T.mono }}>+{POINT_VALUES.friend} Pts</span>
+      </div>
+      {/* Code-Box */}
+      <div onClick={copyCode} style={{
+        display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, cursor:"pointer",
+        background:T.bg2, border:`1px dashed ${T.gold}55`, borderRadius:12, padding:"12px 14px", marginBottom:10
+      }}>
+        <div>
+          <div style={{ fontSize:9, color:T.muted, fontFamily:T.mono, letterSpacing:1 }}>DEIN CODE</div>
+          <div style={{ fontSize:22, fontWeight:800, color:T.gold, fontFamily:T.mono, letterSpacing:2 }}>{code}</div>
+        </div>
+        <span style={{ fontSize:11, color: copied ? T.green : T.muted, fontFamily:T.serif, fontStyle:"italic" }}>{copied ? "✓ kopiert" : "tippen zum Kopieren"}</span>
+      </div>
+      <button onClick={doShare} style={{
+        width:"100%", padding:"11px", background:`linear-gradient(135deg,${T.gold},#C8920A)`,
+        border:"none", borderRadius:11, color:T.bg, fontFamily:T.serif, fontSize:14, fontWeight:700, cursor:"pointer", marginBottom:8
+      }}>📲 Einladung teilen</button>
+      <button onClick={logFriend} style={{
+        width:"100%", padding:"9px", background:"transparent", border:`1px solid ${T.borderS}`,
+        borderRadius:10, color:T.text, fontFamily:T.serif, fontSize:12, cursor:"pointer"
+      }}>＋ Geworbenen Freund eintragen</button>
+      <p style={{ color:T.muted, fontSize:10, fontStyle:"italic", fontFamily:T.serif, margin:"10px 0 0", lineHeight:1.5 }}>
+        Jeder geworbene Freund bringt +{POINT_VALUES.friend} Pts und dauerhaft ×0,1 auf deinen Multiplikator (max +0,5).
+      </p>
+      {friends.length > 0 && (
+        <div style={{ marginTop:10, display:"flex", flexWrap:"wrap", gap:6 }}>
+          {friends.map((f, i) => (
+            <span key={i} style={{ background:T.faint, border:`1px solid ${T.border}`, borderRadius:99, padding:"3px 10px", fontSize:11, color:T.text, fontFamily:T.serif }}>
+              👥 {f.name || "Freund"} <span style={{ color:T.gold, fontFamily:T.mono, fontSize:9 }}>×0,1</span>
+            </span>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function MeasurementsCard() {
+  const [items, setItems] = useState(loadMeasurements());
+  const [mode, setMode] = useState(null);     // null | "add" | "import"
+  const [draft, setDraft] = useState({ date: new Date().toISOString().slice(0,10), values:{} });
+  const [csv, setCsv] = useState("");
+  const [sel, setSel] = useState(null);
+  const [msg, setMsg] = useState("");
+  useEffect(() => {
+    const on = () => setItems(loadMeasurements());
+    window.addEventListener("eyla_measurements_changed", on);
+    return () => window.removeEventListener("eyla_measurements_changed", on);
+  }, []);
+
+  const latest = items[items.length-1];
+  const prev = items[items.length-2];
+  const presentKeys = METRIC_DEFS.filter(d => items.some(e => e.values?.[d.key] != null)).map(d => d.key);
+  const selDef = METRIC_DEFS.find(d => d.key === sel);
+  const series = sel ? items.filter(e => e.values?.[sel] != null).map(e => ({ date:e.date, v:e.values[sel] })) : [];
+
+  const iStyle = { width:"100%", background:T.bg, border:`1px solid ${T.borderS}`, borderRadius:9,
+    padding:"9px 11px", color:T.text, fontSize:13, fontFamily:T.mono, outline:"none", boxSizing:"border-box" };
+
+  function saveAdd() {
+    const vals = {};
+    for (const d of METRIC_DEFS) {
+      const raw = draft.values[d.key];
+      if (raw !== "" && raw != null) { const n = parseFloat(String(raw).replace(",", ".")); if (!isNaN(n)) vals[d.key] = n; }
+    }
+    if (!Object.keys(vals).length) { setMsg("Trag mindestens einen Wert ein."); setTimeout(()=>setMsg(""),3000); return; }
+    setItems(saveMeasurements(mergeMeasurements(items, [{ id:"m_"+Date.now(), date: draft.date, values: vals }])));
+    setDraft({ date: new Date().toISOString().slice(0,10), values:{} });
+    setMode(null); haptic(30);
+  }
+  function doImport() {
+    const { entries, cols } = parseMeasurementsCSV(csv);
+    if (!entries.length) { setMsg("Keine Zeilen erkannt. Erwartet: Kopfzeile mit 'Datum' + Spalten wie Gewicht, Taille, Hüfte …"); setTimeout(()=>setMsg(""),6000); return; }
+    setItems(saveMeasurements(mergeMeasurements(items, entries)));
+    setCsv(""); setMode(null); haptic(40);
+    setMsg(`✓ ${entries.length} Einträge importiert · ${cols.map(k => METRIC_DEFS.find(d=>d.key===k)?.label || k).join(", ") || "keine Spalten erkannt"}`);
+    setTimeout(()=>setMsg(""), 6000);
+  }
+  function onFile(e) {
+    const f = e.target.files?.[0]; if (!f) return;
+    const r = new FileReader(); r.onload = () => setCsv(String(r.result || "")); r.readAsText(f);
+  }
+
+  return (
+    <Card style={{ marginBottom:12 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom: items.length ? 12 : 8 }}>
+        <Lbl>KÖRPERMASSE{items.length ? ` · ${items.length}` : ""}</Lbl>
+        <div style={{ display:"flex", gap:6 }}>
+          <button onClick={()=>{ setMode(mode==="add"?null:"add"); setMsg(""); }} style={{ background: mode==="add"?T.acc+"22":"transparent", border:`1px solid ${mode==="add"?T.acc:T.borderS}`, borderRadius:8, padding:"4px 10px", color: mode==="add"?T.text:T.muted, fontFamily:T.serif, fontSize:11, cursor:"pointer" }}>＋ Eintrag</button>
+          <button onClick={()=>{ setMode(mode==="import"?null:"import"); setMsg(""); }} style={{ background: mode==="import"?T.acc+"22":"transparent", border:`1px solid ${mode==="import"?T.acc:T.borderS}`, borderRadius:8, padding:"4px 10px", color: mode==="import"?T.text:T.muted, fontFamily:T.serif, fontSize:11, cursor:"pointer" }}>⇪ Import</button>
+        </div>
+      </div>
+
+      {msg && <div style={{ fontSize:11, color: msg.startsWith("✓")?T.green:T.gold, fontFamily:T.serif, marginBottom:10, lineHeight:1.5 }}>{msg}</div>}
+
+      {/* Empty state */}
+      {items.length === 0 && mode === null && (
+        <p style={{ color:T.muted, fontSize:12, fontStyle:"italic", fontFamily:T.serif, margin:0, lineHeight:1.6 }}>
+          Noch keine Maße. Trag deine Werte ein – oder importiere deine Excel (als CSV exportieren) über „⇪ Import".
+        </p>
+      )}
+
+      {/* Chips */}
+      {items.length > 0 && mode === null && (
+        <>
+          <div style={{ fontSize:10, color:T.muted, fontFamily:T.mono, marginBottom:8 }}>
+            Letzte Messung · {new Date(latest.date).toLocaleDateString("de-DE",{day:"2-digit",month:"short",year:"numeric"})}
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+            {presentKeys.map(key => {
+              const def = METRIC_DEFS.find(d => d.key === key);
+              const cur = latest.values?.[key];
+              const before = prev?.values?.[key];
+              const delta = (cur != null && before != null) ? +(cur - before).toFixed(1) : null;
+              // Bei Umfängen/Fett ist runter = grün, bei Muskel rauf = grün
+              const goodDown = key !== "muscle";
+              const dColor = delta == null || delta === 0 ? T.muted : ((delta < 0) === goodDown ? T.green : T.gold);
+              const active = sel === key;
+              return (
+                <button key={key} onClick={()=>setSel(active?null:key)} style={{
+                  textAlign:"left", background: active?T.acc+"14":T.bg2, border:`1px solid ${active?T.acc:T.border}`,
+                  borderRadius:11, padding:"9px 11px", cursor:"pointer"
+                }}>
+                  <div style={{ fontSize:10, color:T.muted, fontFamily:T.serif }}>{def.label}</div>
+                  <div style={{ fontSize:17, color:T.text, fontFamily:T.mono, fontWeight:300 }}>
+                    {cur}<span style={{ fontSize:9, color:T.muted, marginLeft:2 }}>{def.unit}</span>
+                  </div>
+                  {delta != null && delta !== 0 && (
+                    <div style={{ fontSize:9, color:dColor, fontFamily:T.mono }}>{delta>0?"+":""}{delta} {def.unit}</div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Sparkline für ausgewählte Metrik */}
+          {sel && series.length >= 2 && (() => {
+            const vals = series.map(s => s.v);
+            const min = Math.min(...vals), max = Math.max(...vals), range = Math.max(0.001, max-min);
+            const W = 100, H = 40;
+            const pts = series.map((s,i)=>`${((i/(series.length-1))*W).toFixed(1)},${(H-((s.v-min)/range)*H).toFixed(1)}`).join(" ");
+            const first = vals[0], last = vals[vals.length-1], d = +(last-first).toFixed(1);
+            return (
+              <div style={{ marginTop:10, padding:"10px 12px", background:T.bg2, borderRadius:11, border:`1px solid ${T.border}` }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:6 }}>
+                  <span style={{ fontSize:11, color:T.text, fontFamily:T.serif }}>{selDef.label}-Verlauf · {series.length}×</span>
+                  <span style={{ fontSize:10, color: d===0?T.muted:((d<0)===(sel!=="muscle")?T.green:T.gold), fontFamily:T.mono }}>
+                    {d>0?"+":""}{d} {selDef.unit} gesamt
+                  </span>
+                </div>
+                <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ width:"100%", height:60, display:"block" }}>
+                  <polyline points={pts} fill="none" stroke={T.acc} strokeWidth="0.8" strokeLinejoin="round" strokeLinecap="round"/>
+                  {series.map((s,i)=>{ const x=(i/(series.length-1))*W, y=H-((s.v-min)/range)*H; return <circle key={i} cx={x} cy={y} r="1" fill={T.acc}/>; })}
+                </svg>
+              </div>
+            );
+          })()}
+        </>
+      )}
+
+      {/* Eintrag-Form */}
+      {mode === "add" && (
+        <div>
+          <Lbl style={{ marginBottom:6, fontSize:10 }}>DATUM</Lbl>
+          <input type="date" value={draft.date} onChange={e=>setDraft(d=>({...d, date:e.target.value}))} style={{...iStyle, marginBottom:10}}/>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+            {METRIC_DEFS.map(def => (
+              <div key={def.key}>
+                <Lbl style={{ marginBottom:4, fontSize:9 }}>{def.label.toUpperCase()} ({def.unit})</Lbl>
+                <input type="number" inputMode="decimal" step="0.1" value={draft.values[def.key] ?? ""}
+                  onChange={e=>setDraft(d=>({...d, values:{...d.values, [def.key]: e.target.value}}))}
+                  placeholder="–" style={iStyle}/>
+              </div>
+            ))}
+          </div>
+          <button onClick={saveAdd} style={{ width:"100%", marginTop:12, padding:"11px", background:`linear-gradient(135deg,${T.dim},${T.acc})`, border:"none", borderRadius:11, color:T.bg, fontFamily:T.serif, fontSize:13, fontWeight:700, cursor:"pointer" }}>Speichern</button>
+        </div>
+      )}
+
+      {/* Import-Form */}
+      {mode === "import" && (
+        <div>
+          <p style={{ color:T.muted, fontSize:11, fontStyle:"italic", fontFamily:T.serif, margin:"0 0 10px", lineHeight:1.6 }}>
+            Excel → „Speichern unter" → CSV. Datei wählen oder Inhalt einfügen. Erste Zeile = Spaltenköpfe (Datum, Gewicht, Taille, Hüfte …).
+          </p>
+          <label style={{ display:"block", marginBottom:10 }}>
+            <input type="file" accept=".csv,text/csv,text/plain,.tsv" onChange={onFile} style={{ fontSize:12, color:T.text, fontFamily:T.serif }}/>
+          </label>
+          <textarea value={csv} onChange={e=>setCsv(e.target.value)} rows={5}
+            placeholder={"Datum;Gewicht;Taille;Hüfte\n01.03.2026;82,4;88;102\n01.04.2026;80,1;85;100"}
+            style={{ ...iStyle, fontFamily:T.mono, fontSize:11, resize:"vertical", lineHeight:1.5 }}/>
+          <button onClick={doImport} disabled={!csv.trim()} style={{ width:"100%", marginTop:10, padding:"11px", background: csv.trim()?`linear-gradient(135deg,${T.dim},${T.acc})`:T.faint, border:"none", borderRadius:11, color: csv.trim()?T.bg:T.muted, fontFamily:T.serif, fontSize:13, fontWeight:700, cursor: csv.trim()?"pointer":"default" }}>Importieren</button>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function PunkteScreen({ profile }) {
   const [points, setPoints] = useState(loadPoints());
   useEffect(() => {
@@ -4272,6 +4686,9 @@ function PunkteScreen({ profile }) {
           Punkte werden mit deinem Multiplikator (×{mult}) verrechnet. Training, Wasser & Mahlzeiten zählen automatisch.
         </p>
       </Card>
+
+      {/* FREUNDE WERBEN */}
+      <WerbenCard profile={profile}/>
 
       {/* MONATS-STREAK */}
       <Card style={{ marginBottom:12 }}>
@@ -4428,9 +4845,12 @@ function RankingScreen({ profile }) {
   const ptsToNext = ahead ? ahead.pts - points.total : 0;
 
   function shareSession() {
-    const text = `Ich bin auf Platz ${myRank} im Studio-Ranking mit ${points.total} Punkten 💪 #suma`;
-    if (navigator.share) navigator.share({ title:"Mein Studio-Ranking", text }).catch(()=>{});
-    else { navigator.clipboard?.writeText(text); alert("Text kopiert — teil ihn in deiner Story!"); }
+    const lvl = getLevel(points.total);
+    const text = `Platz #${myRank} im EYLA Studio-Ranking mit ${points.total} Punkten 💪 ${APP_URL}`;
+    shareCard(
+      { eyebrow:`${lvl.name} · ×${getMultiplier(points)}`, big:`Platz #${myRank}`, sub:`${points.total.toLocaleString("de-DE")} Punkte`, footer:APP_URL.replace("https://","") },
+      text, "Mein Studio-Ranking"
+    );
     awardPoints("social_share");
   }
 
@@ -7036,6 +7456,9 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
           })()}
         </Card>
       )}
+
+      {/* Körpermaße */}
+      <MeasurementsCard/>
 
       {/* TRACKING – Sektion */}
       <div style={{ fontFamily:T.mono, fontSize:9, color:T.muted, letterSpacing:2, margin:"22px 4px 10px", display:"flex", alignItems:"center", gap:8 }}>
