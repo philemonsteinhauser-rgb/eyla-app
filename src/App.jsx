@@ -606,86 +606,14 @@ function reorderAisles(aisles, order) {
 const DEFAULT_SHOPPING = {
   storeId: null,         // null = noch nicht gewählt
   store: "",
+  // Leere Gang-Struktur: Items kommen aus dem Plan ("Aus Plan füllen") oder manuell.
   aisles: [
-    {
-      name: "Obst & Gemüse", icon: "🥦", color: "green",
-      hint: "Direkt am Eingang",
-      items: [
-        { name: "Zucchini (groß)", menge: "5 Stk", quelle: "plan" },
-        { name: "Paprika (bunt, groß)", menge: "8 Stk", quelle: "plan" },
-        { name: "Blumenkohl", menge: "2 Köpfe", quelle: "plan" },
-        { name: "Champignons", menge: "500g", quelle: "plan" },
-        { name: "Kirschtomaten", menge: "500g", quelle: "plan" },
-        { name: "Gurke", menge: "2 Stk", quelle: "beide" },
-        { name: "Tomaten", menge: "6 Stk", quelle: "plan" },
-        { name: "Rote Zwiebeln", menge: "3 Stk", quelle: "plan" },
-        { name: "Zwiebeln (gelb)", menge: "4 Stk", quelle: "plan" },
-        { name: "Knoblauch", menge: "2 Knollen", quelle: "plan" },
-        { name: "Ingwer (frisch)", menge: "1 Stück", quelle: "plan" },
-        { name: "Frühlingszwiebeln", menge: "1 Bund", quelle: "plan" },
-        { name: "Zitrone", menge: "2 Stk", quelle: "plan" },
-        { name: "Petersilie (frisch)", menge: "1 Bund", quelle: "plan" },
-        { name: "Basilikum (Topf)", menge: "1 Topf", quelle: "plan" },
-        { name: "Sellerie", menge: "1 Knolle", quelle: "manuell" },
-      ]
-    },
-    {
-      name: "Brot & Backwaren", icon: "🍞", color: "gold",
-      hint: "Meist neben Gemüse",
-      items: [
-        { name: "Sauerteigbrot", menge: "1 Laib", quelle: "manuell" },
-      ]
-    },
-    {
-      name: "Molkerei & Kühlwaren", icon: "🧀", color: "mid",
-      hint: "Linke oder hintere Wand",
-      items: [
-        { name: "Eier (10er Pack)", menge: "2 Pkg", quelle: "beide" },
-        { name: "Milch frisch", menge: "1–2 Fl.", quelle: "manuell" },
-        { name: "Magerquark 0%", menge: "1 Becher (500g)", quelle: "manuell" },
-        { name: "Feta light", menge: "200g + 1 extra Pkg", quelle: "beide" },
-        { name: "Hüttenkäse / körniger Frischkäse", menge: "1 Becher", quelle: "manuell" },
-        { name: "Reibekäse", menge: "150g", quelle: "plan" },
-        { name: "Parmesan (gerieben)", menge: "80g", quelle: "plan" },
-        { name: "Butter", menge: "1 Pkg", quelle: "plan" },
-        { name: "Basilikum-Pesto (Glas)", menge: "1 Glas", quelle: "plan", tipp: "Oft im Kühlregal" },
-        { name: "Chilitaler (rot/grün)", menge: "1 Pkg", quelle: "manuell", tipp: "Meist bei Aufschnitt/Käse" },
-      ]
-    },
-    {
-      name: "Fisch & Fleisch", icon: "🐟", color: "rose",
-      hint: "Meist hinten im Laden",
-      items: [
-        { name: "Hackfleisch (gemischt)", menge: "600g", quelle: "plan" },
-        { name: "Lachs / Graved Lachs", menge: "1 Pkg", quelle: "manuell" },
-        { name: "Thunfisch (Dose in Wasser)", menge: "2 Dosen", quelle: "manuell", tipp: "Oder frisch, falls verfügbar" },
-      ]
-    },
-    {
-      name: "Trockenwaren & Regal-Mitte", icon: "🫙", color: "coral",
-      hint: "Mittelgänge",
-      items: [
-        { name: "Rote Linsen (500g)", menge: "1 Pkg", quelle: "plan" },
-        { name: "Gekochte braune Linsen", menge: "2x (Dose/Pkg)", quelle: "manuell" },
-        { name: "Kichererbsen (Dose)", menge: "3 Dosen", quelle: "plan" },
-        { name: "Kokosmilch (400ml)", menge: "2 Dosen", quelle: "plan" },
-        { name: "Gehackte Tomaten", menge: "3 Dosen", quelle: "plan" },
-        { name: "Tomatenmark", menge: "1 Tube", quelle: "plan" },
-        { name: "Gemüsebrühe (Würfel)", menge: "1 Pkg", quelle: "plan" },
-        { name: "Basmati-Reis (500g)", menge: "1 Pkg", quelle: "plan" },
-        { name: "Quinoa", menge: "1 Pkg (400–500g)", quelle: "manuell" },
-        { name: "Olivenöl (500ml)", menge: "1 Fl.", quelle: "plan" },
-        { name: "Sesam (Körner)", menge: "1 Pkg", quelle: "plan" },
-        { name: "Pinienkerne", menge: "50g", quelle: "plan" },
-      ]
-    },
-    {
-      name: "Haushalt", icon: "🧹", color: "muted",
-      hint: "Meist am Ende vor der Kasse",
-      items: [
-        { name: "Spülmaschinen-Tabs", menge: "1 Pkg", quelle: "manuell" },
-      ]
-    },
+    { name: "Obst & Gemüse",              icon: "🥦", color: "green", hint: "Direkt am Eingang",            items: [] },
+    { name: "Brot & Backwaren",           icon: "🍞", color: "gold",  hint: "Meist neben Gemüse",           items: [] },
+    { name: "Molkerei & Kühlwaren",       icon: "🧀", color: "mid",   hint: "Linke oder hintere Wand",      items: [] },
+    { name: "Fisch & Fleisch",            icon: "🐟", color: "rose",  hint: "Meist hinten im Laden",        items: [] },
+    { name: "Trockenwaren & Regal-Mitte", icon: "🫙", color: "coral", hint: "Mittelgänge",                  items: [] },
+    { name: "Haushalt",                   icon: "🧹", color: "muted", hint: "Meist am Ende vor der Kasse",  items: [] },
   ],
   checked: {},
 };
@@ -5172,11 +5100,15 @@ function PlanWizard({ profile, onSave, onCancel }) {
 }
 
 function PlanScreen({ profile, onUpdateProfile }) {
-  const [days, setDays] = useState([]);
-  const [intro, setIntro] = useState("");
+  // Plan synchron aus localStorage initialisieren – verhindert Reset bei Tab-Wechsel
+  const [days, setDays] = useState(() => {
+    try { const s = JSON.parse(localStorage.getItem("eyla_plan_v1") || "null"); return (s && Array.isArray(s.days)) ? s.days : []; } catch { return []; }
+  });
+  const [intro, setIntro] = useState(() => {
+    try { const s = JSON.parse(localStorage.getItem("eyla_plan_v1") || "null"); return s?.intro || ""; } catch { return ""; }
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [loaded, setLoaded] = useState(false);
   const [showWizard, setShowWizard] = useState(false);
   // "Heute im Fokus": welcher Tag ist gerade ausgewählt (Index in days)
   const [selDay, setSelDay] = useState(0);
@@ -5287,24 +5219,14 @@ Mahlzeiten passend zu Profil (${prefs}, ${ct.type === "abnehmen" ? "Defizit" : c
     persist("eyla_favorites_v1", next);
   }
 
-  // Plan beim Mount aus localStorage laden – sonst geht er bei Tab-Wechsel verloren
+  // Beim Mount: Fokus-Tag auf heute + Live-Sync wenn EYLA via Tool den Plan ändert
   useEffect(() => {
-    retrieve("eyla_plan_v1", null).then(saved => {
-      if (saved && Array.isArray(saved.days) && saved.days.length > 0) {
-        setDays(saved.days);
-        setIntro(saved.intro || "");
-        setSelDay(todayDayIdx(saved.days));
-      }
-      setLoaded(true);
-    });
-    // Live-Sync: wenn EYLA via Tool den Plan ändert, neu laden
+    if (days.length > 0) setSelDay(todayDayIdx(days));
     function onPlanChange() {
-      retrieve("eyla_plan_v1", null).then(saved => {
-        if (saved && Array.isArray(saved.days)) {
-          setDays(saved.days);
-          setIntro(saved.intro || "");
-        }
-      });
+      try {
+        const saved = JSON.parse(localStorage.getItem("eyla_plan_v1") || "null");
+        if (saved && Array.isArray(saved.days)) { setDays(saved.days); setIntro(saved.intro || ""); }
+      } catch {}
     }
     window.addEventListener("eyla_plan_changed", onPlanChange);
     return () => window.removeEventListener("eyla_plan_changed", onPlanChange);
@@ -5312,10 +5234,10 @@ Mahlzeiten passend zu Profil (${prefs}, ${ct.type === "abnehmen" ? "Defizit" : c
 
   // Plan persistieren wenn er sich ändert
   useEffect(() => {
-    if (loaded && days.length > 0) {
+    if (days.length > 0) {
       persist("eyla_plan_v1", { days, intro, savedAt: new Date().toISOString() });
     }
-  }, [days, intro, loaded]);
+  }, [days, intro]);
 
   async function generate() {
     setLoading(true);
@@ -5702,7 +5624,7 @@ TIPP: [Konkreter Hinweis für diesen Tag – Timing, Zubereitung, Variation. Nic
         <Card style={{ textAlign:"center", padding:48 }}>
           <div style={{ display:"flex", justifyContent:"center", marginBottom:20 }}><EylaOrb size={64} thinking/></div>
           <Lbl style={{ marginBottom:8 }}>EYLA ERSTELLT DEINEN PLAN …</Lbl>
-          <p style={{ color:T.muted, fontSize:12, fontStyle:"italic", fontFamily:T.serif, margin:0 }}>Dauert ca. 15 Sekunden.</p>
+          <p style={{ color:T.muted, fontSize:12, fontStyle:"italic", fontFamily:T.serif, margin:0 }}>Kann bis zu einer Minute dauern.</p>
         </Card>
       )}
       {days.length > 0 && (() => {
@@ -6268,6 +6190,17 @@ function ShoppingScreen() {
             )}
           </button>
         </div>
+        {data.aisles.some(a => a.items.length > 0) && (
+          <button onClick={()=>{
+            if (!confirm("Ganze Einkaufsliste leeren? Alle Artikel (auch eigene) werden entfernt.")) return;
+            setData(prev => ({ ...prev, aisles: prev.aisles.map(a => ({ ...a, items: [] })), checked: {} }));
+            haptic(40);
+          }} style={{
+            width:"100%", marginTop:8, padding:"8px 10px", borderRadius:10,
+            border:`1px solid ${T.borderS}`, background:"transparent",
+            color:T.muted, fontFamily:T.serif, fontSize:11, fontStyle:"italic", cursor:"pointer"
+          }}>🗑 Liste leeren</button>
+        )}
         {genError && (
           <p style={{ color:T.red, fontSize:11, fontStyle:"italic", margin:"6px 0 0", fontFamily:T.serif }}>
             {genError}
