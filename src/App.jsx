@@ -188,7 +188,7 @@ const POINT_VALUES = {
   ems_training:  50,   // EMS-Session absolviert
   punctual:      10,   // pünktlich erschienen
   offpeak:       10,   // Off-Peak-Termin gebucht
-  friend:        100,  // Freund geworben (aktiviert)
+  friend:        500,  // Freund geworben (aktiviert)
   social_share:  15,   // Story / Post geteilt
   water_goal:    20,   // Wasserziel erreicht
   meals_logged:  30,   // alle Mahlzeiten geloggt
@@ -217,7 +217,7 @@ const SHOP_ITEMS = [
   { id:"riegel",  cat:"A", icon:"🍫", name:"Proteinriegel",     sub:"Auswahl an der Theke",      pts:300,   eur:3 },
   { id:"shake",   cat:"A", icon:"🥤", name:"Protein Shake",     sub:"1× nach dem Training",      pts:400,   eur:4 },
   { id:"session", cat:"B", icon:"⚡", name:"Extra EMS Session", sub:"+ 15 € Zuzahlung",          pts:1000,  eur:0, addEur:15 },
-  { id:"hoodie",  cat:"B", icon:"👕", name:"suma Hoodie",       sub:"max. 4.000 Pts anrechenbar", pts:4000, eur:0 },
+  { id:"hoodie",  cat:"B", icon:"👕", name:"Pandactive Hoodie", sub:"max. 4.000 Pts anrechenbar", pts:4000, eur:0 },
   { id:"contract",cat:"C", icon:"🚀", name:"2× Vertrag · 3 Monate", sub:"50 % Rabatt · danach kündbar", pts:10000, eur:0 },
 ];
 const SHOP_CAT_LABELS = { A:"Gratis", B:"Upgrade", C:"Upsell" };
@@ -1949,9 +1949,9 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [], init
         {/* Quick-Add Buttons */}
         <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:(log.workouts||[]).length>0?10:0 }}>
           {[
-            { type:"Beweglichkeit", duration:90, icon:"🧘" },
+            { type:"EMS",           duration:20, icon:"⚡" },
+            { type:"Beweglichkeit", duration:30, icon:"🧘" },
             { type:"Cardio",        duration:30, icon:"🏃" },
-            { type:"Kraft",         duration:45, icon:"💪" },
             { type:"Gehen",         duration:45, icon:"🚶" },
           ].map(opt => (
             <button key={opt.type} onClick={()=>{ setLog(l=>({...l, workouts:[...(l.workouts||[]), {
