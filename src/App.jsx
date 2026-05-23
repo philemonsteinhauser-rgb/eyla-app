@@ -5062,7 +5062,11 @@ TIPP: [Konkreter Hinweis für diesen Tag – Timing, Zubereitung, Variation. Nic
           messages: [{ role: "user", content: userPrompt }]
         })
       });
-      if (!res.ok) throw new Error("Status " + res.status);
+      if (!res.ok) {
+        if (res.status === 504 || res.status === 524 || res.status === 502)
+          throw new Error("EYLA hat zu lange gebraucht. Tippe nochmal auf „Plan generieren“ – meist klappt es beim 2. Versuch.");
+        throw new Error("Status " + res.status);
+      }
       const data = await res.json();
       const text = data.content?.find(b => b.type === "text")?.text || "";
       if (!text) throw new Error("Leere Antwort");
