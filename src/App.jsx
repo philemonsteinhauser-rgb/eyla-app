@@ -37,6 +37,7 @@ const SYNC_KEYS = [
   "eyla_favorites_v1",  // Mahlzeit-Favoriten
   "eyla_measurements_v1",// Körpermaße
   "eyla_ref_code_v1",   // persönlicher Werbe-Code
+  "eyla_pantry_v1",     // Vorräte ("hab ich zu Hause")
 ];
 const SYNC_STATE = { status: "idle", lastSyncedAt: null }; // status: idle|syncing|ok|error|off
 const syncListeners = new Set();
@@ -617,6 +618,30 @@ const DEFAULT_SHOPPING = {
   ],
   checked: {},
 };
+
+// ─── VORRÄTE ("hab ich zu Hause") ─────────────────────────────────────────────
+// Items die der Nutzer eh daheim hat → werden aus der Einkaufsliste ausgeblendet,
+// damit sie kürzer wirkt.
+const PANTRY_SUGGESTIONS = ["Salz","Pfeffer","Olivenöl","Gewürze","Eier","Butter","Mehl","Zucker","Milch","Reis","Nudeln","Kaffee","Tee","Honig","Knoblauch","Zwiebeln","Senf","Essig"];
+function loadPantry() {
+  try { const a = JSON.parse(localStorage.getItem("eyla_pantry_v1") || "null"); return Array.isArray(a) ? a : []; } catch { return []; }
+}
+function savePantry(a) {
+  try { localStorage.setItem("eyla_pantry_v1", JSON.stringify(a)); } catch {}
+  try { scheduleSyncUp(); } catch {}
+}
+function normItemName(s) {
+  return String(s || "").toLowerCase().replace(/\(.*?\)/g, " ").replace(/[0-9.,]+/g, " ").replace(/[^a-zäöüß ]/g, " ").replace(/\s+/g, " ").trim();
+}
+// Liefert eine Funktion (name) => bool: ist das Item ein Vorrat?
+function makeIsAtHome(pantry) {
+  const terms = (pantry || []).map(normItemName).filter(p => p.length >= 3);
+  return (name) => {
+    const n = normItemName(name);
+    if (n.length < 2) return false;
+    return terms.some(p => n.includes(p) || p.includes(n));
+  };
+}
 
 // ─── DATUMS-HELFER ────────────────────────────────────────────────────────────
 // Liefert ein Array der letzten n Tage als toDateString()-Keys (heute zuerst).
@@ -5722,6 +5747,10 @@ function ShoppingScreen() {
   const [data, setData] = useState(DEFAULT_SHOPPING);
   const [loaded, setLoaded] = useState(false);
   const [filter, setFilter] = useState("alle"); // alle | offen | manuell
+  const [pantry, setPantry] = useState(() => loadPantry());
+  const [showPantry, setShowPantry] = useState(false);   // Vorräte trotzdem anzeigen?
+  const [pantryOpen, setPantryOpen] = useState(false);   // Verwaltungs-Karte ausgeklappt?
+  const [newPantry, setNewPantry] = useState("");
   const [addingTo, setAddingTo] = useState(null); // aisle-index oder null
   const [newName, setNewName] = useState("");
   const [newMenge, setNewMenge] = useState("");
@@ -6011,11 +6040,26 @@ function ShoppingScreen() {
   function updateCustomStoreName(name) {
     setData(d => ({ ...d, store: name }));
   }
+  function addPantry(name) {
+    const v = (name || "").trim();
+    if (!v) return;
+    setPantry(p => { if (p.some(x => x.toLowerCase() === v.toLowerCase())) return p; const next = [...p, v]; savePantry(next); return next; });
+    setNewPantry("");
+    haptic(15);
+  }
+  function removePantry(name) {
+    setPantry(p => { const next = p.filter(x => x !== name); savePantry(next); return next; });
+  }
 
-  // Filter anwenden
+  // "Hab ich zu Hause" – Vorräte erkennen
+  const isAtHome = makeIsAtHome(pantry);
+  const atHomeCount = data.aisles.flatMap(a => a.items).filter(it => isAtHome(it.name)).length;
+
+  // Filter anwenden (+ Vorräte ausblenden, außer showPantry ist an)
   const filteredAisles = data.aisles.map(a => ({
     ...a,
     items: a.items.filter(it => {
+      if (isAtHome(it.name) && !showPantry) return false;
       if (filter === "alle") return true;
       if (filter === "offen") return !data.checked[a.name + "::" + it.name];
       if (filter === "manuell") return it.quelle === "manuell";
@@ -6023,8 +6067,10 @@ function ShoppingScreen() {
     })
   })).filter(a => a.items.length > 0 || addingTo === data.aisles.indexOf(data.aisles.find(x=>x.name===a.name)));
 
-  const totalItems = data.aisles.flatMap(a => a.items).length;
-  const checkedCount = Object.values(data.checked).filter(Boolean).length;
+  // Zähler/Fortschritt nur über sichtbare (= zu kaufende) Items
+  const visibleItems = data.aisles.flatMap(a => a.items.map(it => ({ name: it.name, key: a.name + "::" + it.name }))).filter(it => showPantry || !isAtHome(it.name));
+  const totalItems = visibleItems.length;
+  const checkedCount = visibleItems.filter(it => data.checked[it.key]).length;
   const progress = totalItems > 0 ? Math.round((checkedCount/totalItems)*100) : 0;
 
   // Wenn noch kein Laden gewählt: groß die Frage stellen, Liste verstecken
@@ -6289,6 +6335,18 @@ function ShoppingScreen() {
         )}
       </div>
 
+      {/* "Hab ich zu Hause" – ausgeblendet-Hinweis */}
+      {atHomeCount > 0 && (
+        <button onClick={()=>setShowPantry(s=>!s)} style={{
+          width:"100%", marginBottom:12, padding:"7px 12px", borderRadius:10,
+          border:`1px solid ${T.borderS}`, background:T.bg2,
+          color:T.muted, fontFamily:T.serif, fontSize:11, fontStyle:"italic", cursor:"pointer",
+          display:"flex", alignItems:"center", justifyContent:"center", gap:6
+        }}>
+          🏠 {atHomeCount} {atHomeCount === 1 ? "Sache hast du" : "Sachen hast du"} zu Hause · {showPantry ? "ausblenden" : "trotzdem anzeigen"}
+        </button>
+      )}
+
       {/* Legende */}
       <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:14 }}>
         {Object.entries(quelleStyle).map(([k,v])=>(
@@ -6427,11 +6485,62 @@ function ShoppingScreen() {
         );
       })}
 
+      {/* Vorräte – optionales Feld ganz unten */}
+      <Card style={{ marginTop:14 }}>
+        <button onClick={()=>setPantryOpen(o=>!o)} style={{
+          width:"100%", display:"flex", alignItems:"center", justifyContent:"space-between",
+          background:"none", border:"none", cursor:"pointer", padding:0
+        }}>
+          <Lbl>🏠 HAB ICH MEISTENS ZU HAUSE{pantry.length ? ` · ${pantry.length}` : ""}</Lbl>
+          <span style={{ color:T.muted, fontSize:13 }}>{pantryOpen ? "▾" : "▸"}</span>
+        </button>
+        {pantryOpen && (
+          <div style={{ marginTop:12 }}>
+            <p style={{ color:T.muted, fontSize:11, fontStyle:"italic", fontFamily:T.serif, margin:"0 0 12px", lineHeight:1.6 }}>
+              Sachen die du eh daheim hast (Salz, Öl, Gewürze …). Die blende ich aus der Liste aus – so wirkt sie kürzer.
+            </p>
+            {pantry.length > 0 && (
+              <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:12 }}>
+                {pantry.map(p => (
+                  <button key={p} onClick={()=>removePantry(p)} style={{
+                    background:T.faint, border:`1px solid ${T.border}`, borderRadius:99,
+                    padding:"4px 10px", fontSize:11, color:T.text, fontFamily:T.serif, cursor:"pointer"
+                  }}>{p} <span style={{ color:T.muted, marginLeft:3 }}>×</span></button>
+                ))}
+              </div>
+            )}
+            <div style={{ display:"flex", gap:6, marginBottom:12 }}>
+              <input value={newPantry} onChange={e=>setNewPantry(e.target.value)}
+                onKeyDown={e=>e.key==="Enter"&&addPantry(newPantry)}
+                placeholder="z.B. Olivenöl" style={{
+                  flex:1, background:T.bg2, border:`1px solid ${T.borderS}`, borderRadius:8,
+                  padding:"8px 11px", color:T.text, fontFamily:T.serif, fontSize:13, fontStyle:"italic",
+                  outline:"none", boxSizing:"border-box"
+                }}/>
+              <button onClick={()=>addPantry(newPantry)} disabled={!newPantry.trim()} style={{
+                background:newPantry.trim()?T.acc+"22":"transparent",
+                border:`1px solid ${newPantry.trim()?T.acc:T.borderS}`, borderRadius:8,
+                padding:"8px 15px", color:newPantry.trim()?T.acc:T.muted,
+                fontFamily:T.serif, fontSize:14, cursor:newPantry.trim()?"pointer":"default"
+              }}>＋</button>
+            </div>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+              {PANTRY_SUGGESTIONS.filter(s => !pantry.some(p => p.toLowerCase() === s.toLowerCase())).map(s => (
+                <button key={s} onClick={()=>addPantry(s)} style={{
+                  background:"transparent", border:`1px dashed ${T.borderS}`, borderRadius:99,
+                  padding:"4px 10px", fontSize:11, color:T.muted, fontFamily:T.serif, fontStyle:"italic", cursor:"pointer"
+                }}>+ {s}</button>
+              ))}
+            </div>
+          </div>
+        )}
+      </Card>
+
       {/* Footer-Tipp */}
-      <Card accent style={{ marginTop:18, padding:"12px 16px" }}>
+      <Card accent style={{ marginTop:14, padding:"12px 16px" }}>
         <div style={{ fontFamily:T.serif, fontSize:12, color:T.mid, lineHeight:1.7 }}>
           <span style={{ color:T.acc, fontWeight:700 }}>✦ Tipp: </span>
-          Mengen sind für 2 Personen / 5 Tage kalkuliert. Eigene Items wandern automatisch in den Rundweg.
+          Eigene Items wandern automatisch in den Rundweg. Was du zu Hause hast, blendest du unten aus.
         </div>
       </Card>
     </div>
