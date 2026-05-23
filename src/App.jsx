@@ -293,6 +293,7 @@ const DEFAULT_PROFILE = {
   wakeTime: "",           // "07:00"
   sleepTime: "",          // "23:00"
   mealPattern: "3normal", // "3normal" | "5small" | "if168" | "ifother" | "custom"
+  mealPatternCustom: "",  // Freitext bei "custom": eigener Essrhythmus für EYLA
   // Kochen
   cookTime: "medium",     // "quick" (≤15min) | "medium" (15-30min) | "long" (30min+)
   kitchenEquipment: ["Pfanne","Ofen"], // verfügbar: Pfanne, Ofen, Mikrowelle, Mixer, Airfryer, Reiskocher
@@ -635,7 +636,7 @@ function Onboarding({ onDone }) {
     householdSize:1, householdNote:"",
     // NEU
     occupation:"", jobActivity:"",
-    wakeTime:"07:00", sleepTime:"23:00", mealPattern:"3normal",
+    wakeTime:"07:00", sleepTime:"23:00", mealPattern:"3normal", mealPatternCustom:"",
     waterTargetL:2, sleepTargetH:7,
     healthNotes:"", about:"",
     cookTime:"medium", kitchenEquipment:["Pfanne","Ofen"],
@@ -796,12 +797,13 @@ function Onboarding({ onDone }) {
           </div>
         </div>
         <Lbl style={{ marginBottom:10 }}>Mahlzeiten-Muster</Lbl>
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:18 }}>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:p.mealPattern==="custom"?10:18 }}>
           {[
             {id:"3normal", label:"🍳 3× normal"},
             {id:"5small",  label:"🥗 5× klein"},
             {id:"if168",   label:"⏱ IF 16:8"},
             {id:"ifother", label:"⏱ IF anders"},
+            {id:"custom",  label:"✏️ Eigenes"},
           ].map(o=>{
             const sel = p.mealPattern===o.id;
             return (
@@ -814,6 +816,11 @@ function Onboarding({ onDone }) {
             );
           })}
         </div>
+        {p.mealPattern==="custom" && (
+          <textarea value={p.mealPatternCustom} onChange={e=>set("mealPatternCustom",e.target.value)}
+            placeholder='Beschreib deinen Essrhythmus – z.B. "morgens nur Kaffee, große Mahlzeit 14 Uhr, Snack nach Training, Abendessen 20 Uhr" oder "2 Mahlzeiten + 2 Shakes"'
+            rows={3} style={{...iStyle, marginBottom:18, resize:"vertical", lineHeight:1.5}}/>
+        )}
         <Lbl style={{ marginBottom:10 }}>Tagesziele</Lbl>
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
           <div>
@@ -4979,7 +4986,7 @@ TIPP: [Konkreter Hinweis für diesen Tag – Timing, Zubereitung, Variation. Nic
       const ctxLines = [];
       // Tagesrhythmus → Essfenster
       if (profile.wakeTime || profile.sleepTime || profile.mealPattern) {
-        const mp = profile.mealPattern==="5small" ? "5 kleine Mahlzeiten" : profile.mealPattern==="if168" ? "Intermittent Fasting 16:8 (Essfenster ~8h)" : profile.mealPattern==="ifother" ? "Intermittent Fasting (eigener Rhythmus)" : "3 Hauptmahlzeiten";
+        const mp = profile.mealPattern==="custom" ? (profile.mealPatternCustom?.trim() ? `eigener Essrhythmus: ${profile.mealPatternCustom.trim()}` : "eigener Essrhythmus") : profile.mealPattern==="5small" ? "5 kleine Mahlzeiten" : profile.mealPattern==="if168" ? "Intermittent Fasting 16:8 (Essfenster ~8h)" : profile.mealPattern==="ifother" ? "Intermittent Fasting (eigener Rhythmus)" : "3 Hauptmahlzeiten";
         ctxLines.push(`Tagesrhythmus: ${profile.wakeTime?`auf ${profile.wakeTime}`:""}${profile.sleepTime?`, Bett ${profile.sleepTime}`:""} · ${mp}. Timing der Mahlzeiten daran anpassen.`);
       }
       // Beruf → Aktivitätslevel
@@ -6435,6 +6442,7 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
                 {id:"5small",  label:"🥗 5× klein"},
                 {id:"if168",   label:"⏱ IF 16:8"},
                 {id:"ifother", label:"⏱ IF anders"},
+                {id:"custom",  label:"✏️ Eigenes"},
               ].map(o=>{
                 const sel = (draft.mealPattern||"3normal")===o.id;
                 return (
@@ -6447,6 +6455,11 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
                 );
               })}
             </div>
+            {draft.mealPattern==="custom" && (
+              <textarea value={draft.mealPatternCustom||""} onChange={e=>set("mealPatternCustom",e.target.value)}
+                placeholder='Dein Essrhythmus – z.B. "morgens nur Kaffee, große Mahlzeit 14 Uhr, Snack nach Training, Abendessen 20 Uhr"'
+                rows={3} style={{...inputStyle, marginTop:8, resize:"vertical", lineHeight:1.5}}/>
+            )}
           </div>
         </Card>
 
@@ -6812,8 +6825,14 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
                   {profile.mealPattern==="3normal"?"🍳 3× normal":
                    profile.mealPattern==="5small"?"🥗 5× klein":
                    profile.mealPattern==="if168"?"⏱ IF 16:8":
-                   profile.mealPattern==="ifother"?"⏱ IF anders":"–"}
+                   profile.mealPattern==="ifother"?"⏱ IF anders":
+                   profile.mealPattern==="custom"?"✏️ Eigenes":"–"}
                 </div>
+                {profile.mealPattern==="custom" && profile.mealPatternCustom?.trim() && (
+                  <div style={{ color:T.muted, fontSize:11, fontFamily:T.serif, fontStyle:"italic", marginTop:2, lineHeight:1.4 }}>
+                    {profile.mealPatternCustom.trim()}
+                  </div>
+                )}
               </div>
             )}
           </div>
