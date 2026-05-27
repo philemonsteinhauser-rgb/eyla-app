@@ -189,24 +189,18 @@ const GOALS = ["Langfristig fit bleiben","Mehr Energie","Gesünder essen","Gewic
 //   friends:[{name,mult}], redeemed:[{item,points,ts}] }
 const POINT_VALUES = {
   ems_training:  50,   // EMS-Session absolviert
-  punctual:      10,   // pünktlich erschienen
-  offpeak:       10,   // Off-Peak-Termin gebucht
   friend:        500,  // Freund geworben (aktiviert)
   social_share:  15,   // Story / Post geteilt
   water_goal:    20,   // Wasserziel erreicht
   meals_logged:  30,   // alle Mahlzeiten geloggt
-  steps:         25,   // 10.000 Schritte
   perfect_day:   40,   // alle Tagesziele
 };
 const POINT_LABELS = {
   ems_training:  "EMS Training",
-  punctual:      "Pünktlich erschienen",
-  offpeak:       "Off-Peak Termin",
   friend:        "Freund geworben",
   social_share:  "Social Share",
   water_goal:    "Wasserziel erreicht",
   meals_logged:  "Mahlzeiten geloggt",
-  steps:         "10.000 Schritte",
   perfect_day:   "Perfekter Tag",
 };
 const LEVELS = [
@@ -246,7 +240,7 @@ function getMultiplier(points) {
   return +(lvl.mult + friendBonus).toFixed(1);
 }
 // Punkte vergeben – mit Multiplikator + Dedup pro Tag für action-Typen die nur 1×/Tag zählen
-const ONCE_PER_DAY = new Set(["water_goal","meals_logged","steps","perfect_day","punctual"]);
+const ONCE_PER_DAY = new Set(["water_goal","meals_logged","perfect_day"]);
 function awardPoints(action, opts = {}) {
   const base = POINT_VALUES[action];
   if (base === undefined) return null;
@@ -1504,7 +1498,11 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [], init
   const tagKey = tagDate.toDateString();
   const todayKey = new Date().toDateString();
   const isToday = tagKey === todayKey;
-  const isPast = tagKey < todayKey;
+  // ACHTUNG: toDateString() Strings ("Mon May 27 2026") sortieren lexikografisch nach
+  // Wochentag, nicht chronologisch – Datum-Vergleich nur via Date-Objekt.
+  const _today0 = new Date(todayKey); _today0.setHours(0,0,0,0);
+  const _tag0 = new Date(tagKey); _tag0.setHours(0,0,0,0);
+  const isPast = _tag0 < _today0;
   const log = logsByDate?.[tagKey] || { meals:[], water:0, energy:"", sleep:"", workouts:[], weight:null, habits:{}, date:tagKey };
   // setLog für den gerade gewählten Tag
   const setLog = useCallback((updater) => setLogRaw(updater, tagKey), [setLogRaw, tagKey]);
@@ -2101,7 +2099,7 @@ function TodayScreen({ profile, setLog: setLogRaw, logsByDate, events = [], init
             <button key={opt.type} onClick={()=>{ setLog(l=>({...l, workouts:[...(l.workouts||[]), {
               id:Date.now(), type:opt.type, duration:opt.duration,
               time:new Date().toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})
-            }]})); if (isToday) awardPoints("ems_training"); }} style={{
+            }]})); if (isToday && opt.type === "EMS") awardPoints("ems_training"); }} style={{
               background:"transparent", border:`1px solid ${T.borderS}`, borderRadius:18,
               padding:"5px 12px", color:T.muted, fontFamily:T.serif, fontSize:12,
               fontStyle:"italic", cursor:"pointer", transition:"all .2s",
@@ -3943,264 +3941,6 @@ function WeekScreen({ logsByDate, profile, onJumpToDay }) {
 // Änderungen zu machen (Mahlzeit eintragen, Wasser hochzählen, Termin anlegen,
 // Einkaufsliste pflegen). Frontend führt sie lokal aus, sendet tool_result
 // zurück und EYLA generiert ihre Antwort.
-const EYLA_TOOLS = [
-  {
-    name: "add_meal",
-    description: "Trag eine Mahlzeit in den heutigen Tageslog ein. " +
-      "WICHTIG zur Zahlen-Interpretation: Wenn der User eine Zahl mit Einheit angibt " +
-      "(z.B. '200g Steak', '500ml Saft', '2 Scheiben Brot', '1 Apfel'), ist das die MENGE – " +
-      "NIEMALS in 'calories' eintragen! Die Menge gehört in 'amount' und in den 'name'. " +
-      "Kalorien IMMER selbst schätzen basierend auf Lebensmittel + Menge " +
-      "(z.B. 200g Rindersteak ≈ 500 kcal, nicht 200 kcal!). " +
-      "Bei reinen Mengenangaben ohne Klarheit: lieber realistisch schätzen als 0 nehmen.",
-    input_schema: {
-      type: "object",
-      properties: {
-        name: { type: "string", description: "Mahlzeit inkl. Menge wenn bekannt, z.B. '200g Steak', '1 Apfel', 'Müsli mit Milch'" },
-        amount: { type: "string", description: "Mengenangabe wenn vorhanden, z.B. '200g', '500ml', '2 Stück', '1 Portion'" },
-        calories: { type: "number", description: "GESCHÄTZTE Kalorien (kcal) – NICHT die Menge! Z.B. 200g Steak ≈ 500 kcal." },
-        protein: { type: "number", description: "Protein in g (geschätzt)" },
-        carbs:   { type: "number", description: "Kohlenhydrate in g (geschätzt)" },
-        fat:     { type: "number", description: "Fett in g (geschätzt)" }
-      },
-      required: ["name"]
-    }
-  },
-  {
-    name: "set_water",
-    description: "Setze die heute getrunkene Wasser-Menge in 0.25L-Einheiten (1 = 0.25L, 4 = 1L, max 12 = 3L).",
-    input_schema: {
-      type: "object",
-      properties: { units: { type: "number", description: "Anzahl 0.25L-Einheiten" } },
-      required: ["units"]
-    }
-  },
-  {
-    name: "add_water",
-    description: "Addiere oder subtrahiere Wasser in 0.25L-Einheiten (z.B. +2 für 0.5L mehr, oder Liter direkt umrechnen).",
-    input_schema: {
-      type: "object",
-      properties: { delta: { type: "number", description: "Anzahl 0.25L-Einheiten (positiv oder negativ)" } },
-      required: ["delta"]
-    }
-  },
-  {
-    name: "set_sleep",
-    description: "Setze die Schlafdauer letzter Nacht.",
-    input_schema: {
-      type: "object",
-      properties: { hours: { type: "string", description: "z.B. '7', '8', '9+'" } },
-      required: ["hours"]
-    }
-  },
-  {
-    name: "set_energy",
-    description: "Setze Energie/Stimmung. Genau einer der Werte: '💤 Erschöpft', '😴 Müde', '😐 Ok', '😊 Gut', '⚡ Energiegeladen'",
-    input_schema: {
-      type: "object",
-      properties: { mood: { type: "string" } },
-      required: ["mood"]
-    }
-  },
-  {
-    name: "set_weight",
-    description: "Trag das heutige Körpergewicht in kg ein (z.B. 78.5).",
-    input_schema: {
-      type: "object",
-      properties: { kg: { type: "number" } },
-      required: ["kg"]
-    }
-  },
-  {
-    name: "add_workout",
-    description: "Trag eine Trainingseinheit heute ein (z.B. wenn der User 'hab grad 30min joggen war' sagt).",
-    input_schema: {
-      type: "object",
-      properties: {
-        type: { type: "string", description: "z.B. Beweglichkeit, Cardio, Kraft, Gehen, Yoga, Schwimmen" },
-        duration: { type: "number", description: "Dauer in Minuten" },
-        intensity: { type: "string", description: "leicht | mittel | hart (optional)" }
-      },
-      required: ["type", "duration"]
-    }
-  },
-  {
-    name: "toggle_habit",
-    description: "Hak eine Gewohnheit für heute ab (oder wieder weg). Sucht per Teilstring-Match im Namen.",
-    input_schema: {
-      type: "object",
-      properties: {
-        name: { type: "string", description: "Name (oder Teil) der Gewohnheit" },
-        done: { type: "boolean", description: "true = abgehakt, false = nicht erledigt. Default true." }
-      },
-      required: ["name"]
-    }
-  },
-  {
-    name: "add_todo",
-    description: "Trag eine Aufgabe / Todo ein. Wenn User sagt 'ich muss noch X', 'denk dran dass ich Y mache', 'erinnere mich an Z' – nutze dieses Tool. Priorität entscheiden: 'today' für heute/akut, 'week' für diese Woche, 'later' für Backlog/irgendwann.",
-    input_schema: {
-      type: "object",
-      properties: {
-        text: { type: "string", description: "Die Aufgabe als kurzer prägnanter Text" },
-        priority: { type: "string", description: "today | week | later. Default today." }
-      },
-      required: ["text"]
-    }
-  },
-  {
-    name: "complete_todo",
-    description: "Hak ein Todo als erledigt ab. Sucht per Teilstring-Match.",
-    input_schema: {
-      type: "object",
-      properties: { match: { type: "string", description: "Text-Teil zum Matchen (z.B. 'Mama anrufen' findet 'Mama anrufen wegen Weihnachten')" } },
-      required: ["match"]
-    }
-  },
-  {
-    name: "remove_todo",
-    description: "Lösche ein Todo komplett (nicht nur abhaken). Sucht per Teilstring.",
-    input_schema: {
-      type: "object",
-      properties: { match: { type: "string", description: "Text-Teil zum Matchen" } },
-      required: ["match"]
-    }
-  },
-  {
-    name: "set_todo_priority",
-    description: "Verschiebe ein Todo in ein anderes Bucket (today/week/later).",
-    input_schema: {
-      type: "object",
-      properties: {
-        match: { type: "string", description: "Text-Teil zum Matchen" },
-        priority: { type: "string", description: "today | week | later" }
-      },
-      required: ["match", "priority"]
-    }
-  },
-  {
-    name: "find_free_slot",
-    description: "Findet freie Lücken im Kalender für einen Tag (oder über mehrere Tage). Antwortet mit Zeiten in HH:MM. Nutzen wenn User sagt 'wann hab ich Zeit für X', 'plan mir 90min ein', 'wann ist Platz für Yoga'.",
-    input_schema: {
-      type: "object",
-      properties: {
-        date: { type: "string", description: "YYYY-MM-DD (default heute)" },
-        duration: { type: "number", description: "Mindestdauer in Minuten (z.B. 60)" },
-        preferAfter: { type: "string", description: "Frühestens HH:MM (optional)" },
-        preferBefore: { type: "string", description: "Spätestens HH:MM (optional)" }
-      },
-      required: ["duration"]
-    }
-  },
-  {
-    name: "move_event",
-    description: "Verschiebe einen Termin auf eine andere Zeit/Tag. Sucht Termin per Teilstring im Titel.",
-    input_schema: {
-      type: "object",
-      properties: {
-        match: { type: "string", description: "Teilstring im Termin-Titel" },
-        newTime: { type: "string", description: "Neue Uhrzeit HH:MM (optional)" },
-        newDate: { type: "string", description: "Neues Datum YYYY-MM-DD (optional)" }
-      },
-      required: ["match"]
-    }
-  },
-  {
-    name: "delete_event",
-    description: "Lösche einen Termin. Sucht per Teilstring im Titel. Vorsicht – fragt nicht nach.",
-    input_schema: {
-      type: "object",
-      properties: { match: { type: "string", description: "Teilstring im Titel" } },
-      required: ["match"]
-    }
-  },
-  {
-    name: "update_plan_preferences",
-    description: "Aktualisiere die Plan-Präferenzen (was der User gerne/nicht isst, Frühstücks-Routine). Nutzen wenn User sagt 'ich esse kein Frühstück', 'jeden Tag Müsli zum Frühstück', 'ich mag keine Pilze', 'Mittag oft Bowl', etc. WICHTIG: nach Update sagen dass der User den Plan neu erstellen sollte (Profil → Plan-Wizard → 'Plan erstellen' oder einfach im Plan-Tab den 'Plan erstellen'-Button drücken).",
-    input_schema: {
-      type: "object",
-      properties: {
-        skipBreakfast:    { type: "boolean", description: "true wenn User KEIN Frühstück isst" },
-        breakfastFixed:   { type: "string",  description: "Wenn User jeden Tag dasselbe Frühstück will – als Text" },
-        breakfastVariety: { type: "string",  description: "'same' | 'rotate' | 'varied'" },
-        addFavoriteLunch: { type: "string",  description: "Eine Mahlzeit zu Mittag-Favoriten hinzufügen" },
-        addFavoriteDinner:{ type: "string",  description: "Eine Mahlzeit zu Abend-Favoriten hinzufügen" },
-        dislikes:         { type: "string",  description: "Was der User nicht mag (komma-getrennt, ersetzt bisherige)" },
-        quickOption:      { type: "string",  description: "Schnell-Mahlzeit wenn keine Zeit" }
-      }
-    }
-  },
-  {
-    name: "modify_plan_meal",
-    description: "Ändere eine einzelne Mahlzeit im aktuellen Plan. Nutzen wenn User sagt 'tausch Mittag am Mittwoch zu Pasta' oder 'lass Frühstück Montag weg'.",
-    input_schema: {
-      type: "object",
-      properties: {
-        day:  { type: "string", description: "Montag | Dienstag | Mittwoch | Donnerstag | Freitag | Samstag | Sonntag" },
-        slot: { type: "string", description: "breakfast | lunch | dinner | snack" },
-        meal: { type: "string", description: "Neue Mahlzeit (oder '—' zum Leeren)" }
-      },
-      required: ["day", "slot", "meal"]
-    }
-  },
-  {
-    name: "log_period_start",
-    description: "Trag den Start der Periode ein. Default heute. Nutzen wenn User sagt 'meine Periode hat angefangen', 'Tag 1 heute', 'mens hat begonnen'.",
-    input_schema: {
-      type: "object",
-      properties: { date: { type: "string", description: "YYYY-MM-DD (default heute)" } }
-    }
-  },
-  {
-    name: "log_period_end",
-    description: "Beende den letzten Periode-Eintrag (setze end-Datum). Nutzen wenn User sagt 'Periode ist vorbei', 'fertig'.",
-    input_schema: { type: "object", properties: {} }
-  },
-  {
-    name: "daily_briefing",
-    description: "Generiere einen Tages-Brief: was steht heute an (Termine + Todos + Plan + freie Slots). Nutzen wenn User sagt 'wie sieht heute aus', 'gib mir nen Überblick', 'tagesbrief', 'wie ist mein Tag'.",
-    input_schema: { type: "object", properties: {} }
-  },
-  {
-    name: "add_event",
-    description: "Trag einen Termin/Zeit-Block in den Kalender ein. Spannen ('von X bis Y') IMMER als duration in MINUTEN (z.B. 10-14 Uhr = 240min). 'time' ist die START-Zeit.",
-    input_schema: {
-      type: "object",
-      properties: {
-        title: { type: "string", description: "Was steht an" },
-        time: { type: "string", description: "Startzeit HH:MM" },
-        duration: { type: "number", description: "Dauer in MINUTEN als Zahl. Bsp: 10-14 Uhr → 240. 'ne Stunde → 60. 30min → 30. Default 60." },
-        date: { type: "string", description: "YYYY-MM-DD. Default heute." }
-      },
-      required: ["title"]
-    }
-  },
-  {
-    name: "add_shopping_item",
-    description: "Pack ein Item auf die Einkaufsliste. Wähl den passenden Gang.",
-    input_schema: {
-      type: "object",
-      properties: {
-        name: { type: "string" },
-        menge: { type: "string", description: "z.B. '500g', '2 Stk'" },
-        gang: {
-          type: "string",
-          description: "Eine von: Obst & Gemüse, Brot & Backwaren, Molkerei & Kühlwaren, Fisch & Fleisch, Trockenwaren & Regal-Mitte, Haushalt"
-        }
-      },
-      required: ["name", "gang"]
-    }
-  },
-  {
-    name: "check_shopping_item",
-    description: "Hak ein Item auf der Einkaufsliste ab (gekauft markieren). Sucht per Teilstring-Match im Namen.",
-    input_schema: {
-      type: "object",
-      properties: { name: { type: "string" } },
-      required: ["name"]
-    }
-  }
-];
 
 // ─── PLAN SCREEN ──────────────────────────────────────────────────────────────
 // Standard-Vorschläge für den Plan-Wizard (Multi-Select-Pool)
@@ -4256,8 +3996,8 @@ function StudioScreen({ profile }) {
   const todayHist = (points.history || []).filter(h => new Date(h.ts).toDateString() === today);
   const earnedToday = todayHist.reduce((s, h) => s + (h.points || 0), 0);
   const doneToday = new Set(todayHist.map(h => h.action));
-  const dailyActions = ["ems_training", "water_goal", "meals_logged", "perfect_day", "social_share", "steps"];
-  const dayIcons = { ems_training:"⚡", water_goal:"💧", meals_logged:"🥗", perfect_day:"✨", social_share:"📸", steps:"👟" };
+  const dailyActions = ["ems_training", "water_goal", "meals_logged", "perfect_day", "social_share"];
+  const dayIcons = { ems_training:"⚡", water_goal:"💧", meals_logged:"🥗", perfect_day:"✨", social_share:"📸" };
   const openToday = dailyActions.filter(a => !doneToday.has(a));
 
   // Nächste Belohnung
@@ -4626,7 +4366,7 @@ function PunkteScreen({ profile }) {
         <Lbl style={{ marginBottom:10 }}>SO VERDIENST DU PUNKTE</Lbl>
         {Object.entries(POINT_VALUES).map(([action, base]) => {
           const todayDone = ONCE_PER_DAY.has(action) && (points.history||[]).some(h => h.action===action && new Date(h.ts).toDateString()===new Date().toDateString());
-          const icon = { ems_training:"⚡", punctual:"📅", offpeak:"🌙", friend:"👥", social_share:"📸", water_goal:"💧", meals_logged:"🥗", steps:"👟", perfect_day:"✨" }[action];
+          const icon = { ems_training:"⚡", friend:"👥", social_share:"📸", water_goal:"💧", meals_logged:"🥗", perfect_day:"✨" }[action];
           return (
             <div key={action} style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderBottom:`1px solid ${T.border}`, opacity: todayDone ? 0.5 : 1 }}>
               <span style={{ fontSize:15 }}>{icon}</span>
@@ -5244,17 +4984,9 @@ Mahlzeiten passend zu Profil (${prefs}, ${ct.type === "abnehmen" ? "Defizit" : c
     persist("eyla_favorites_v1", next);
   }
 
-  // Beim Mount: Fokus-Tag auf heute + Live-Sync wenn EYLA via Tool den Plan ändert
+  // Beim Mount: Fokus-Tag auf heute setzen
   useEffect(() => {
     if (days.length > 0) setSelDay(todayDayIdx(days));
-    function onPlanChange() {
-      try {
-        const saved = JSON.parse(localStorage.getItem("eyla_plan_v1") || "null");
-        if (saved && Array.isArray(saved.days)) { setDays(saved.days); setIntro(saved.intro || ""); }
-      } catch {}
-    }
-    window.addEventListener("eyla_plan_changed", onPlanChange);
-    return () => window.removeEventListener("eyla_plan_changed", onPlanChange);
   }, []);
 
   // Plan persistieren wenn er sich ändert
@@ -5264,7 +4996,7 @@ Mahlzeiten passend zu Profil (${prefs}, ${ct.type === "abnehmen" ? "Defizit" : c
     }
   }, [days, intro]);
 
-  async function generate() {
+  async function generate(prefsOverride = null) {
     setLoading(true);
     setError(null);
     setDays([]);
@@ -5324,7 +5056,7 @@ TIPP: [Konkreter Hinweis für diesen Tag – Timing, Zubereitung, Variation. Nic
         : `Koche für ${persons} Personen.${profile.householdNote?` Besonderheit: ${profile.householdNote}.`:""} Plan-Mengen für ${persons} Personen, kcal-Angaben pro Portion (also pro Person).`;
 
       // Plan-Präferenzen aus dem Wizard
-      const pp = profile.planPreferences || {};
+      const pp = prefsOverride || profile.planPreferences || {};
       const prefStrings = [];
       if (pp.breakfastVariety === "same" && pp.breakfastFixed) {
         prefStrings.push(`FRÜHSTÜCK FIX (jeden Tag dasselbe): "${pp.breakfastFixed}"`);
@@ -5640,8 +5372,8 @@ TIPP: [Konkreter Hinweis für diesen Tag – Timing, Zubereitung, Variation. Nic
           onSave={(prefs) => {
             onUpdateProfile?.({ planPreferences: prefs });
             setShowWizard(false);
-            // Direkt Plan generieren mit den neuen Präferenzen
-            setTimeout(() => generate(), 300);
+            // Direkt Plan generieren – Prefs explizit übergeben (Profil-Update läuft async)
+            setTimeout(() => generate(prefs), 300);
           }}
         />
       )}
@@ -7581,7 +7313,7 @@ function ProfilScreen({ profile, onReset, onUpdate, logsByDate }) {
         </p>
         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
           <button onClick={async ()=>{
-            const keys = ["eyla_profile_v3","eyla_logs_v1","eyla_local_events_v2","eyla_shopping_v1","eyla_plan_v1","eyla_chat_v1","eyla_chat_voice_v1"];
+            const keys = SYNC_KEYS;
             const data = {};
             for (const k of keys) {
               const raw = localStorage.getItem(k);
@@ -8585,13 +8317,9 @@ function AppContent() {
   }
 
   function reset() {
-    persist("eyla_profile_v3", null);
-    persist("eyla_log_v3", null);
-    persist("eyla_logs_v1", null);
-    persist("eyla_local_events_v2", null);
-    persist("eyla_shopping_v1", null);
-    persist("eyla_plan_v1", null);
-    persist("eyla_chat_v1", null);
+    // Alle synchronisierten User-Daten leeren
+    for (const k of SYNC_KEYS) persist(k, null);
+    persist("eyla_log_v3", null); // Legacy-Key
     // Auch leeren Stand in die Cloud syncen damit andere Geräte nicht alte Daten zurückbringen
     setProfile(null);
     setLogsByDate({});
@@ -8615,7 +8343,6 @@ function AppContent() {
 
   const sectionColor =
     screen==="tag" ? (tagSub==="kalender" ? T.gold : T.acc) :
-    screen==="woche" ? T.acc :
     screen==="studio" ? T.gold :
     screen==="essen" ? (essenSub==="liste" ? T.green : T.gold) :
     T.muted;
